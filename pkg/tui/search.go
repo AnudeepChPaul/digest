@@ -1,0 +1,481 @@
+package tui
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"app/pkg/model"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
+
+const (
+	searchTopMargin    = 1
+	searchSnippetWidth = 60
+	searchTagPrefix    = "tag:"
+	searchDatePrefix   = "date:"
+	searchDayFormat    = "02-01-2006"
+	invalidDateHint    = "date: use Nd, Nw, Nm, Ny or DD-MM-YYYY"
+	olderDateFormat    = "Monday, 02 January 2006"
+)
+
+var searchHighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(lipgloss.Color("#F9E2AF"))
+
+type searchQuery struct {
+	words        []string
+	tags         []string
+	dates        []dateFilter
+	invalidDates []string
+}
+
+type dateFilter struct {
+	amount int
+	unit   byte
+	onDay  time.Time
+}
+
+const relativeDateUnits = "dwmy"
+
+func parseDateFilter(value string) (dateFilter, bool) {
+	if len(value) >= 2 && strings.IndexByte(relativeDateUnits, value[len(value)-1]) >= 0 {
+		amount, err := strconv.Atoi(value[:len(value)-1])
+		if err != nil || amount < 0 {
+			return dateFilter{}, false
+		}
+		return dateFilter{amount: amount, unit: value[len(value)-1]}, true
+	}
+	day, err := time.ParseInLocation(searchDayFormat, value, time.Local)
+	if err != nil {
+		return dateFilter{}, false
+	}
+	return dateFilter{onDay: day}, true
+}
+
+func calendarDaysBetween(earlier, later time.Time) int {
+	year, month, day := earlier.Local().Date()
+	laterYear, laterMonth, laterDay := later.Local().Date()
+	earlierDay := time.Date(year, month, day, 0, 0, 0, 0, time.Local)
+	laterMidnight := time.Date(laterYear, laterMonth, laterDay, 0, 0, 0, 0, time.Local)
+	return int(laterMidnight.Sub(earlierDay).Hours()/24 + 0.5)
+}
+
+func (filter dateFilter) matches(updated, now time.Time) bool {
+	if updated.IsZero() {
+		return false
+	}
+	if !filter.onDay.IsZero() {
+		return calendarDaysBetween(updated, filter.onDay) == 0
+	}
+	return calendarDaysBetween(updated, now) >= 0 && !updated.Local().Before(filter.cutoff(now))
+}
+
+func (filter dateFilter) cutoff(now time.Time) time.Time {
+	year, month, day := now.Local().Date()
+	today := time.Date(year, month, day, 0, 0, 0, 0, time.Local)
+	switch filter.unit {
+	case 'w':
+		return today.AddDate(0, 0, -7*filter.amount)
+	case 'm':
+		return today.AddDate(0, -filter.amount, 0)
+	case 'y':
+		return today.AddDate(-filter.amount, 0, 0)
+	}
+	return today.AddDate(0, 0, -filter.amount)
+}
+
+func parseSearchQuery(input string) searchQuery {
+	var query searchQuery
+	for _, token := range strings.Fields(strings.ToLower(input)) {
+		if tag, isTag := strings.CutPrefix(token, searchTagPrefix); isTag {
+			if tag != "" {
+				query.tags = append(query.tags, tag)
+			}
+			continue
+		}
+		if value, isDate := strings.CutPrefix(token, searchDatePrefix); isDate {
+			if filter, valid := parseDateFilter(value); valid {
+				query.dates = append(query.dates, filter)
+			} else {
+				query.invalidDates = append(query.invalidDates, value)
+			}
+			continue
+		}
+		query.words = append(query.words, token)
+	}
+	return query
+}
+
+func noteTags(note *model.Note) []string {
+	var tags []string
+	if note.Source != "" {
+		tags = append(tags, string(note.Source))
+	}
+	if note.Subject != "" && !strings.EqualFold(note.Subject, string(note.Source)) {
+		tags = append(tags, note.Subject)
+	}
+	return tags
+}
+
+func tagMatches(tags []string, wanted string) bool {
+	for _, tag := range tags {
+		if strings.EqualFold(tag, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func (query searchQuery) matches(note *model.Note, now time.Time) bool {
+	for _, filter := range query.dates {
+		if !filter.matches(note.Updated, now) {
+			return false
+		}
+	}
+	tags := noteTags(note)
+	for _, wanted := range query.tags {
+		if !tagMatches(tags, wanted) {
+			return false
+		}
+	}
+	summary, body := strings.ToLower(note.Summary), strings.ToLower(note.Body)
+	for _, word := range query.words {
+		if !strings.Contains(summary, word) && !strings.Contains(body, word) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m Model) searchResults() []*model.Note {
+	query := parseSearchQuery(m.searchInput.Value())
+	now := time.Now()
+	var results []*model.Note
+	for _, note := range m.notes {
+		if note.Status != model.StatusActive && note.Status != model.StatusDone {
+			continue
+		}
+		if query.matches(note, now) {
+			results = append(results, note)
+		}
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].Updated.After(results[j].Updated)
+	})
+	return results
+}
+
+func searchDateLabel(updated, now time.Time) string {
+	if updated.IsZero() {
+		return ""
+	}
+	days := calendarDaysBetween(updated, now)
+	switch {
+	case days <= 0:
+		return "today"
+	case days == 1:
+		return "yesterday"
+	case days <= 7:
+		return fmt.Sprintf("%d days ago", days)
+	}
+	return updated.Local().Format(olderDateFormat)
+}
+
+func matchedRunes(text string, words []string) []bool {
+	lowered := []rune(text)
+	for index, r := range lowered {
+		lowered[index] = unicode.ToLower(r)
+	}
+	marked := make([]bool, len(lowered))
+	for _, word := range words {
+		wordRunes := []rune(word)
+		if len(wordRunes) == 0 {
+			continue
+		}
+		for start := 0; start+len(wordRunes) <= len(lowered); start++ {
+			if string(lowered[start:start+len(wordRunes)]) == word {
+				for offset := range wordRunes {
+					marked[start+offset] = true
+				}
+			}
+		}
+	}
+	return marked
+}
+
+func highlightMatches(text string, words []string, base lipgloss.Style) string {
+	textRunes := []rune(text)
+	marked := matchedRunes(text, words)
+	var rendered strings.Builder
+	for start := 0; start < len(textRunes); {
+		end := start
+		for end < len(textRunes) && marked[end] == marked[start] {
+			end++
+		}
+		segment := string(textRunes[start:end])
+		if marked[start] {
+			rendered.WriteString(searchHighlightStyle.Render(segment))
+		} else {
+			rendered.WriteString(base.Render(segment))
+		}
+		start = end
+	}
+	return rendered.String()
+}
+
+func bodySnippet(body string, words []string, width int) (string, bool) {
+	flattened := []rune(strings.Join(strings.Fields(body), " "))
+	marked := matchedRunes(string(flattened), words)
+	firstMatch := -1
+	for index, isMatch := range marked {
+		if isMatch {
+			firstMatch = index
+			break
+		}
+	}
+	if firstMatch < 0 || width < 8 {
+		return "", false
+	}
+	start := max(0, firstMatch-width/3)
+	end := min(len(flattened), start+width)
+	snippet := string(flattened[start:end])
+	if start > 0 {
+		snippet = "…" + snippet
+	}
+	if end < len(flattened) {
+		snippet += "…"
+	}
+	return snippet, true
+}
+
+func searchRowHeight(note *model.Note, words []string) int {
+	if _, found := bodySnippet(note.Body, words, searchSnippetWidth); found {
+		return 2
+	}
+	return 1
+}
+
+func searchWindow(heights []int, selected, scroll, available int) (first, last int) {
+	if len(heights) == 0 {
+		return 0, 0
+	}
+	selected = min(max(selected, 0), len(heights)-1)
+	first = min(max(scroll, 0), selected)
+	used := 0
+	for index := first; index <= selected; index++ {
+		used += heights[index]
+	}
+	for used > available && first < selected {
+		used -= heights[first]
+		first++
+	}
+	last = first
+	used = 0
+	for last < len(heights) && used+heights[last] <= available {
+		used += heights[last]
+		last++
+	}
+	return first, max(last, selected+1)
+}
+
+func (m Model) searchRowHeights(results []*model.Note) []int {
+	words := parseSearchQuery(m.searchInput.Value()).words
+	heights := make([]int, len(results))
+	for index, note := range results {
+		heights[index] = searchRowHeight(note, words)
+	}
+	return heights
+}
+
+func (m Model) searchFooter(modalWidth int) string {
+	return renderModalFooter(footerItemsFrom(searchBindings()), modalWidth-6)
+}
+
+func (m Model) searchListHeight() int {
+	modalWidth := modalWidthFor(m.width)
+	fixedLines := modalStyle.GetVerticalFrameSize() + 5 + lipgloss.Height(m.searchFooter(modalWidth))
+	return max(3, m.height-searchTopMargin-fixedLines)
+}
+
+func (m *Model) keepSearchSelectionVisible() {
+	results := m.searchResults()
+	m.searchSelected = min(max(m.searchSelected, 0), max(len(results)-1, 0))
+	m.searchScroll, _ = searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, m.searchListHeight())
+}
+
+func (m Model) searchPageSize() int {
+	results := m.searchResults()
+	first, last := searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, m.searchListHeight())
+	return max(1, last-first)
+}
+
+func (m Model) moveSearchSelection(delta int) Model {
+	m.searchSelected += delta
+	m.keepSearchSelectionVisible()
+	return m
+}
+
+func (m Model) renderSearchRow(note *model.Note, selected bool, query searchQuery, dateWidth, width int) string {
+	marker, summaryStyle := "  ", itemStyle
+	if selected {
+		marker, summaryStyle = "› ", selectedSummaryStyle
+	}
+	dateLabel := searchDateLabel(note.Updated, time.Now())
+	dateStyle := mutedStyle
+	if len(query.dates) > 0 {
+		dateStyle = searchHighlightStyle
+	}
+	dateColumn := dateStyle.Render(dateLabel) + safeRepeat(" ", dateWidth-ansi.StringWidth(dateLabel))
+
+	var trailing []string
+	if note.Status == model.StatusDone {
+		trailing = append(trailing, badgeDone.Render("DONE"))
+	}
+	for _, tag := range noteTags(note) {
+		if tagMatches(query.tags, tag) {
+			trailing = append(trailing, searchHighlightStyle.Render("#"+tag))
+		} else {
+			trailing = append(trailing, tagStyle.Render("#"+tag))
+		}
+	}
+	trailingText := strings.Join(trailing, " ")
+
+	summaryIndent := ansi.StringWidth(marker) + dateWidth + 2
+	summaryWidth := max(5, width-summaryIndent-ansi.StringWidth(trailingText)-1)
+	summary := ansi.Truncate(note.Summary, summaryWidth, "…")
+	gap := max(1, summaryWidth-ansi.StringWidth(summary)+1)
+	row := marker + dateColumn + "  " + highlightMatches(summary, query.words, summaryStyle) + safeRepeat(" ", gap) + trailingText
+
+	snippet, found := bodySnippet(note.Body, query.words, min(searchSnippetWidth, max(8, width-summaryIndent)))
+	if !found {
+		return row
+	}
+	return row + "\n" + safeRepeat(" ", summaryIndent) + highlightMatches(snippet, query.words, mutedStyle)
+}
+
+func (m Model) renderSearchModal(modalWidth int) string {
+	innerWidth := modalWidth - 6
+	results := m.searchResults()
+	query := parseSearchQuery(m.searchInput.Value())
+	listHeight := m.searchListHeight()
+
+	titleText := modalTitleStyle.Render(" SEARCH NOTES ")
+	countText := mutedStyle.Render(fmt.Sprintf("%d results", len(results)))
+	topLine := titleText + safeRepeat(" ", innerWidth-lipgloss.Width(titleText)-lipgloss.Width(countText)) + countText
+
+	searchInput := m.searchInput
+	searchInput.Width = max(10, innerWidth-lipgloss.Width(searchInput.Prompt)-1)
+
+	hintLine := ""
+	if len(query.invalidDates) > 0 {
+		hintLine = mutedStyle.Render("  " + invalidDateHint)
+	} else if m.searchNotice != "" {
+		hintLine = mutedStyle.Render(ansi.Truncate("  "+m.searchNotice, innerWidth, "…"))
+	}
+
+	var listLines []string
+	if len(results) == 0 {
+		listLines = append(listLines, "  "+mutedStyle.Render("(no matching notes)"))
+	} else {
+		dateWidth, now := 0, time.Now()
+		for _, note := range results {
+			dateWidth = max(dateWidth, ansi.StringWidth(searchDateLabel(note.Updated, now)))
+		}
+		first, last := searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, listHeight)
+		for index := first; index < last; index++ {
+			listLines = append(listLines, strings.Split(m.renderSearchRow(results[index], index == m.searchSelected, query, dateWidth, innerWidth), "\n")...)
+		}
+	}
+	listLines = listLines[:min(len(listLines), listHeight)]
+	for len(listLines) < listHeight {
+		listLines = append(listLines, "")
+	}
+
+	popupContent := lipgloss.JoinVertical(
+		lipgloss.Left,
+		topLine,
+		"",
+		searchInput.View(),
+		hintLine,
+		strings.Join(listLines, "\n"),
+		"",
+		m.searchFooter(modalWidth),
+	)
+	modal := modalStyle.Width(modalWidth).Render(popupContent)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, safeRepeat("\n", searchTopMargin)+fitPopup(modal, m.width, m.height-searchTopMargin))
+}
+
+func (m Model) searchPreviewIndex(results []*model.Note) int {
+	for index, note := range results {
+		if note.ID != "" && note.ID == m.searchPreviewID {
+			return index
+		}
+	}
+	return min(max(m.searchSelected, 0), len(results)-1)
+}
+
+func (m Model) searchPreviewNote() *model.Note {
+	results := m.searchResults()
+	if len(results) == 0 {
+		return nil
+	}
+	return results[m.searchPreviewIndex(results)]
+}
+
+func (m *Model) showSearchPreviewAt(index int) {
+	results := m.searchResults()
+	if len(results) == 0 {
+		return
+	}
+	m.searchSelected = min(max(index, 0), len(results)-1)
+	m.searchPreviewID = results[m.searchSelected].ID
+	m.keepSearchSelectionVisible()
+	m.updateSearchPreviewViewport()
+}
+
+func (m *Model) updateSearchPreviewViewport() {
+	note := m.searchPreviewNote()
+	if note == nil {
+		return
+	}
+	_, innerWidth, innerHeight := previewModalSize(m.width, m.height)
+	fullText := "# " + note.Summary
+	if strings.TrimSpace(note.Body) != "" {
+		fullText += "\n\n" + note.Body
+	}
+	m.previewViewport = viewport.New(innerWidth, innerHeight)
+	m.previewViewport.SetContent(renderMarkdown(fullText, innerWidth))
+}
+
+func (m Model) renderSearchPreview(modalWidth int) string {
+	innerWidth := modalWidth - 6
+	note := m.searchPreviewNote()
+	if note == nil {
+		return m.renderSearchModal(modalWidth)
+	}
+
+	statusBadge := badgeActive.Render("ACTIVE")
+	if note.Status == model.StatusDone {
+		statusBadge = badgeDone.Render("DONE")
+	}
+	var tags []string
+	for _, tag := range noteTags(note) {
+		tags = append(tags, tagStyle.Render("#"+tag))
+	}
+	headerLeft := modalTitleStyle.Render(" SEARCH PREVIEW ")
+	rightColumn := lipgloss.JoinVertical(lipgloss.Right, statusBadge, strings.Join(tags, " "))
+	topLine := lipgloss.JoinHorizontal(lipgloss.Top, headerLeft, safeRepeat(" ", innerWidth-lipgloss.Width(headerLeft)-lipgloss.Width(rightColumn)), rightColumn)
+
+	footerText := renderModalFooter(footerItemsFrom(searchPreviewBindings()), innerWidth)
+	fixedHeight := lipgloss.Height(topLine) + 2 + lipgloss.Height(footerText)
+	m.previewViewport.Height = max(3, previewContentHeight(m.height)-fixedHeight)
+
+	popupContent := lipgloss.JoinVertical(lipgloss.Left, topLine, "", m.previewViewport.View(), "", footerText)
+	modal := modalStyle.Width(modalWidth).Render(popupContent)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
+}

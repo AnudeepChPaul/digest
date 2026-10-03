@@ -1,0 +1,45 @@
+[tools]
+go = "latest"
+gotestsum = "latest"
+
+[vars]
+project = "digest"
+version = "{{ read_file(path='.version') | trim }}"
+description = "Digest your day to day work without acidity."
+
+[tasks.state]
+description = "Print all vars as JSON"
+quiet = true
+run = "echo '{{ vars | json_encode() }}' | jq ."
+
+[tasks._version]
+description = "Bump .version with semver"
+hide = true
+quiet = true
+usage = 'arg "<bump>" default="patch" { choices "patch" "minor" "major" }'
+run = '''
+current_version=$(cat .version)
+next_version=$(semver bump "$usage_bump" "$current_version")
+printf '%s\n' "$next_version" > .version
+printf '\033[33m↑\033[0m version \033[2m%s\033[0m → \033[1m%s\033[0m\n' "$current_version" "$next_version"
+'''
+
+[tasks.test]
+description = "Run tests"
+quiet = true
+run = "gotestsum --format testname ./..."
+
+[tasks.build]
+description = "Bump version and build {{vars.project}}"
+depends = ["test"]
+quiet = true
+usage = 'arg "<bump>" default="patch" { choices "patch" "minor" "major" }'
+run = '''
+binary_path=~/.config/bin/digest
+printf '\033[36m▸\033[0m bumping {{vars.project}} version (\033[1m%s\033[0m)\n' "$usage_bump"
+mise run _version "$usage_bump"
+build_version=$(cat .version)
+printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
+go build -o "$binary_path" ./cmd/app
+printf '\033[32m✓\033[0m built %s\n' "$binary_path"
+'''

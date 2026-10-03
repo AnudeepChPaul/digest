@@ -1,0 +1,242 @@
+package review
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const (
+	pidFile      = "review.pid"
+	exitFile     = "review.exit"
+	LogFile      = "review.log"
+	metaFile     = "meta.json"
+	FindingsFile = "findings.json"
+	stateDirName = ".state"
+)
+
+type RunStatus int
+
+const (
+	RunIdle RunStatus = iota
+	RunRunning
+	RunFailed
+	RunDone
+)
+
+type Meta struct {
+	Ref     PRRef  `json:"ref"`
+	Title   string `json:"title"`
+	HeadSHA string `json:"head_sha"`
+}
+
+func CloneDir(root string, ref PRRef) string {
+	return filepath.Join(root, ref.DirName())
+}
+
+func StateDir(root string, ref PRRef) string {
+	return filepath.Join(root, stateDirName, ref.DirName())
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func readInt(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	return value, err == nil
+}
+
+func Status(dir string) RunStatus {
+	if pid, ok := readInt(filepath.Join(dir, pidFile)); ok && processAlive(pid) {
+		return RunRunning
+	}
+	exitCode, ok := readInt(filepath.Join(dir, exitFile))
+	if !ok {
+		if _, err := os.Stat(filepath.Join(dir, exitFile)); err == nil {
+			return RunFailed
+		}
+		if _, err := os.Stat(filepath.Join(dir, FindingsFile)); err == nil {
+			return RunDone
+		}
+		return RunIdle
+	}
+	if exitCode != 0 {
+		return RunFailed
+	}
+	if _, err := os.Stat(filepath.Join(dir, FindingsFile)); err != nil {
+		return RunFailed
+	}
+	return RunDone
+}
+
+func LocalReviewFinishedAt(dir string) (time.Time, bool) {
+	for _, name := range []string{FindingsFile, exitFile} {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return info.ModTime(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func WriteMeta(dir string, meta Meta) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, metaFile), data, 0644)
+}
+
+func ReadMeta(dir string) (Meta, error) {
+	var meta Meta
+	data, err := os.ReadFile(filepath.Join(dir, metaFile))
+	if err != nil {
+		return meta, err
+	}
+	err = json.Unmarshal(data, &meta)
+	return meta, err
+}
+
+func ReadLog(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, LogFile))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+var ErrReviewRunning = errors.New("a review is already running for this PR")
+
+func StartBackground(pr QueuedPR, root string) error {
+	dir := StateDir(root, pr.Ref)
+	if Status(dir) == RunRunning {
+		return ErrReviewRunning
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	for _, stale := range []string{exitFile, FindingsFile, pidFile} {
+		_ = os.Remove(filepath.Join(dir, stale))
+	}
+	if err := WriteMeta(dir, Meta{Ref: pr.Ref, Title: pr.Title, HeadSHA: pr.HeadSHA}); err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate digest binary: %w", err)
+	}
+	logOutput, err := os.Create(filepath.Join(dir, LogFile))
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("sh", "-c", `"$1" pr-review --url "$2"; echo $? > "$3"`, "digest-review", executable, pr.Ref.URL, filepath.Join(dir, exitFile))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = os.Environ()
+	cmd.Dir = root
+	cmd.Stdout = logOutput
+	cmd.Stderr = logOutput
+	if err := cmd.Start(); err != nil {
+		logOutput.Close()
+		return err
+	}
+	ownPid := strconv.Itoa(cmd.Process.Pid)
+	pidErr := os.WriteFile(filepath.Join(dir, pidFile), []byte(ownPid), 0644)
+	go func() {
+		_ = cmd.Wait()
+		_ = logOutput.Close()
+	}()
+	if pidErr != nil {
+		return fmt.Errorf("review started but its pid file could not be written: %w", pidErr)
+	}
+	return nil
+}
+
+type ReviewRun struct {
+	Meta      Meta
+	Status    RunStatus
+	StartedAt time.Time
+}
+
+func ListRuns(root string) []ReviewRun {
+	stateRoot := filepath.Join(root, ".state")
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil {
+		return nil
+	}
+	var runs []ReviewRun
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(stateRoot, entry.Name())
+		status := Status(dir)
+		if status != RunRunning && status != RunFailed {
+			continue
+		}
+		meta, err := ReadMeta(dir)
+		if err != nil || meta.Ref.URL == "" {
+			continue
+		}
+		run := ReviewRun{Meta: meta, Status: status}
+		if info, err := os.Stat(filepath.Join(dir, metaFile)); err == nil {
+			run.StartedAt = info.ModTime()
+		}
+		runs = append(runs, run)
+	}
+	sort.SliceStable(runs, func(i, j int) bool {
+		if runs[i].Status != runs[j].Status {
+			return runs[i].Status == RunRunning
+		}
+		return runs[i].StartedAt.After(runs[j].StartedAt)
+	})
+	return runs
+}
+
+func RunningPID(dir string) (int, bool) {
+	pid, ok := readInt(filepath.Join(dir, pidFile))
+	if !ok || !processAlive(pid) {
+		return 0, false
+	}
+	return pid, true
+}
+
+func Stop(root string, ref PRRef) error {
+	dir := StateDir(root, ref)
+	pid, running := RunningPID(dir)
+	if running {
+		target := pid
+		if groupID, err := syscall.Getpgid(pid); err == nil && groupID != syscall.Getpgrp() {
+			target = -groupID
+		}
+		if err := syscall.Kill(target, syscall.SIGTERM); err != nil {
+			return fmt.Errorf("stop review %s: %w", ref.DirName(), err)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, pidFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
