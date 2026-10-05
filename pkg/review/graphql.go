@@ -37,6 +37,7 @@ var runGraphQL = func(ctx context.Context, host, query string) ([]byte, error) {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "gh", "api", "graphql", "--hostname", host, "--input", "-")
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Stdin = bytes.NewReader(body)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

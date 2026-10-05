@@ -68,8 +68,12 @@ func readInt(path string) (int, bool) {
 }
 
 func Status(dir string) RunStatus {
-	if pid, ok := readInt(filepath.Join(dir, pidFile)); ok && processAlive(pid) {
-		return RunRunning
+	pidPath := filepath.Join(dir, pidFile)
+	if pid, ok := readInt(pidPath); ok {
+		if processAlive(pid) {
+			return RunRunning
+		}
+		_ = os.Remove(pidPath)
 	}
 	exitCode, ok := readInt(filepath.Join(dir, exitFile))
 	if !ok {
@@ -120,6 +124,35 @@ func ReadMeta(dir string) (Meta, error) {
 	return meta, err
 }
 
+func backgroundScript(runCommand string) string {
+	return runCommand + `; echo $? > "$1"; rm -f "$2"`
+}
+
+func clearExitedPID(pidPath string) {
+	if pid, ok := readInt(pidPath); ok && !processAlive(pid) {
+		_ = os.Remove(pidPath)
+	}
+}
+
+var stopGracePeriod = 3 * time.Second
+
+func terminateGroup(target int) error {
+	if err := syscall.Kill(target, syscall.SIGTERM); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(stopGracePeriod)
+	go func() {
+		for time.Now().Before(deadline) {
+			if syscall.Kill(target, 0) != nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		_ = syscall.Kill(target, syscall.SIGKILL)
+	}()
+	return nil
+}
+
 func ReadLog(dir string) string {
 	data, err := os.ReadFile(filepath.Join(dir, LogFile))
 	if err != nil {
@@ -152,7 +185,8 @@ func StartBackground(pr QueuedPR, root string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("sh", "-c", `"$1" pr-review --url "$2"; echo $? > "$3"`, "digest-review", executable, pr.Ref.URL, filepath.Join(dir, exitFile))
+	pidPath := filepath.Join(dir, pidFile)
+	cmd := exec.Command("sh", "-c", backgroundScript(`"$3" pr-review --url "$4"`), "digest-review", filepath.Join(dir, exitFile), pidPath, executable, pr.Ref.URL)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = os.Environ()
 	cmd.Dir = root
@@ -162,11 +196,11 @@ func StartBackground(pr QueuedPR, root string) error {
 		logOutput.Close()
 		return err
 	}
-	ownPid := strconv.Itoa(cmd.Process.Pid)
-	pidErr := os.WriteFile(filepath.Join(dir, pidFile), []byte(ownPid), 0644)
+	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 	go func() {
 		_ = cmd.Wait()
 		_ = logOutput.Close()
+		clearExitedPID(pidPath)
 	}()
 	if pidErr != nil {
 		return fmt.Errorf("review started but its pid file could not be written: %w", pidErr)
@@ -231,7 +265,7 @@ func Stop(root string, ref PRRef) error {
 		if groupID, err := syscall.Getpgid(pid); err == nil && groupID != syscall.Getpgrp() {
 			target = -groupID
 		}
-		if err := syscall.Kill(target, syscall.SIGTERM); err != nil {
+		if err := terminateGroup(target); err != nil {
 			return fmt.Errorf("stop review %s: %w", ref.DirName(), err)
 		}
 	}

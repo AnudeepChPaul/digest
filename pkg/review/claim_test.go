@@ -170,3 +170,73 @@ func TestRunningPID(t *testing.T) {
 		t.Errorf("pid=%d ok=%v", pid, ok)
 	}
 }
+
+func TestFinishedRunRemovesItsPIDFile(t *testing.T) {
+	dir := t.TempDir()
+	stubParentPID(t, 1)
+	release, err := claimRun(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(nil)
+	if _, err := os.Stat(filepath.Join(dir, pidFile)); err == nil {
+		t.Error("a finished run should remove its pid file")
+	}
+}
+
+func TestStatusClearsAPIDFileOfAnExitedProcess(t *testing.T) {
+	dir := t.TempDir()
+	exited := exec.Command("true")
+	if err := exited.Run(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, pidFile), strconv.Itoa(exited.Process.Pid))
+	if Status(dir) == RunRunning {
+		t.Fatal("an exited process is not running")
+	}
+	if _, err := os.Stat(filepath.Join(dir, pidFile)); err == nil {
+		t.Error("the pid file of an exited process should be removed")
+	}
+}
+
+func TestBackgroundWrapperRemovesThePIDFileWhenDone(t *testing.T) {
+	dir := t.TempDir()
+	script := backgroundScript("true")
+	pidPath := filepath.Join(dir, pidFile)
+	writeFile(t, pidPath, "1")
+	if err := exec.Command("sh", "-c", script, "digest-review", filepath.Join(dir, exitFile), pidPath).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pidPath); err == nil {
+		t.Error("the wrapper should remove the pid file when the review ends")
+	}
+	if code, ok := readInt(filepath.Join(dir, exitFile)); !ok || code != 0 {
+		t.Errorf("exit = %d, %v", code, ok)
+	}
+}
+
+func TestStopKillsAGroupThatIgnoresTerm(t *testing.T) {
+	original := stopGracePeriod
+	stopGracePeriod = 200 * time.Millisecond
+	t.Cleanup(func() { stopGracePeriod = original })
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 10, URL: "https://github.com/o/console/pull/10"}
+	stubborn := exec.Command("sh", "-c", `trap "" TERM; sleep 30 & wait`)
+	stubborn.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := stubborn.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	writeFile(t, filepath.Join(StateDir(root, ref), pidFile), strconv.Itoa(stubborn.Process.Pid))
+	if err := Stop(root, ref); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = stubborn.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-stubborn.Process.Pid, syscall.SIGKILL)
+		t.Fatal("stop should escalate to SIGKILL")
+	}
+}

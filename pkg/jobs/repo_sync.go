@@ -248,11 +248,14 @@ func gitCmd(cwd string, args ...string) CmdResult {
 	return gitCmdTimeout(cwd, 10*time.Second, args...)
 }
 
+var commandWaitDelay = 2 * time.Second
+
 func gitCmdTimeout(cwd string, timeout time.Duration, args ...string) CmdResult {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",

@@ -23,27 +23,48 @@ var keyActionHandlers map[keyAction]keyActionHandler
 
 func init() {
 	keyActionHandlers = map[keyAction]keyActionHandler{
-		actionQuit:              Model.quitFromDashboard,
-		actionDismissSyncErrors: Model.dismissSyncErrors,
-		actionSync:              Model.syncFromKey,
-		actionToggleSortField:   Model.toggleSortField,
-		actionToggleSortOrder:   Model.toggleSortOrder,
-		actionRunJobs:           Model.runJobsFromKey,
-		actionHalfPageDown:      Model.dashboardHalfPageDown,
-		actionHalfPageUp:        Model.dashboardHalfPageUp,
-		actionToday:             Model.jumpToToday,
-		actionOpenArchive:       Model.openArchive,
-		actionOpenPreview:       Model.openSelectedPreview,
-		actionNewNote:           Model.newNote,
-		actionOpenItem:          Model.openSelectedItem,
-		actionInlineEdit:        Model.inlineEditSelected,
-		actionDeleteItem:        Model.deleteSelectedItem,
-		actionToggleDone:        Model.toggleSelectedDone,
-		actionPreviousDay:       Model.previousDay,
-		actionNextDay:           Model.nextDay,
-		actionCursorDown:        Model.dashboardCursorDown,
-		actionCursorUp:          Model.dashboardCursorUp,
-		actionOpenSearch:        Model.openSearch,
+		actionQuit:               Model.quitFromDashboard,
+		actionDismissSyncErrors:  Model.dismissSyncErrors,
+		actionSync:               Model.syncFromKey,
+		actionToggleSortField:    Model.toggleSortField,
+		actionToggleSortOrder:    Model.toggleSortOrder,
+		actionTogglePendingScope: Model.togglePendingScope,
+		actionRunJobs:            Model.runJobsFromKey,
+		actionHalfPageDown:       Model.dashboardHalfPageDown,
+		actionHalfPageUp:         Model.dashboardHalfPageUp,
+		actionToday:              Model.jumpToToday,
+		actionOpenArchive:        Model.openArchive,
+		actionOpenPreview:        Model.openSelectedPreview,
+		actionNewNote:            Model.newNote,
+		actionOpenItem:           Model.openSelectedItem,
+		actionInlineEdit:         Model.inlineEditSelected,
+		actionDeleteItem:         Model.deleteSelectedItem,
+		actionToggleDone:         Model.toggleSelectedDone,
+		actionPreviousDay:        Model.previousDay,
+		actionNextDay:            Model.nextDay,
+		actionCursorDown:         Model.dashboardCursorDown,
+		actionCursorUp:           Model.dashboardCursorUp,
+		actionSwitchGitColumn:    Model.switchGitColumn,
+		actionOpenSearch:         Model.openSearch,
+		actionRefreshCommits:     Model.refreshCommitsFromKey,
+		actionOpenBrag:           Model.openBrag,
+		actionOpenHelp:           Model.openHelp,
+
+		actionCloseHelp: Model.closeHelp,
+
+		actionCloseBrag:      Model.closeBrag,
+		actionBragCursorDown: Model.bragCursorDown,
+		actionBragCursorUp:   Model.bragCursorUp,
+		actionBragListEnter:  Model.bragListEnter,
+		actionCloseBragView:  Model.closeBragView,
+		actionEditBrag:       Model.editBrag,
+		actionBragAgain:      Model.bragAgain,
+		actionCopyBrag:       Model.copyBrag,
+		actionConfirmBrag:    Model.confirmBrag,
+		actionCancelBrag:     Model.cancelBrag,
+		actionSaveBragEdit:   Model.saveBragEdit,
+		actionCopyBragEditor: Model.copyBragEditor,
+		actionCancelBragEdit: Model.cancelBragEdit,
 
 		actionCloseGitDetails: Model.closeGitDetails,
 		actionSwitchGitFilter: Model.switchGitFilter,
@@ -175,9 +196,12 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ViewInlineEdit:
 		m.inlineInput, cmd = m.inlineInput.Update(msg)
 		return m, cmd
-	case ViewEdit:
+	case ViewEdit, ViewBragEdit:
 		m.editor, cmd = m.editor.Update(msg)
 		return m, cmd
+	case ViewBragView:
+		scrollViewport(&m.previewViewport, msg.String())
+		return m, nil
 	case ViewSearch:
 		previousQuery := m.searchInput.Value()
 		m.searchInput, cmd = m.searchInput.Update(msg)
@@ -207,8 +231,9 @@ func (m Model) selectedNavItem() (NavItem, bool) {
 func (m Model) quitFromDashboard(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.ctrlCCount++
 	if m.ctrlCCount >= 3 {
-		if m.gitCancel != nil {
-			m.gitCancel()
+		m.cancelGitSync()
+		if m.cancelSession != nil {
+			m.cancelSession()
 		}
 		return m, tea.Quit
 	}
@@ -232,6 +257,15 @@ func (m Model) toggleSortField(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) toggleSortOrder(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.changePendingSort(func(activeSort *sourcecontrol.Sort) { activeSort.Ascending = !activeSort.Ascending })
+}
+
+func (m Model) togglePendingScope(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.pendingMeOnly = !m.pendingMeOnly
+	selectedKey, selectedOccurrence := m.selectedNavKey()
+	m.rebuildGitRepoStats()
+	m.restoreSelection(selectedKey, selectedOccurrence)
+	m.updateScrollOffset()
+	return m, nil
 }
 
 func (m Model) runJobsFromKey(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -266,10 +300,13 @@ func (m Model) dashboardHalfPageUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) jumpToToday(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !isSameDay(m.currentDate, time.Now()) {
+		m.resetCommitsForDate()
+	}
 	m.currentDate = time.Now()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.startLoadGitStatsCmd(true)
+	return m, m.scheduleDaySync()
 }
 
 func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -312,7 +349,7 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindJobDraft || item.Kind == KindReviewRun {
+	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun {
 		return m.openPreview(item)
 	}
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
@@ -320,11 +357,7 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if item.Note != nil {
-		m.currentNote = item.Note
-		m.mode = ViewEdit
-		m.editor.SetValue(fmt.Sprintf("%s\n\n%s", item.Note.Summary, item.Note.Body))
-		m.editor.Focus()
-		return m, textarea.Blink
+		return m.beginNoteEdit(item.Note, ViewDashboard)
 	}
 	return m, nil
 }
@@ -347,6 +380,9 @@ func (m Model) deleteSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning {
 		return m.beginReviewRunConfirm(reviewActionStop, item.ReviewRun.Meta.Ref)
+	}
+	if item.Kind == KindBragRun && item.BragRun != nil {
+		return m.stopOrDismissBragRun(item.BragRun)
 	}
 	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
 		m.jobToAbort = item.Draft.Name
@@ -412,22 +448,32 @@ func (m Model) toggleSelectedDone(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) previousDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentDate = m.currentDate.AddDate(0, 0, -1)
+	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.startLoadGitStatsCmd(true)
+	return m, m.scheduleDaySync()
 }
 
 func (m Model) nextDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentDate = m.currentDate.AddDate(0, 0, 1)
+	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.startLoadGitStatsCmd(true)
+	return m, m.scheduleDaySync()
 }
 
 func (m Model) dashboardCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	navItems := m.allNavItems()
 	if len(navItems) > 0 && m.selected < len(navItems)-1 {
 		m.selected++
+		m.updateScrollOffset()
+	}
+	return m, nil
+}
+
+func (m Model) switchGitColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if target, ok := m.gitStripColumnSwitch(msg.String() == "l"); ok {
+		m.selected = target
 		m.updateScrollOffset()
 	}
 	return m, nil
@@ -502,7 +548,8 @@ func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if execErr != nil {
 			m.showError("JOB ERROR", execErr)
 		}
-		return m, tea.Batch(tickJobLogCmd(), tickSyncPulseCmd())
+		m.refreshJobStates()
+		return m, tea.Batch(m.ensureJobLogRefresh(), m.ensureSyncPulse(), m.ensureRunStatePoll())
 	}
 
 	targets := m.deleteTargetNotes
@@ -545,7 +592,7 @@ func (m Model) confirmReview(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.refreshPreview(), func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		return reviewSubmittedMsg{event: event, pr: queued, err: review.Submit(ctx, queued.Ref, payload)}
+		return reviewSubmittedMsg{event: event, pr: queued, payload: payload, err: review.Submit(ctx, queued.Ref, payload)}
 	}
 }
 
@@ -670,6 +717,9 @@ func (m Model) previewStop(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning {
 		return m.beginReviewRunConfirm(reviewActionStop, item.ReviewRun.Meta.Ref)
 	}
+	if item.Kind == KindBragRun && item.BragRun != nil {
+		return m.stopOrDismissBragRun(item.BragRun)
+	}
 	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
 		m.jobToAbort = item.Draft.Name
 		m.deleteTargetNotes = nil
@@ -698,6 +748,9 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if prURL := prReviewNoteURL(item.Note); prURL != "" {
 		_ = openURL(prURL)
 		return m, nil
+	}
+	if item.Note != nil {
+		return m.beginNoteEdit(item.Note, ViewPreview)
 	}
 	return m, nil
 }
@@ -934,8 +987,11 @@ func (m Model) cancelEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) returnFromEdit() ViewMode {
 	returnMode := m.editReturnMode
 	m.editReturnMode = ViewDashboard
-	if returnMode == ViewSearchPreview {
+	switch returnMode {
+	case ViewSearchPreview:
 		m.updateSearchPreviewViewport()
+	case ViewPreview:
+		m.updatePreviewViewport()
 	}
 	return returnMode
 }
@@ -1012,8 +1068,12 @@ func (m Model) editSearchResult(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if note == nil {
 		return m, nil
 	}
+	return m.beginNoteEdit(note, ViewSearchPreview)
+}
+
+func (m Model) beginNoteEdit(note *model.Note, returnMode ViewMode) (tea.Model, tea.Cmd) {
 	m.currentNote = note
-	m.editReturnMode = ViewSearchPreview
+	m.editReturnMode = returnMode
 	m.mode = ViewEdit
 	m.editor.SetValue(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
 	m.editor.Focus()

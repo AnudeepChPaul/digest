@@ -18,6 +18,7 @@ type ActivityPR struct {
 	Repository string
 	State      string
 	ReviewedAt time.Time
+	Comments   string
 }
 
 type checkRun struct {
@@ -131,6 +132,9 @@ func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
 		if request.Typename == "Team" {
 			pr.OwnerTeams = append(pr.OwnerTeams, request.Name)
 		}
+		if request.Typename == "User" && viewer != "" && strings.EqualFold(request.Login, viewer) {
+			pr.DirectRequest = true
+		}
 	}
 	pr.applyReviews(viewer, details.LatestReviews)
 	for _, comment := range details.Comments {
@@ -143,7 +147,9 @@ func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
 }
 
 var runAuthStatus = func(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "gh", "auth", "status").CombinedOutput()
+	cmd := exec.CommandContext(ctx, "gh", "auth", "status")
+	cmd.WaitDelay = commandWaitDelay
+	return cmd.CombinedOutput()
 }
 
 var loggedInHostPattern = regexp.MustCompile(`(?:Logged|log) in to (\S+)`)

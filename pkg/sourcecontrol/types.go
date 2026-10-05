@@ -48,7 +48,6 @@ type DayResult struct {
 	Day         Day
 	Date        string
 	Reviewed    []PRItem
-	Commits     map[string][]PRItem
 	Reviews     []review.ActivityPR
 	Details     map[string]json.RawMessage
 	FailedHosts []string

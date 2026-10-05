@@ -40,7 +40,7 @@ func fetchMergedPRs(repo string, timeout time.Duration) ([]MergedPR, error) {
 
 	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--state", "merged", "--limit", "200", "--json", "number,headRefName,headRefOid,mergedAt")
 	cmd.Dir = repo
-	cmd.WaitDelay = 2 * time.Second
+	cmd.WaitDelay = commandWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

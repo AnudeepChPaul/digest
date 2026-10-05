@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"app/pkg/paths"
-
 	"github.com/charmbracelet/log"
 )
 
@@ -46,13 +44,13 @@ func RunRepoSync(roots []string, dryRun bool) (bool, error) {
 }
 
 // RunJanitor scans and cleans up quarantined or temporary files.
-func RunJanitor(roots, patterns []string, reviewRoot string, dryRun bool) (bool, error) {
+func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, retentionDays int, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &JanitorJob{
 		Roots:          roots,
 		Patterns:       patterns,
-		QuarantineRoot: paths.Expand("~/digest/.quarantine"),
-		RetentionDays:  14,
+		QuarantineRoot: quarantineRoot,
+		RetentionDays:  retentionDays,
 		ReviewRoot:     reviewRoot,
 		Logger:         logger,
 	}

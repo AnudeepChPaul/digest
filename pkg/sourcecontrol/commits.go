@@ -16,6 +16,14 @@ import (
 	"app/pkg/jobs"
 )
 
+var maxConcurrentGitReads = max(runtime.NumCPU(), 2)
+
+var commandWaitDelay = 2 * time.Second
+
+var runCommitsCommand = executeShellCommand
+
+var discoverRepoPaths = localRepoPaths
+
 func executeShellCommand(ctx context.Context, dir string, cmdStr string) []byte {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -23,6 +31,7 @@ func executeShellCommand(ctx context.Context, dir string, cmdStr string) []byte 
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	}
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Env = os.Environ()
 	if dir != "" {
 		cmd.Dir = dir
@@ -35,11 +44,11 @@ func executeShellCommand(ctx context.Context, dir string, cmdStr string) []byte 
 	return out.Bytes()
 }
 
-func fetchRepoCommits(ctx context.Context, cmdTemplate string, repoPath string, targetDate time.Time) []PRItem {
-	fullCmd := strings.ReplaceAll(cmdTemplate, "{since}", targetDate.Format("2006-01-02 00:00:00"))
-	fullCmd = strings.ReplaceAll(fullCmd, "{until}", targetDate.Format("2006-01-02 23:59:59"))
+func fetchRepoCommits(ctx context.Context, cmdTemplate string, repoPath string, since, until time.Time) []PRItem {
+	fullCmd := strings.ReplaceAll(cmdTemplate, "{since}", since.Format("2006-01-02 15:04:05"))
+	fullCmd = strings.ReplaceAll(fullCmd, "{until}", until.Format("2006-01-02 15:04:05"))
 
-	output := executeShellCommand(ctx, repoPath, fullCmd)
+	output := runCommitsCommand(ctx, repoPath, fullCmd)
 	if len(output) == 0 {
 		return nil
 	}
@@ -74,9 +83,7 @@ func localRepoPaths(cfg *config.Config) []string {
 		filepath.Join(home, "Code"),
 		".",
 	}
-	if cfg.NotesDir != "" {
-		searchRoots = append([]string{cfg.NotesDir}, searchRoots...)
-	}
+	searchRoots = append([]string{cfg.NotesDir()}, searchRoots...)
 	if len(cfg.GitRepositoryRoots) > 0 {
 		searchRoots = cfg.GitRepositoryRoots
 	}
@@ -94,29 +101,66 @@ func localRepoPaths(cfg *config.Config) []string {
 	return cleanLocalRepos
 }
 
+type commitWindow struct {
+	since, until time.Time
+}
+
+func dayWindow(date time.Time) commitWindow {
+	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	return commitWindow{since: dayStart, until: dayStart.Add(24*time.Hour - time.Second)}
+}
+
 func FetchLocalCommits(ctx context.Context, cfg *config.Config, date time.Time) map[string][]PRItem {
-	commitsByRepo := make(map[string][]PRItem)
-	if cfg == nil {
-		return commitsByRepo
+	return FetchLocalCommitsForDays(ctx, cfg, date)[0]
+}
+
+func FetchLocalCommitsForDays(ctx context.Context, cfg *config.Config, dates ...time.Time) []map[string][]PRItem {
+	windows := make([]commitWindow, len(dates))
+	for index, date := range dates {
+		windows[index] = dayWindow(date)
 	}
-	var commitMu sync.Mutex
+	return fetchCommitWindows(ctx, cfg, windows)
+}
+
+func FetchLocalCommitsBetween(ctx context.Context, cfg *config.Config, since, until time.Time) map[string][]PRItem {
+	return fetchCommitWindows(ctx, cfg, []commitWindow{{since: since, until: until}})[0]
+}
+
+func fetchCommitWindows(ctx context.Context, cfg *config.Config, windows []commitWindow) []map[string][]PRItem {
+	results := make([]map[string][]PRItem, len(windows))
+	for index := range results {
+		results[index] = make(map[string][]PRItem)
+	}
+	if cfg == nil {
+		return results
+	}
+	var resultsMu sync.Mutex
 	var wg sync.WaitGroup
+	gitReadSlots := make(chan struct{}, maxConcurrentGitReads)
 
 	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	for _, repoPath := range localRepoPaths(cfg) {
-		wg.Add(1)
-		go func(repoPath string) {
-			defer wg.Done()
-			commits := fetchRepoCommits(fetchCtx, cfg.GitCommitsCmd, repoPath, date)
-			if len(commits) > 0 {
-				commitMu.Lock()
-				commitsByRepo[filepath.Base(repoPath)] = commits
-				commitMu.Unlock()
-			}
-		}(repoPath)
+	for _, repoPath := range discoverRepoPaths(cfg) {
+		for index, window := range windows {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case gitReadSlots <- struct{}{}:
+				case <-fetchCtx.Done():
+					return
+				}
+				commits := fetchRepoCommits(fetchCtx, cfg.GitCommitsCmd, repoPath, window.since, window.until)
+				<-gitReadSlots
+				if len(commits) > 0 {
+					resultsMu.Lock()
+					results[index][filepath.Base(repoPath)] = commits
+					resultsMu.Unlock()
+				}
+			}()
+		}
 	}
 	wg.Wait()
-	return commitsByRepo
+	return results
 }

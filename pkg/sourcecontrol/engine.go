@@ -25,9 +25,8 @@ type Engine struct {
 }
 
 var (
-	listGHHosts       = review.GHHosts
-	runPRSearches     = review.RunPRSearches
-	fetchLocalCommits = FetchLocalCommits
+	listGHHosts   = review.GHHosts
+	runPRSearches = review.RunPRSearches
 )
 
 func NewEngine(cfg *config.Config) *Engine {
@@ -49,6 +48,8 @@ const (
 	directSearch   = "direct"
 	reReviewSearch = "rereview"
 	reviewedSearch = "reviewed"
+	openedSearch   = "opened"
+	mergedSearch   = "merged"
 )
 
 type searchKind struct {
@@ -155,9 +156,6 @@ func (e *Engine) search(ctx context.Context, kinds []searchKind) searchOutcome {
 }
 
 func reviewRoot(cfg *config.Config) string {
-	if cfg == nil {
-		return (&config.Config{}).ReviewRootDir()
-	}
 	return cfg.ReviewRootDir()
 }
 
@@ -218,13 +216,6 @@ func (e *Engine) FetchDay(ctx context.Context, day Day, date time.Time) DayResul
 		defer cancel()
 		result.Reviewed, result.Reviews, result.Details, result.FailedHosts, result.Err = e.loadReviewed(fetchCtx, date)
 	}()
-	if e.cfg.DailyCommitsEnabled() {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result.Commits = fetchLocalCommits(ctx, e.cfg, date)
-		}()
-	}
 	wg.Wait()
 	return filterDayResult(result, ConfiguredRepoNames(e.cfg))
 }
@@ -236,16 +227,29 @@ func (e *Engine) loadReviewed(ctx context.Context, date time.Time) ([]PRItem, []
 	loaded := FilterQueuedPRs(outcome.prs[reviewedSearch], ConfiguredRepoNames(e.cfg))
 	var items []PRItem
 	var reviews []review.ActivityPR
+	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	for _, pr := range loaded {
-		if pr.MyLastReviewAt.IsZero() || !sameLocalDay(pr.MyLastReviewAt, date) {
+		if pr.MyLastReviewAt.IsZero() || pr.MyLastReviewAt.Before(dayStart) {
 			continue
 		}
-		items = append(items, NewPRItem(pr, ReviewedKind))
+		if sameLocalDay(pr.MyLastReviewAt, date) {
+			items = append(items, NewPRItem(pr, ReviewedKind))
+		}
 		if ReviewNoteStates[pr.MyLastReviewState] {
 			reviews = append(reviews, ReviewRecord(pr, pr.MyLastReviewState, pr.MyLastReviewAt))
 		}
 	}
 	return items, reviews, outcome.details, outcome.failedHosts, outcome.err
+}
+
+func (e *Engine) AuthoredPRs(ctx context.Context, start, end time.Time) ([]review.QueuedPR, []review.QueuedPR, error) {
+	dateRange := start.Format("2006-01-02") + ".." + end.AddDate(0, 0, -1).Format("2006-01-02")
+	outcome := e.search(ctx, []searchKind{
+		{key: openedSearch, query: "is:pr author:@me created:" + dateRange, details: true},
+		{key: mergedSearch, query: "is:pr author:@me merged:" + dateRange, details: true},
+	})
+	allowedRepos := ConfiguredRepoNames(e.cfg)
+	return FilterQueuedPRs(outcome.prs[openedSearch], allowedRepos), FilterQueuedPRs(outcome.prs[mergedSearch], allowedRepos), outcome.err
 }
 
 func sameLocalDay(first, second time.Time) bool {

@@ -36,7 +36,11 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 		if !entry.IsDir() {
 			continue
 		}
-		meta, err := review.ReadMeta(filepath.Join(stateRoot, entry.Name()))
+		stateDir := filepath.Join(stateRoot, entry.Name())
+		if review.Status(stateDir) == review.RunRunning {
+			continue
+		}
+		meta, err := review.ReadMeta(stateDir)
 		if err != nil || meta.Ref.URL == "" {
 			continue
 		}

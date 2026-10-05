@@ -34,7 +34,7 @@ func syncTestModel(t *testing.T) Model {
 	originalPath := gitCachePath
 	gitCachePath = func() string { return cachePath }
 	t.Cleanup(func() { gitCachePath = originalPath })
-	cfg := &config.Config{ReviewRoot: t.TempDir(), NotesDir: t.TempDir(), GreenOnly: true}
+	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true}
 	m := NewModel(cfg, nil)
 	m.width, m.height = 120, 50
 	return m
@@ -204,7 +204,9 @@ func TestGitCacheRoundTrip(t *testing.T) {
 	pending := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 4), Title: "Cached", CIState: "SUCCESS", Additions: 7, Approved: true}, sourcecontrol.ReReviewKind)
 	today := m.currentDate.Format("2006-01-02")
 	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pending}})
-	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}, commits: map[string][]GitPRItem{"console": {{Title: "c1", Kind: "Commit"}}}})
+	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}})
+	m.applyCommits(commitsLoadedMsg{generation: m.commitsGeneration, today: map[string][]GitPRItem{"console": {{Title: "c1", Kind: "Commit"}}}})
+	saveCacheNow(t, m)
 	if _, err := os.Stat(gitCachePath()); err != nil {
 		t.Fatalf("cache not written: %v", err)
 	}

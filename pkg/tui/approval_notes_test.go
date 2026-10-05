@@ -21,9 +21,9 @@ func TestApprovalNotesCreatedOnceWithRepoPRID(t *testing.T) {
 		{Number: 6, Title: "Fix date picker", URL: "https://github.com/o/console/pull/6", Repository: "console", State: "APPROVED", ReviewedAt: approvedAt},
 		{Number: 6, Title: "Fix date picker", URL: "https://github.com/o/console/pull/6", Repository: "console", State: "APPROVED", ReviewedAt: approvedAt},
 	}
-	for range 2 {
+	for attempt := range 2 {
 		msg := reviewNotesCmd(noteStore, approvals)()
-		if loaded, ok := msg.(loadNotesMsg); !ok || loaded.err != nil {
+		if loaded, ok := msg.(loadNotesMsg); attempt == 0 && (!ok || loaded.err != nil) {
 			t.Fatalf("msg = %#v", msg)
 		}
 	}

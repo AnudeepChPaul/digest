@@ -5,10 +5,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type cachedGitItem struct {
@@ -18,6 +21,7 @@ type cachedGitItem struct {
 
 type gitSyncCache struct {
 	Date              string                     `json:"date"`
+	PreviousDay       string                     `json:"previous_day,omitempty"`
 	ReviewedToday     []cachedGitItem            `json:"reviewed_today"`
 	ReviewedYesterday []cachedGitItem            `json:"reviewed_yesterday"`
 	Pending           []cachedGitItem            `json:"pending"`
@@ -28,11 +32,7 @@ type gitSyncCache struct {
 }
 
 var gitCachePath = func() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, "digest", "cache", "git-sync.json")
+	return filepath.Join(digestRoot, "cache", "git-sync.json")
 }
 
 func toCachedItems(items []GitPRItem) []cachedGitItem {
@@ -75,7 +75,11 @@ func saveGitCache(cache gitSyncCache) error {
 		os.Remove(tempFile.Name())
 		return err
 	}
-	return os.Rename(tempFile.Name(), cachePath)
+	if err := os.Rename(tempFile.Name(), cachePath); err != nil {
+		os.Remove(tempFile.Name())
+		return err
+	}
+	return nil
 }
 
 func loadGitCache() (gitSyncCache, bool) {
@@ -90,12 +94,34 @@ func loadGitCache() (gitSyncCache, bool) {
 	return cache, true
 }
 
-func (m *Model) saveGitCacheIfToday() {
-	if !isSameDay(m.currentDate, time.Now()) {
-		return
+type gitCacheSavedMsg struct {
+	err error
+}
+
+var writeGitCache = saveGitCache
+
+var gitCacheWriteMu sync.Mutex
+
+func (m *Model) gitCacheSaveCmd() tea.Cmd {
+	if m.loadingGit || m.loadingCommits {
+		return nil
 	}
+	m.prDetails = m.listedPRDetails()
+	if !isSameDay(m.currentDate, time.Now()) {
+		return nil
+	}
+	cache := m.gitCacheSnapshot()
+	return func() tea.Msg {
+		gitCacheWriteMu.Lock()
+		defer gitCacheWriteMu.Unlock()
+		return gitCacheSavedMsg{err: writeGitCache(cache)}
+	}
+}
+
+func (m *Model) gitCacheSnapshot() gitSyncCache {
 	cache := gitSyncCache{
 		Date:              m.currentDate.Format("2006-01-02"),
+		PreviousDay:       m.fetchedPreviousDay.Format("2006-01-02"),
 		ReviewedToday:     toCachedItems(m.ghReviewedToday),
 		ReviewedYesterday: toCachedItems(m.ghReviewedYesterday),
 		Pending:           toCachedItems(m.ghPendingPRs),
@@ -104,19 +130,19 @@ func (m *Model) saveGitCacheIfToday() {
 		Details:           m.listedPRDetails(),
 	}
 	if m.pendingSortChosen {
-		cache.PendingSort = &m.pendingSort
+		activeSort := m.pendingSort
+		cache.PendingSort = &activeSort
 	}
-	if err := saveGitCache(cache); err != nil {
-		m.recordSectionError("Cache", err)
-	}
+	return cache
 }
 
-func (m *Model) savePendingSort() {
-	cache, _ := loadGitCache()
-	activeSort := m.pendingSort
-	cache.PendingSort = &activeSort
-	if err := saveGitCache(cache); err != nil {
-		m.recordSectionError("Cache", err)
+func pendingSortSaveCmd(activeSort sourcecontrol.Sort) tea.Cmd {
+	return func() tea.Msg {
+		gitCacheWriteMu.Lock()
+		defer gitCacheWriteMu.Unlock()
+		cache, _ := loadGitCache()
+		cache.PendingSort = &activeSort
+		return gitCacheSavedMsg{err: writeGitCache(cache)}
 	}
 }
 
@@ -154,7 +180,7 @@ func (m *Model) applyGitCache(cache gitSyncCache) {
 	allowedRepos := sourcecontrol.ConfiguredRepoNames(m.cfg)
 	m.ghPendingPRs = sourcecontrol.FilterPRItems(fromCachedItems(cache.Pending), allowedRepos)
 	today := m.currentDate.Format("2006-01-02")
-	if cache.Date == today {
+	if cache.Date == today && cache.PreviousDay == m.fetchedPreviousDay.Format("2006-01-02") {
 		m.ghReviewedToday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedToday), allowedRepos)
 		m.ghReviewedYesterday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedYesterday), allowedRepos)
 		if m.cfg.DailyCommitsEnabled() {
@@ -163,7 +189,7 @@ func (m *Model) applyGitCache(cache gitSyncCache) {
 		}
 		m.gitSectionDates = map[string]string{
 			sectionReviewedToday:     today,
-			sectionReviewedYesterday: m.currentDate.AddDate(0, 0, -1).Format("2006-01-02"),
+			sectionReviewedYesterday: cache.PreviousDay,
 		}
 	}
 	m.rebuildGitRepoStats()

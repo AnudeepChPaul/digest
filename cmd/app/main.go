@@ -7,10 +7,13 @@ import (
 	"os"
 	"strings"
 
+	"app/pkg/brag"
 	"app/pkg/config"
 	"app/pkg/jobs"
+	"app/pkg/model"
 	"app/pkg/paths"
 	"app/pkg/review"
+	"app/pkg/store"
 	"app/pkg/tui"
 
 	"github.com/charmbracelet/log"
@@ -52,11 +55,12 @@ func printUsage() {
 	fmt.Println("  janitor        Scan and clean up quarantined/temp files")
 	fmt.Println("  branch-reaper  Scan and prune stale local git branches")
 	fmt.Println("  pr-review      Fresh-clone a pull request and run a Claude review (--url <pr url>)")
+	fmt.Println("  brag           Generate a brag (--week 2026-W40 | --month 2026-10 | --year 2026) [--regenerate]")
 	fmt.Println("\nCommand flags:")
 	fmt.Println("  --root <dir>   Root directory to scan; repeatable")
 	fmt.Println("                 (default: ~/Projects for repo-sync and branch-reaper, current directory for janitor)")
 	fmt.Println("  --dry-run      Report what would change without applying it")
-	fmt.Println("  --review-root  Janitor: review clone root to reap merged/closed PRs (default: review_root)")
+	fmt.Println("  --review-root  Janitor: review clone root to reap merged/closed PRs (default: <digest_root>/reviews)")
 	fmt.Println("\nExit codes for job commands: 0 clean, 1 user action needed or error")
 	fmt.Println("\nFlags:")
 	flag.PrintDefaults()
@@ -123,7 +127,7 @@ func main() {
 		}
 
 		fmt.Printf("Running janitor job against %s (dry-run: %v)...\n", strings.Join(targetRoots, ", "), *dryRun)
-		needsAction, err := jobs.RunJanitor(targetRoots, patterns, *reviewRoot, *dryRun)
+		needsAction, err := jobs.RunJanitor(targetRoots, patterns, *reviewRoot, cfg.QuarantineDir(), cfg.Retention(), *dryRun)
 		exitForJob("janitor", needsAction, err)
 
 	case "branch-reaper":
@@ -151,6 +155,27 @@ func main() {
 		fmt.Printf("Reviewing %s in %s...\n", ref.URL, review.CloneDir(cfg.ReviewRootDir(), ref))
 		err = review.Run(context.Background(), ref, cfg.ReviewRootDir(), cfg.ReviewCommandTemplate(), log.New(os.Stderr))
 		exitForJob("pr-review", false, err)
+
+	case "brag":
+		fs := flag.NewFlagSet("brag", flag.ExitOnError)
+		week := fs.String("week", "", "ISO week to brag about, e.g. 2026-W40")
+		month := fs.String("month", "", "Month to brag about from saved weekly brags, e.g. 2026-10")
+		year := fs.String("year", "", "Year for the performance review from saved monthly brags, e.g. 2026")
+		regenerate := fs.Bool("regenerate", false, "Rewrite only the summary from the saved facts")
+		_ = fs.Parse(subArgs)
+
+		period, err := brag.PeriodFromFlags(*week, *month, *year)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Bragging about %s into %s...\n", period.Label(), period.Path(cfg.BragDir()))
+		loadNotes := func() ([]*model.Note, error) { return store.New(cfg.NotesDir()).List() }
+		err = brag.RunJob(context.Background(), cfg, period, *regenerate, loadNotes)
+		if err == nil {
+			fmt.Println("Done.")
+		}
+		exitForJob("brag", false, err)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmdName)

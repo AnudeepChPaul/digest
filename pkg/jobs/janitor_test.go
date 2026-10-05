@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"app/pkg/review"
@@ -110,5 +111,23 @@ func TestReapReviewClonesReportsMissingState(t *testing.T) {
 	actions, failures := reapReviewClones(root, false)
 	if len(actions) != 0 || len(failures) != 1 {
 		t.Fatalf("actions=%v failures=%v", actions, failures)
+	}
+}
+
+func TestReapReviewClonesSkipsRunningReviews(t *testing.T) {
+	root := t.TempDir()
+	ref := review.PRRef{Repo: "console", Number: 3, URL: "u-running"}
+	seedReviewClone(t, root, ref)
+	if err := os.WriteFile(filepath.Join(review.StateDir(root, ref), "review.pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	original := lookupPRStates
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		return map[string]string{"u-running": "MERGED"}, nil
+	}
+	defer func() { lookupPRStates = original }()
+	reapReviewClones(root, false)
+	if _, err := os.Stat(review.CloneDir(root, ref)); err != nil {
+		t.Error("a clone in use by a running review should be kept")
 	}
 }

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 
+	"app/pkg/brag"
 	"app/pkg/review"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -17,6 +18,7 @@ const (
 	actionSync
 	actionToggleSortField
 	actionToggleSortOrder
+	actionTogglePendingScope
 	actionRunJobs
 	actionHalfPageDown
 	actionHalfPageUp
@@ -33,6 +35,26 @@ const (
 	actionCursorDown
 	actionCursorUp
 	actionOpenSearch
+	actionRefreshCommits
+	actionOpenBrag
+	actionOpenHelp
+	actionSwitchGitColumn
+
+	actionCloseHelp
+
+	actionCloseBrag
+	actionBragCursorDown
+	actionBragCursorUp
+	actionBragListEnter
+	actionCloseBragView
+	actionEditBrag
+	actionBragAgain
+	actionCopyBrag
+	actionConfirmBrag
+	actionCancelBrag
+	actionSaveBragEdit
+	actionCopyBragEditor
+	actionCancelBragEdit
 
 	actionCloseGitDetails
 	actionSwitchGitFilter
@@ -174,6 +196,16 @@ func (m Model) activeBindings() []keyBinding {
 		return searchPreviewBindings()
 	case ViewError:
 		return errorBindings()
+	case ViewHelp:
+		return helpBindings()
+	case ViewBragList:
+		return bragListBindings()
+	case ViewBragView:
+		return bragViewBindings()
+	case ViewBragConfirm:
+		return bragConfirmBindings()
+	case ViewBragEdit:
+		return bragEditBindings()
 	}
 	return nil
 }
@@ -198,16 +230,21 @@ func (m Model) dashboardBindings() []keyBinding {
 		hiddenKeyBinding(actionNextDay, "n", "right"),
 		newKeyBinding(actionOpenArchive, []string{"ctrl+e"}, "ctrl+e", "open archive"),
 		newKeyBinding(actionSync, []string{"g"}, "g", "run git"),
+		newKeyBinding(actionRefreshCommits, []string{"c"}, "c", "refresh commits").shownWhen(m.cfg.DailyCommitsEnabled()),
 		newKeyBinding(actionRunJobs, []string{"r"}, "r", "run jobs"),
 		newKeyBinding(actionDeleteItem, []string{"d"}, "d", "delete"),
 		newKeyBinding(actionCursorDown, []string{"j", "down"}, "j|k", "nav"),
 		hiddenKeyBinding(actionCursorUp, "k", "up"),
+		newKeyBinding(actionSwitchGitColumn, []string{"h", "l"}, "h|l", "git column"),
 		newKeyBinding(actionHalfPageDown, []string{"ctrl+d", "pgdown"}, "ctrl+d|u", "half page"),
 		hiddenKeyBinding(actionHalfPageUp, "ctrl+u", "pgup"),
 		newKeyBinding(actionOpenSearch, []string{"/"}, "/", "search"),
+		newKeyBinding(actionOpenBrag, []string{"b"}, "b", "brag"),
+		newKeyBinding(actionOpenHelp, []string{"?"}, "?", "shortcuts"),
 		quit,
 		hiddenKeyBinding(actionToggleSortField, "s"),
 		hiddenKeyBinding(actionToggleSortOrder, "w"),
+		hiddenKeyBinding(actionTogglePendingScope, "m"),
 		hiddenKeyBinding(actionDismissSyncErrors, "esc"),
 	}
 }
@@ -261,10 +298,16 @@ func (m Model) previewBindings() []keyBinding {
 	item := navItems[m.selected]
 	switch {
 	case item.Kind == KindReviewRun && item.ReviewRun != nil:
-		_, running := review.RunningPID(review.StateDir(m.reviewRoot(), item.ReviewRun.Meta.Ref))
-		return reviewRunPreviewBindings(running)
+		return reviewRunPreviewBindings(item.ReviewRun.Status == review.RunRunning)
+	case item.Kind == KindBragRun && item.BragRun != nil:
+		running := item.BragRun.Status == brag.RunRunning
+		return append([]keyBinding{
+			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "stop brag").warning().shownWhen(running),
+			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "dismiss").shownWhen(!running),
+			hiddenKeyBinding(actionPreviewEnter, "enter"),
+		}, previewTailBindings()...)
 	case item.Kind == KindJobDraft && item.Draft != nil:
-		running := isJobRunning(item.Draft.Name)
+		running := m.jobRunning(item.Draft.Name)
 		return append([]keyBinding{
 			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "abort job").warning().shownWhen(running),
 			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "run job").shownWhen(!running),
@@ -272,6 +315,7 @@ func (m Model) previewBindings() []keyBinding {
 	}
 	return append([]keyBinding{
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR").shownWhen(prReviewNoteURL(item.Note) != ""),
+		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "edit").shownWhen(item.Note != nil && prReviewNoteURL(item.Note) == ""),
 		newKeyBinding(actionPreviewStop, []string{"d"}, "d", "delete").warning().shownWhen(item.Note != nil && item.Note.FilePath != ""),
 	}, previewTailBindings()...)
 }
@@ -298,11 +342,7 @@ func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
 		rejectOrStop = "stop review"
 	}
 	onReviewTab := m.previewTab == previewTabReview
-	hasFindings := false
-	if onReviewTab {
-		_, findings := m.loadFindings(item)
-		hasFindings = len(findings) > 0
-	}
+	hasFindings := onReviewTab && m.previewFindingsCount > 0
 	bindings := []keyBinding{
 		newKeyBinding(actionSwitchPreviewTab, []string{"tab"}, "tab", "tabs"),
 		newKeyBinding(actionStartReview, []string{"r"}, "r", "review"),
@@ -383,6 +423,45 @@ func searchPreviewBindings() []keyBinding {
 		newKeyBinding(actionCopySearchResult, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionDeleteSearchResult, []string{"d"}, "d", "delete").warning(),
 		newKeyBinding(actionCloseSearchPreview, []string{"esc", "tab"}, "esc|tab", "back"),
+	}
+}
+
+func helpBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionCloseHelp, []string{"esc", "?", "q"}, "esc|?", "close"),
+	}
+}
+
+func bragListBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionBragListEnter, []string{"enter"}, "enter", "open"),
+		newKeyBinding(actionBragCursorDown, []string{"j", "down"}, "j|k", "nav"),
+		hiddenKeyBinding(actionBragCursorUp, "k", "up"),
+		newKeyBinding(actionCloseBrag, []string{"esc"}, "esc", "close"),
+	}
+}
+
+func bragViewBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionEditBrag, []string{"enter"}, "enter", "edit"),
+		newKeyBinding(actionBragAgain, []string{"b"}, "b", "brag again"),
+		newKeyBinding(actionCopyBrag, []string{"ctrl+y"}, "ctrl+y", "copy"),
+		newKeyBinding(actionCloseBragView, []string{"esc"}, "esc", "back"),
+	}
+}
+
+func bragConfirmBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionConfirmBrag, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
+		newKeyBinding(actionCancelBrag, []string{"esc", "n", "N"}, "esc", "cancel"),
+	}
+}
+
+func bragEditBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionSaveBragEdit, []string{"ctrl+o"}, "ctrl+o", "save"),
+		newKeyBinding(actionCopyBragEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
+		newKeyBinding(actionCancelBragEdit, []string{"esc"}, "esc", "cancel"),
 	}
 }
 

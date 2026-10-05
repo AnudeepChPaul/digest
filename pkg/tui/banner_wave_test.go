@@ -9,7 +9,7 @@ import (
 
 func bannerTestModel(t *testing.T) Model {
 	t.Helper()
-	m := NewModel(&config.Config{ReviewRoot: t.TempDir()}, nil)
+	m := NewModel(&config.Config{DigestRoot: t.TempDir()}, nil)
 	m.width, m.height = 120, 40
 	return m
 }
@@ -50,12 +50,24 @@ func TestHeaderShowsDigestBanner(t *testing.T) {
 	m := bannerTestModel(t)
 	m.bannerWaveActive = false
 	header := m.renderHeader()
-	for _, row := range []string{bannerTopRow, bannerBottomRow} {
+	for _, row := range []string{bannerTopRow, bannerMiddleRow, bannerBottomRow} {
 		if !strings.Contains(header, row) {
 			t.Errorf("header missing banner row %q", row)
 		}
 	}
 	if strings.Contains(header, "█▄░█ █▀█ ▀█▀ █▀▀") {
 		t.Errorf("header still shows NOTE banner")
+	}
+}
+
+func TestHeaderTextSitsOnMiddleLogoRow(t *testing.T) {
+	m := bannerTestModel(t)
+	m.bannerWaveActive = false
+	lines := plainLines(m.renderHeader())
+	if !strings.Contains(lines[2], strings.TrimSpace(bannerMiddleRow)) || !strings.Contains(lines[2], "— ") {
+		t.Errorf("date should share the middle logo row:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(lines[1], "— ") || strings.Contains(lines[3], "— ") {
+		t.Errorf("date should not sit on the top or bottom logo row:\n%s", strings.Join(lines, "\n"))
 	}
 }

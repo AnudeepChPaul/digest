@@ -9,9 +9,10 @@ import (
 )
 
 type SyncParams struct {
-	Config *config.Config
-	Today  time.Time
-	Sort   Sort
+	Config      *config.Config
+	Today       time.Time
+	PreviousDay time.Time
+	Sort        Sort
 }
 
 func Sync(ctx context.Context, params SyncParams) <-chan Section {
@@ -25,7 +26,11 @@ func Sync(ctx context.Context, params SyncParams) <-chan Section {
 		sections <- Section{Day: &result}
 	}
 	go sendDay(Today, params.Today)
-	go sendDay(Yesterday, params.Today.AddDate(0, 0, -1))
+	previousDay := params.PreviousDay
+	if previousDay.IsZero() {
+		previousDay = params.Today.AddDate(0, 0, -1)
+	}
+	go sendDay(Yesterday, previousDay)
 	go func() {
 		defer wg.Done()
 		result := engine.FetchPendingPRs(ctx, params.Sort)

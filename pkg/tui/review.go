@@ -41,9 +41,10 @@ var (
 type reviewPollTickMsg struct{}
 
 type reviewSubmittedMsg struct {
-	event review.Event
-	pr    review.QueuedPR
-	err   error
+	event   review.Event
+	pr      review.QueuedPR
+	payload review.Payload
+	err     error
 }
 
 type reviewCloneReadyMsg struct {
@@ -67,9 +68,6 @@ func (m *Model) ensureReviewPoll() tea.Cmd {
 }
 
 func reviewRootFor(cfg *config.Config) string {
-	if cfg == nil {
-		return (&config.Config{}).ReviewRootDir()
-	}
 	return cfg.ReviewRootDir()
 }
 
@@ -120,25 +118,58 @@ func myReviewState(pr review.QueuedPR) (review.PRState, bool) {
 	return "", false
 }
 
+var readLocalReview = func(stateDir string) localReviewState {
+	pid, _ := review.RunningPID(stateDir)
+	finishedAt, finished := review.LocalReviewFinishedAt(stateDir)
+	return localReviewState{status: review.Status(stateDir), finishedAt: finishedAt, finished: finished, pid: pid}
+}
+
+func (m Model) localReviewFor(stateDir string) localReviewState {
+	if state, cached := m.localReviews[stateDir]; cached {
+		return state
+	}
+	return readLocalReview(stateDir)
+}
+
+func (m *Model) refreshLocalReviews() {
+	root := m.reviewRoot()
+	states := make(map[string]localReviewState)
+	addState := func(ref review.PRRef) {
+		stateDir := review.StateDir(root, ref)
+		if _, seen := states[stateDir]; !seen {
+			states[stateDir] = readLocalReview(stateDir)
+		}
+	}
+	for _, items := range [][]GitPRItem{m.ghPendingPRs, m.ghReviewedToday, m.ghReviewedYesterday} {
+		for i := range items {
+			if queued, err := queuedFor(&items[i]); err == nil {
+				addState(queued.Ref)
+			}
+		}
+	}
+	for _, run := range m.reviewRuns {
+		addState(run.Meta.Ref)
+	}
+	m.localReviews = states
+}
+
 func (m Model) prState(item *GitPRItem) review.PRState {
 	queued, err := queuedFor(item)
 	if err != nil {
 		return review.StatePending
 	}
-	stateDir := review.StateDir(m.reviewRoot(), queued.Ref)
-	localStatus := review.Status(stateDir)
-	if localStatus == review.RunRunning {
+	local := m.localReviewFor(review.StateDir(m.reviewRoot(), queued.Ref))
+	if local.status == review.RunRunning {
 		return review.StateReviewing
 	}
 	myState, reviewedOnGitHub := myReviewState(queued)
-	finishedAt, finished := review.LocalReviewFinishedAt(stateDir)
-	actedSinceLocalReview := reviewedOnGitHub && (!finished || queued.MyLastReviewAt.After(finishedAt))
+	actedSinceLocalReview := reviewedOnGitHub && (!local.finished || queued.MyLastReviewAt.After(local.finishedAt))
 	switch {
 	case actedSinceLocalReview:
 		return myState
-	case localStatus == review.RunDone:
+	case local.status == review.RunDone:
 		return review.StateReviewed
-	case localStatus == review.RunFailed:
+	case local.status == review.RunFailed:
 		return review.StateFailed
 	case reviewedOnGitHub:
 		return myState
@@ -178,27 +209,7 @@ func shortAge(d time.Duration) string {
 }
 
 func (m Model) renderPRTag(item *GitPRItem, selected bool) string {
-	now := time.Now()
-	pr := item.PR
-	state := m.prState(item)
-	stateText := stateStyle(state).Render(string(state))
-	if selected {
-		stateText = selectedTagStyle.Render(string(state))
-	}
-	if state == review.StateReviewing {
-		stateText = m.renderReviewRunningIndicator()
-	}
-	age := shortAge(now.Sub(pr.RequestedAt))
-	ageText := mutedStyle.Render(age)
-	if pr.IsStale(now) {
-		ageText = staleStyle.Render(age)
-	}
-	sizeText := mutedStyle.Render(fmt.Sprintf("±%d", pr.Size()))
-	owner := ""
-	if pr.CodeOwner {
-		owner = dimBlueText.Render("◆ ")
-	}
-	return fmt.Sprintf("%s%s %s %s", owner, stateText, ageText, sizeText)
+	return joinTags(m.prTags(item, selected))
 }
 
 func (m Model) renderPreviewTabs() string {
@@ -228,20 +239,48 @@ func (m Model) selectedCount() int {
 	return count
 }
 
+var loadReviewReport = review.Load
+
+type reviewReportMemo struct {
+	dir        string
+	finishedAt time.Time
+	report     *review.Report
+	findings   []review.Finding
+	meta       review.Meta
+	metaErr    error
+	err        error
+}
+
+func (m Model) doneReview(dir string) (*reviewReportMemo, bool) {
+	local := m.localReviewFor(dir)
+	if local.status != review.RunDone {
+		return nil, false
+	}
+	memo := m.reviewReports
+	if memo == nil {
+		memo = &reviewReportMemo{}
+	}
+	if memo.dir != dir || !memo.finishedAt.Equal(local.finishedAt) || (memo.report == nil && memo.err == nil) {
+		*memo = reviewReportMemo{dir: dir, finishedAt: local.finishedAt}
+		memo.report, memo.err = loadReviewReport(dir)
+		if memo.err == nil {
+			memo.findings = review.Flatten(review.GroupBySeverity(memo.report.Findings))
+		}
+		memo.meta, memo.metaErr = review.ReadMeta(dir)
+	}
+	return memo, true
+}
+
 func (m Model) loadFindings(item *GitPRItem) (*review.Report, []review.Finding) {
 	queued, err := queuedFor(item)
 	if err != nil {
 		return nil, nil
 	}
-	dir := review.StateDir(m.reviewRoot(), queued.Ref)
-	if review.Status(dir) != review.RunDone {
+	done, ok := m.doneReview(review.StateDir(m.reviewRoot(), queued.Ref))
+	if !ok || done.err != nil {
 		return nil, nil
 	}
-	report, err := review.Load(dir)
-	if err != nil {
-		return nil, nil
-	}
-	return report, review.Flatten(review.GroupBySeverity(report.Findings))
+	return done.report, done.findings
 }
 
 func (m Model) selectedFindings(item *GitPRItem) []review.Finding {
@@ -266,6 +305,8 @@ func (m *Model) setPRPreviewContent(item *GitPRItem, width, height int) {
 	}
 	m.previewViewport = viewport.New(width, height)
 	if m.previewTab == previewTabReview {
+		_, findings := m.loadFindings(item)
+		m.previewFindingsCount = len(findings)
 		content, cursorLine := m.renderReviewContent(item, width)
 		m.previewViewport.SetContent(content)
 		m.previewViewport.SetYOffset(previousOffset)
@@ -282,30 +323,63 @@ func (m *Model) setPRPreviewContent(item *GitPRItem, width, height int) {
 	m.previewViewport.SetYOffset(previousOffset)
 }
 
-func (m Model) relatedHistory(pr review.QueuedPR) string {
-	if cached, ok := m.contextCache[pr.Ref.URL]; ok {
-		return cached
+type relatedHistoryMsg struct {
+	url     string
+	history string
+}
+
+var gitLogForFiles = func(dir string, files []string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	args := append([]string{"-C", dir, "log", "-n", "5", "--format=%h %s", "origin/HEAD", "--"}, files...)
+	out, err := exec.CommandContext(ctx, "git", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (m *Model) relatedHistoryCmd(item *GitPRItem) tea.Cmd {
+	if item == nil || item.PR == nil {
+		return nil
+	}
+	pr := item.PR
+	if _, cached := m.contextCache[pr.Ref.URL]; cached || m.historyRequested[pr.Ref.URL] {
+		return nil
 	}
 	dir := review.CloneDir(m.reviewRoot(), pr.Ref)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil || len(pr.Files) == 0 {
-		return ""
+		return nil
 	}
 	files := pr.Files
 	if len(files) > 20 {
 		files = files[:20]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	args := append([]string{"-C", dir, "log", "-n", "5", "--format=%h %s", "origin/HEAD", "--"}, files...)
-	out, err := exec.CommandContext(ctx, "git", args...).Output()
-	history := ""
-	if err == nil {
-		history = strings.TrimSpace(string(out))
+	if m.historyRequested == nil {
+		m.historyRequested = make(map[string]bool)
 	}
-	if m.contextCache != nil {
-		m.contextCache[pr.Ref.URL] = history
+	m.historyRequested[pr.Ref.URL] = true
+	url := pr.Ref.URL
+	return func() tea.Msg {
+		return relatedHistoryMsg{url: url, history: gitLogForFiles(dir, files)}
 	}
-	return history
+}
+
+func (m Model) handleRelatedHistory(msg relatedHistoryMsg) (tea.Model, tea.Cmd) {
+	delete(m.historyRequested, msg.url)
+	if m.contextCache == nil {
+		m.contextCache = make(map[string]string)
+	}
+	m.contextCache[msg.url] = msg.history
+	if item := m.currentPRItem(); m.mode == ViewPreview && item != nil && item.URL == msg.url {
+		m.updatePreviewViewport()
+	}
+	return m, nil
+}
+
+func (m Model) relatedHistory(pr review.QueuedPR) (string, bool) {
+	history, cached := m.contextCache[pr.Ref.URL]
+	return history, m.historyRequested[pr.Ref.URL] && !cached
 }
 
 func (m Model) renderDetailsMarkdown(item *GitPRItem) string {
@@ -356,10 +430,13 @@ func (m Model) renderDetailsMarkdown(item *GitPRItem) string {
 		}
 	}
 	b.WriteString("\n## Recent changes to these files\n\n")
-	if history := m.relatedHistory(*pr); history != "" {
+	history, loading := m.relatedHistory(*pr)
+	if history != "" {
 		for _, line := range strings.Split(history, "\n") {
 			fmt.Fprintf(&b, "- %s\n", line)
 		}
+	} else if loading {
+		b.WriteString("Loading…\n")
 	} else {
 		b.WriteString("Available once a review clone exists (press **o** or run a review).\n")
 	}
@@ -396,7 +473,7 @@ func (m Model) renderReviewContent(item *GitPRItem, width int) (string, int) {
 
 	fmt.Fprintf(&b, "%s %s\n\n", sectionTitleStyle.Render("State:"), m.prStateBadge(item))
 
-	switch review.Status(dir) {
+	switch m.localReviewFor(dir).status {
 	case review.RunIdle:
 		b.WriteString(mutedStyle.Render("No Claude review yet. Press r to clone the PR, install dependencies and run review-toolkit.") + "\n")
 	case review.RunRunning:
@@ -406,12 +483,13 @@ func (m Model) renderReviewContent(item *GitPRItem, width int) (string, int) {
 		b.WriteString(staleStyle.Render("Review failed. Press r to retry.") + "\n\n")
 		b.WriteString(mutedStyle.Render(lastLines(review.ReadLog(dir), 12)) + "\n")
 	case review.RunDone:
-		report, err := review.Load(dir)
-		if err != nil {
-			b.WriteString(staleStyle.Render(err.Error()) + "\n")
+		done, _ := m.doneReview(dir)
+		if done.err != nil {
+			b.WriteString(staleStyle.Render(done.err.Error()) + "\n")
 			break
 		}
-		if meta, err := review.ReadMeta(dir); err == nil && queued.HeadSHA != "" && meta.HeadSHA != "" && meta.HeadSHA != queued.HeadSHA {
+		report, meta := done.report, done.meta
+		if done.metaErr == nil && queued.HeadSHA != "" && meta.HeadSHA != "" && meta.HeadSHA != queued.HeadSHA {
 			b.WriteString(staleStyle.Render("PR has new commits since this review — press r to re-run.") + "\n\n")
 		}
 		fmt.Fprintf(&b, "%s %s · %d findings · %d selected\n", sectionTitleStyle.Render("Recommendation:"), report.Recommendation, len(report.Findings), m.selectedCount())
@@ -512,13 +590,9 @@ func (m Model) startReview(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 	m.reviewSelected = make(map[int]bool)
 	m.reviewCursor = 0
 	m.reviewNotice = "Review started in the background"
-	pulseIdle := !(m.loadingGit || m.isAnyJobRunning() || m.isAnyDryRunInFlight() || m.anyReviewRunning())
 	m.refreshReviewRuns()
-	cmds := []tea.Cmd{m.ensureReviewPoll()}
-	if pulseIdle {
-		cmds = append(cmds, tickSyncPulseCmd())
-	}
-	return true, m.refreshPreview(), tea.Batch(cmds...)
+	pollCmds := tea.Batch(m.ensureReviewPoll(), m.ensureSyncPulse())
+	return true, m.refreshPreview(), pollCmds
 }
 
 func (m Model) openClone(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
@@ -531,10 +605,13 @@ func (m Model) openClone(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 		m.reviewNotice = "Not inside tmux; cannot open a new nvim window"
 		return true, m.refreshPreview(), nil
 	}
-	root := m.reviewRoot()
+	root, sessionCtx := m.reviewRoot(), m.sessionCtx
+	if sessionCtx == nil {
+		sessionCtx = context.Background()
+	}
 	m.reviewNotice = "Opening PR clone in nvim…"
 	return true, m.refreshPreview(), func() tea.Msg {
-		cloneDir, err := sourcecontrol.ClonePR(context.Background(), root, queued)
+		cloneDir, err := sourcecontrol.ClonePR(sessionCtx, root, queued)
 		return reviewCloneReadyMsg{dir: cloneDir, ref: queued.Ref, err: err}
 	}
 }
@@ -559,10 +636,12 @@ func (m Model) handleCloneReady(msg reviewCloneReadyMsg) (tea.Model, tea.Cmd) {
 		m.reviewNotice = "Opened clone in a new tmux window"
 	}
 	delete(m.contextCache, msg.ref.URL)
+	var historyCmd tea.Cmd
 	if m.mode == ViewPreview {
+		historyCmd = m.relatedHistoryCmd(m.currentPRItem())
 		m.updatePreviewViewport()
 	}
-	return m, nil
+	return m, historyCmd
 }
 
 func eventLabel(event review.Event) string {
@@ -596,7 +675,7 @@ func (m Model) handleReviewSubmitted(msg reviewSubmittedMsg) (tea.Model, tea.Cmd
 	}
 	var notesCmd tea.Cmd
 	if msg.pr.Ref.URL != "" {
-		notesCmd = reviewNotesCmd(m.store, []review.ActivityPR{sourcecontrol.ReviewRecord(msg.pr, submittedReviewStates[msg.event], time.Now())})
+		notesCmd = reviewNotesCmd(m.store, []review.ActivityPR{submittedReviewRecord(msg, time.Now())})
 	}
 	if msg.event == review.EventApprove {
 		return m, tea.Batch(notesCmd, tea.Tick(approvalSyncDelay, func(time.Time) tea.Msg { return approvalSyncMsg{} }))
@@ -607,6 +686,14 @@ func (m Model) handleReviewSubmitted(msg reviewSubmittedMsg) (tea.Model, tea.Cmd
 type approvalSyncMsg struct{}
 
 var approvalSyncDelay = 3 * time.Second
+
+func submittedReviewRecord(msg reviewSubmittedMsg, reviewedAt time.Time) review.ActivityPR {
+	record := sourcecontrol.ReviewRecord(msg.pr, submittedReviewStates[msg.event], reviewedAt)
+	if msg.event == review.EventRequestChanges {
+		record.Comments = strings.TrimSpace(review.FoldIntoBody(msg.payload).Body)
+	}
+	return record
+}
 
 var submittedReviewStates = map[review.Event]string{review.EventApprove: "APPROVED", review.EventRequestChanges: "CHANGES_REQUESTED", review.EventComment: "COMMENTED"}
 
@@ -626,12 +713,9 @@ func (m Model) anyReviewRunning() bool {
 			return true
 		}
 	}
-	root := m.reviewRoot()
-	for _, items := range [][]GitPRItem{m.ghPendingPRs} {
-		for i := range items {
-			if queued, err := queuedFor(&items[i]); err == nil && review.Status(review.StateDir(root, queued.Ref)) == review.RunRunning {
-				return true
-			}
+	for _, state := range m.localReviews {
+		if state.status == review.RunRunning {
+			return true
 		}
 	}
 	return false
@@ -640,12 +724,16 @@ func (m Model) anyReviewRunning() bool {
 func (m Model) handleReviewPoll() (tea.Model, tea.Cmd) {
 	selectedKey, selectedOccurrence := m.selectedNavKey()
 	m.refreshReviewRuns()
+	m.refreshBragRuns()
 	m.restoreSelection(selectedKey, selectedOccurrence)
 	inPRPreview := m.mode == ViewPreview && m.currentPRItem() != nil
 	if inPRPreview {
 		m.updatePreviewViewport()
 	}
-	if inPRPreview || m.anyReviewRunning() {
+	if m.mode == ViewBragView {
+		m.reloadBragViewIfChanged()
+	}
+	if m.anyReviewRunning() || m.anyBragRunning() {
 		return m, tickReviewPollCmd()
 	}
 	m.reviewPolling = false
@@ -689,6 +777,7 @@ func (m Model) renderRejectComment(modalWidth int) string {
 
 func (m *Model) refreshReviewRuns() {
 	m.reviewRuns = review.ListRuns(m.reviewRoot())
+	m.refreshLocalReviews()
 }
 
 func reviewRunLabel(run review.ReviewRun) string {
@@ -696,13 +785,20 @@ func reviewRunLabel(run review.ReviewRun) string {
 }
 
 func (m Model) renderReviewRunningIndicator() string {
+	return m.renderPulseIndicator("reviewing...")
+}
+
+func (m Model) renderPulseIndicator(label string) string {
+	return m.renderPulseDot() + " " + reviewingStyle.Render(label)
+}
+
+func (m Model) renderPulseDot() string {
 	pulseColors := []string{
 		"#F9E2AF", "#EED49F", "#F5BDE6", "#C6A0F6",
 		"#89B4FA", "#74C7EC", "#8BD5CA", "#A6E3A1",
 	}
 	idx := m.syncPulseFrame % len(pulseColors)
-	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true)
-	return fmt.Sprintf("%s %s", dotStyle.Render("●"), reviewingStyle.Render("reviewing..."))
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true).Render("●")
 }
 
 func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int) string {
@@ -769,6 +865,27 @@ func reviewNoteStatus(state string) model.Status {
 
 const reviewHistoryTimeFormat = "2006-01-02 15:04"
 
+const requestedChangesHeading = "### Requested changes "
+
+func requestedChangesBlock(comments string, reviewedAt time.Time) string {
+	return requestedChangesHeading + reviewedAt.Local().Format(reviewHistoryTimeFormat) + "\n\n" + comments
+}
+
+func insertAbovePRURL(body, prURL, block string) string {
+	at := strings.Index(body, requestedChangesHeading)
+	if at < 0 {
+		at = strings.LastIndex(body, prURL)
+	}
+	if at < 0 {
+		return block + "\n\n" + strings.TrimLeft(body, "\n")
+	}
+	above := body[:at]
+	if above != "" && !strings.HasSuffix(above, "\n") {
+		above += "\n\n"
+	}
+	return above + block + "\n\n" + body[at:]
+}
+
 func pushReviewLine(note *model.Note, summary string, previousAt time.Time) {
 	note.Body = previousAt.Local().Format(reviewHistoryTimeFormat) + " " + note.Summary + "\n" + note.Body
 	note.Summary = summary
@@ -811,6 +928,7 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 		if err != nil {
 			return loadNotesMsg{err: err}
 		}
+		saved := false
 		for _, pr := range ordered {
 			noteID := reviewNoteID(pr.Repository, pr.Number)
 			reviewedAt := pr.ReviewedAt.Local()
@@ -826,10 +944,17 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 					Repo:    pr.Repository,
 					Body:    pr.URL,
 				}
-			case note.Source != model.SourcePRReview, !reviewedAt.After(note.Updated), isRepeatOfLatest(note, summary, reviewedAt):
+			case note.Source != model.SourcePRReview, !reviewedAt.After(note.Updated):
 				continue
+			case isRepeatOfLatest(note, summary, reviewedAt):
+				if pr.Comments == "" || strings.Contains(note.Body, pr.Comments) {
+					continue
+				}
 			default:
 				pushReviewLine(note, summary, note.Updated)
+			}
+			if pr.Comments != "" {
+				note.Body = insertAbovePRURL(note.Body, pr.URL, requestedChangesBlock(pr.Comments, reviewedAt))
 			}
 			note.Status = reviewNoteStatus(pr.State)
 			note.Updated = reviewedAt
@@ -837,6 +962,10 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 				return loadNotesMsg{err: err}
 			}
 			byID[noteID] = note
+			saved = true
+		}
+		if !saved {
+			return nil
 		}
 		notes, err := noteStore.List()
 		return loadNotesMsg{notes: notes, err: err}
@@ -898,7 +1027,8 @@ func (m Model) reviewPIDFor(item *GitPRItem) (int, bool) {
 	if ref.URL == "" {
 		return 0, false
 	}
-	return review.RunningPID(review.StateDir(m.reviewRoot(), ref))
+	pid := m.localReviewFor(review.StateDir(m.reviewRoot(), ref)).pid
+	return pid, pid > 0
 }
 
 func (m Model) beginReviewRunConfirm(action string, ref review.PRRef) (tea.Model, tea.Cmd) {
@@ -919,7 +1049,7 @@ func (m Model) renderReviewRunConfirm(modalWidth int) string {
 	if m.reviewRunAction == reviewActionStop {
 		title = deleteTitleStyle.Render(" STOP REVIEW ")
 		prompt = fmt.Sprintf("Stop the running review of %s?", label)
-		if pid, running := review.RunningPID(review.StateDir(m.reviewRoot(), m.reviewRunTarget)); running {
+		if pid := m.localReviewFor(review.StateDir(m.reviewRoot(), m.reviewRunTarget)).pid; pid > 0 {
 			prompt += fmt.Sprintf("\n\nPID %d and its child processes will be terminated.", pid)
 		}
 	}

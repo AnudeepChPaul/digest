@@ -32,6 +32,7 @@ type QueuedPR struct {
 	MyLastReviewState string
 	LastReplyAt       time.Time
 	CodeOwner         bool
+	DirectRequest     bool
 	OwnerTeams        []string
 	Files             []string
 	Approved          bool

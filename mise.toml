@@ -40,6 +40,6 @@ printf '\033[36m▸\033[0m bumping {{vars.project}} version (\033[1m%s\033[0m)\n
 mise run _version "$usage_bump"
 build_version=$(cat .version)
 printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
-go build -o "$binary_path" ./cmd/app
+go build -ldflags "-X app/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/app
 printf '\033[32m✓\033[0m built %s\n' "$binary_path"
 '''

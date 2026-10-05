@@ -56,7 +56,7 @@ func TestLocalRepoPathsUsesOnlyRoots(t *testing.T) {
 	base := t.TempDir()
 	listed := makeRepo(t, filepath.Join(base, "listed"))
 	makeRepo(t, filepath.Join(base, "other"))
-	cfg := &config.Config{GitRepositoryRoots: []string{listed}, NotesDir: base}
+	cfg := &config.Config{GitRepositoryRoots: []string{listed}, DigestRoot: base}
 	paths := localRepoPaths(cfg)
 	if len(paths) != 1 || filepath.Base(paths[0]) != "listed" {
 		t.Errorf("paths = %v", paths)

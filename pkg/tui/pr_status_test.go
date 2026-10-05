@@ -80,6 +80,7 @@ func TestCachedPRKeepsMyReviewState(t *testing.T) {
 	m := syncTestModel(t)
 	pending := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 5), CIState: "SUCCESS", MyLastReviewState: "COMMENTED", MyLastReviewAt: time.Now()}, "Pending Review")
 	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pending}})
+	saveCacheNow(t, m)
 	fresh := NewModel(m.cfg, nil)
 	if len(fresh.ghPendingPRs) != 1 || fresh.ghPendingPRs[0].PR.MyLastReviewState != "COMMENTED" {
 		t.Errorf("cached = %+v", fresh.ghPendingPRs)

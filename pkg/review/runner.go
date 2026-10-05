@@ -67,6 +67,9 @@ func claimRun(stateDir string) (func(runErr error), error) {
 			exitCode = "1"
 		}
 		_ = os.WriteFile(filepath.Join(stateDir, exitFile), []byte(exitCode), 0644)
+		if pid, ok := readInt(pidPath); ok && pid == os.Getpid() {
+			_ = os.Remove(pidPath)
+		}
 	}, nil
 }
 
@@ -101,6 +104,7 @@ func run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 
 	logger.Info("Running Claude review", "command", command)
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Dir = cloneDir
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout

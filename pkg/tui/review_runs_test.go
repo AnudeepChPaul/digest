@@ -32,11 +32,11 @@ func prRef(repo string, number int) review.PRRef {
 
 func reviewRunsModel(t *testing.T) (Model, review.PRRef, review.PRRef) {
 	t.Helper()
-	root := t.TempDir()
+	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true, Jobs: []config.JobSpec{{Name: "janitor"}}}
+	root := cfg.ReviewRootDir()
 	running, failed := prRef("console", 1), prRef("web-console", 2)
 	seedReviewState(t, root, running, map[string]string{"review.pid": strconv.Itoa(os.Getpid())})
 	seedReviewState(t, root, failed, map[string]string{"review.exit": "1", "review.log": "boom: install failed"})
-	cfg := &config.Config{ReviewRoot: root, GreenOnly: true, Jobs: []config.JobSpec{{Name: "janitor"}}}
 	m := NewModel(cfg, nil)
 	m.width, m.height = 120, 60
 	return m, running, failed

@@ -47,26 +47,87 @@ func (j *JobSpec) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	NotesDir            string    `yaml:"notes_dir"`
+	DigestRoot          string    `yaml:"digest_root"`
 	GitRepositoryRoots  []string  `yaml:"git_repository_roots"`
 	GitLookbackDays     int       `yaml:"git_lookback_days"`
 	GitCommitsCmd       string    `yaml:"git_commits_cmd"`
 	GitAutoSyncInterval int       `yaml:"git_auto_sync_interval"`
 	JanitorPatterns     []string  `yaml:"janitor_patterns"`
 	Jobs                []JobSpec `yaml:"jobs"`
-	ReviewRoot          string    `yaml:"review_root"`
 	ReviewCommand       string    `yaml:"review_command"`
 	GreenOnly           bool      `yaml:"green_only"`
 	JiraBaseURL         string    `yaml:"jira_base_url"`
 	PRQuantityPerRepo   int       `yaml:"pr_quantity_per_repo"`
 	ShowDailyCommits    *bool     `yaml:"show_daily_commits"`
+	BragCommand         string    `yaml:"brag_command"`
+	BragPrompts         Prompt    `yaml:"brag_prompts"`
+	MonthBragPrompts    Prompt    `yaml:"month_brag_prompts"`
+	PerformancePrompts  Prompt    `yaml:"performance_review_prompts"`
+	RetentionDays       int       `yaml:"retention_days"`
 }
 
-func (c *Config) ReviewRootDir() string {
-	if c.ReviewRoot == "" {
-		return paths.Expand(DefaultReviewRoot)
+type Prompt string
+
+func (p *Prompt) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		*p = Prompt(strings.TrimSpace(value.Value))
+	case yaml.SequenceNode:
+		var parts []string
+		if err := value.Decode(&parts); err != nil {
+			return err
+		}
+		var kept []string
+		for _, part := range parts {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				kept = append(kept, trimmed)
+			}
+		}
+		*p = Prompt(strings.Join(kept, "\n\n"))
+	default:
+		return fmt.Errorf("line %d: prompt must be a string or a list of strings", value.Line)
 	}
-	return paths.Expand(c.ReviewRoot)
+	return nil
+}
+
+type PromptKind string
+
+const (
+	PromptWeek  PromptKind = "week"
+	PromptMonth PromptKind = "month"
+	PromptYear  PromptKind = "year"
+)
+
+func (c *Config) Root() string {
+	if c == nil || c.DigestRoot == "" {
+		return paths.Expand(DefaultDigestRoot)
+	}
+	return paths.Expand(c.DigestRoot)
+}
+
+func (c *Config) NotesDir() string      { return filepath.Join(c.Root(), "notes") }
+func (c *Config) ReviewRootDir() string { return filepath.Join(c.Root(), "reviews") }
+func (c *Config) BragDir() string       { return filepath.Join(c.Root(), "brag") }
+func (c *Config) CacheDir() string      { return filepath.Join(c.Root(), "cache") }
+func (c *Config) LogsDir() string       { return filepath.Join(c.Root(), "logs") }
+func (c *Config) QuarantineDir() string { return filepath.Join(c.Root(), ".quarantine") }
+
+func (c *Config) BragCommandTemplate() string {
+	if c == nil || c.BragCommand == "" {
+		return DefaultBragCommand
+	}
+	return c.BragCommand
+}
+
+func (c *Config) BragPrompt(kind PromptKind) string {
+	defaults := map[PromptKind]string{PromptWeek: DefaultWeekBragPrompt, PromptMonth: DefaultMonthBragPrompt, PromptYear: DefaultPerformanceReviewPrompt}
+	if c != nil {
+		configured := map[PromptKind]Prompt{PromptWeek: c.BragPrompts, PromptMonth: c.MonthBragPrompts, PromptYear: c.PerformancePrompts}[kind]
+		if configured != "" {
+			return string(configured)
+		}
+	}
+	return defaults[kind]
 }
 
 func (c *Config) ReviewCommandTemplate() string {
@@ -83,13 +144,20 @@ func (c *Config) PRsPerRepo() int {
 	return min(max(c.PRQuantityPerRepo, 1), maxPRQuantityPerRepo)
 }
 
+func (c *Config) Retention() int {
+	if c == nil || c.RetentionDays <= 0 {
+		return DefaultRetentionDays
+	}
+	return c.RetentionDays
+}
+
 func (c *Config) DailyCommitsEnabled() bool {
 	return c == nil || c.ShowDailyCommits == nil || *c.ShowDailyCommits
 }
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		NotesDir            string      `yaml:"notes_dir"`
+		DigestRoot          string      `yaml:"digest_root"`
 		GitRepositoryRoots  []string    `yaml:"git_repository_roots"`
 		LegacyRepoRoots     []string    `yaml:"repo_roots"`
 		GitLookbackDays     int         `yaml:"git_lookback_days"`
@@ -97,19 +165,23 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 		GitAutoSyncInterval interface{} `yaml:"git_auto_sync_interval"`
 		JanitorPatterns     []string    `yaml:"janitor_patterns"`
 		Jobs                []JobSpec   `yaml:"jobs"`
-		ReviewRoot          string      `yaml:"review_root"`
 		ReviewCommand       string      `yaml:"review_command"`
 		GreenOnly           *bool       `yaml:"green_only"`
 		JiraBaseURL         string      `yaml:"jira_base_url"`
 		PRQuantityPerRepo   int         `yaml:"pr_quantity_per_repo"`
 		ShowDailyCommits    *bool       `yaml:"show_daily_commits"`
+		BragCommand         string      `yaml:"brag_command"`
+		BragPrompts         Prompt      `yaml:"brag_prompts"`
+		MonthBragPrompts    Prompt      `yaml:"month_brag_prompts"`
+		PerformancePrompts  Prompt      `yaml:"performance_review_prompts"`
+		RetentionDays       int         `yaml:"retention_days"`
 	}
 
 	if err := value.Decode(&raw); err != nil {
 		return err
 	}
 
-	c.NotesDir = raw.NotesDir
+	c.DigestRoot = raw.DigestRoot
 	c.GitRepositoryRoots = raw.GitRepositoryRoots
 	if len(c.GitRepositoryRoots) == 0 {
 		c.GitRepositoryRoots = raw.LegacyRepoRoots
@@ -118,12 +190,16 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	c.GitCommitsCmd = raw.GitCommitsCmd
 	c.JanitorPatterns = raw.JanitorPatterns
 	c.Jobs = raw.Jobs
-	c.ReviewRoot = raw.ReviewRoot
 	c.ReviewCommand = raw.ReviewCommand
 	c.GreenOnly = raw.GreenOnly == nil || *raw.GreenOnly
 	c.JiraBaseURL = raw.JiraBaseURL
 	c.PRQuantityPerRepo = raw.PRQuantityPerRepo
 	c.ShowDailyCommits = raw.ShowDailyCommits
+	c.BragCommand = raw.BragCommand
+	c.BragPrompts = raw.BragPrompts
+	c.MonthBragPrompts = raw.MonthBragPrompts
+	c.PerformancePrompts = raw.PerformancePrompts
+	c.RetentionDays = raw.RetentionDays
 
 	c.GitAutoSyncInterval = parseSyncInterval(raw.GitAutoSyncInterval)
 

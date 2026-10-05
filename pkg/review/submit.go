@@ -99,6 +99,7 @@ var postReview = func(ctx context.Context, ref PRRef, body []byte) error {
 		args = append(args, "--hostname", ref.Host)
 	}
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Stdin = bytes.NewReader(body)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

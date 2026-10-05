@@ -131,42 +131,121 @@ func tagMatches(tags []string, wanted string) bool {
 	return false
 }
 
-func (query searchQuery) matches(note *model.Note, now time.Time) bool {
+var lowerSearchText = strings.ToLower
+
+type searchableNote struct {
+	note         *model.Note
+	summary      string
+	body         string
+	lowerSummary string
+	lowerBody    string
+}
+
+func (entry *searchableNote) refresh(note *model.Note) {
+	if entry.note == note && entry.summary == note.Summary && entry.body == note.Body {
+		return
+	}
+	entry.note, entry.summary, entry.body = note, note.Summary, note.Body
+	entry.lowerSummary, entry.lowerBody = lowerSearchText(note.Summary), lowerSearchText(note.Body)
+}
+
+func (query searchQuery) matches(entry *searchableNote, now time.Time) (matched, bodyMatched bool) {
+	note := entry.note
 	for _, filter := range query.dates {
 		if !filter.matches(note.Updated, now) {
-			return false
+			return false, false
 		}
 	}
 	tags := noteTags(note)
 	for _, wanted := range query.tags {
 		if !tagMatches(tags, wanted) {
-			return false
+			return false, false
 		}
 	}
-	summary, body := strings.ToLower(note.Summary), strings.ToLower(note.Body)
 	for _, word := range query.words {
-		if !strings.Contains(summary, word) && !strings.Contains(body, word) {
+		inBody := strings.Contains(entry.lowerBody, word)
+		if !inBody && !strings.Contains(entry.lowerSummary, word) {
+			return false, false
+		}
+		bodyMatched = bodyMatched || inBody
+	}
+	return true, bodyMatched
+}
+
+type searchResultKey struct {
+	query  string
+	day    string
+	status []model.Status
+	update []time.Time
+}
+
+type searchMemo struct {
+	entries []searchableNote
+	key     searchResultKey
+	results []*model.Note
+	heights []int
+}
+
+func (memo *searchMemo) matchesKey(query, day string, notes []*model.Note) bool {
+	if memo.key.query != query || memo.key.day != day || len(memo.entries) != len(notes) {
+		return false
+	}
+	for index, note := range notes {
+		entry := memo.entries[index]
+		if entry.note != note || entry.summary != note.Summary || entry.body != note.Body || memo.key.status[index] != note.Status || !memo.key.update[index].Equal(note.Updated) {
 			return false
 		}
 	}
 	return true
 }
 
-func (m Model) searchResults() []*model.Note {
-	query := parseSearchQuery(m.searchInput.Value())
-	now := time.Now()
-	var results []*model.Note
-	for _, note := range m.notes {
+func (m Model) searchMatches() ([]*model.Note, []int) {
+	memo := m.searchCache
+	if memo == nil {
+		memo = &searchMemo{}
+	}
+	input, now := m.searchInput.Value(), time.Now()
+	day := now.Format(searchDayFormat)
+	if memo.matchesKey(input, day, m.notes) {
+		return memo.results, memo.heights
+	}
+	query := parseSearchQuery(input)
+	if len(memo.entries) != len(m.notes) {
+		memo.entries = append(memo.entries[:0], make([]searchableNote, len(m.notes))...)
+	}
+	key := searchResultKey{query: input, day: day, status: make([]model.Status, len(m.notes)), update: make([]time.Time, len(m.notes))}
+	type match struct {
+		note        *model.Note
+		bodyMatched bool
+	}
+	var matches []match
+	for index, note := range m.notes {
+		entry := &memo.entries[index]
+		entry.refresh(note)
+		key.status[index], key.update[index] = note.Status, note.Updated
 		if note.Status != model.StatusActive && note.Status != model.StatusDone {
 			continue
 		}
-		if query.matches(note, now) {
-			results = append(results, note)
+		if matched, bodyMatched := query.matches(entry, now); matched {
+			matches = append(matches, match{note, bodyMatched})
 		}
 	}
-	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].Updated.After(results[j].Updated)
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].note.Updated.After(matches[j].note.Updated)
 	})
+	results, heights := make([]*model.Note, len(matches)), make([]int, len(matches))
+	for index, found := range matches {
+		results[index], heights[index] = found.note, 1
+		if found.bodyMatched {
+			heights[index] = 2
+		}
+	}
+	memo.key, memo.results, memo.heights = key, results, heights
+	return results, heights
+}
+
+func (m Model) searchResults() []*model.Note {
+	results, _ := m.searchMatches()
 	return results
 }
 
@@ -253,13 +332,6 @@ func bodySnippet(body string, words []string, width int) (string, bool) {
 	return snippet, true
 }
 
-func searchRowHeight(note *model.Note, words []string) int {
-	if _, found := bodySnippet(note.Body, words, searchSnippetWidth); found {
-		return 2
-	}
-	return 1
-}
-
 func searchWindow(heights []int, selected, scroll, available int) (first, last int) {
 	if len(heights) == 0 {
 		return 0, 0
@@ -283,15 +355,6 @@ func searchWindow(heights []int, selected, scroll, available int) (first, last i
 	return first, max(last, selected+1)
 }
 
-func (m Model) searchRowHeights(results []*model.Note) []int {
-	words := parseSearchQuery(m.searchInput.Value()).words
-	heights := make([]int, len(results))
-	for index, note := range results {
-		heights[index] = searchRowHeight(note, words)
-	}
-	return heights
-}
-
 func (m Model) searchFooter(modalWidth int) string {
 	return renderModalFooter(footerItemsFrom(searchBindings()), modalWidth-6)
 }
@@ -303,14 +366,14 @@ func (m Model) searchListHeight() int {
 }
 
 func (m *Model) keepSearchSelectionVisible() {
-	results := m.searchResults()
+	results, heights := m.searchMatches()
 	m.searchSelected = min(max(m.searchSelected, 0), max(len(results)-1, 0))
-	m.searchScroll, _ = searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, m.searchListHeight())
+	m.searchScroll, _ = searchWindow(heights, m.searchSelected, m.searchScroll, m.searchListHeight())
 }
 
 func (m Model) searchPageSize() int {
-	results := m.searchResults()
-	first, last := searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, m.searchListHeight())
+	_, heights := m.searchMatches()
+	first, last := searchWindow(heights, m.searchSelected, m.searchScroll, m.searchListHeight())
 	return max(1, last-first)
 }
 
@@ -360,7 +423,7 @@ func (m Model) renderSearchRow(note *model.Note, selected bool, query searchQuer
 
 func (m Model) renderSearchModal(modalWidth int) string {
 	innerWidth := modalWidth - 6
-	results := m.searchResults()
+	results, heights := m.searchMatches()
 	query := parseSearchQuery(m.searchInput.Value())
 	listHeight := m.searchListHeight()
 
@@ -386,7 +449,7 @@ func (m Model) renderSearchModal(modalWidth int) string {
 		for _, note := range results {
 			dateWidth = max(dateWidth, ansi.StringWidth(searchDateLabel(note.Updated, now)))
 		}
-		first, last := searchWindow(m.searchRowHeights(results), m.searchSelected, m.searchScroll, listHeight)
+		first, last := searchWindow(heights, m.searchSelected, m.searchScroll, listHeight)
 		for index := first; index < last; index++ {
 			listLines = append(listLines, strings.Split(m.renderSearchRow(results[index], index == m.searchSelected, query, dateWidth, innerWidth), "\n")...)
 		}

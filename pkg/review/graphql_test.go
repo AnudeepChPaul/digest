@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func stubGraphQL(t *testing.T, respond func(host, query string) string) *[]string {
 	t.Helper()
 	var queries []string
+	var queriesMu sync.Mutex
 	original := runGraphQL
 	runGraphQL = func(ctx context.Context, host, query string) ([]byte, error) {
+		queriesMu.Lock()
 		queries = append(queries, query)
+		queriesMu.Unlock()
 		return []byte(respond(host, query)), nil
 	}
 	t.Cleanup(func() { runGraphQL = original })
@@ -213,5 +217,25 @@ func TestFetchPRStatesBatchesPerHost(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(*queries, "\n"), `pr0: repository(owner: "o", name: "console") { pullRequest(number: 1) { state } }`) {
 		t.Errorf("queries = %v", *queries)
+	}
+}
+
+func TestParsePRDetailsFlagsExplicitViewerRequest(t *testing.T) {
+	team := reviewRequestNode{Typename: "Team", Name: "Platform Team", Slug: "platform-team"}
+	cases := []struct {
+		name     string
+		requests []reviewRequestNode
+		want     bool
+	}{
+		{"viewer listed", []reviewRequestNode{team, {Typename: "User", Login: "Me"}}, true},
+		{"team only", []reviewRequestNode{team}, false},
+		{"someone else", []reviewRequestNode{{Typename: "User", Login: "mate"}}, false},
+	}
+	for _, c := range cases {
+		raw, _ := json.Marshal(prDetails{URL: "https://github.com/o/console/pull/6", ReviewRequests: c.requests})
+		pr, err := ParsePRDetails(raw, "me")
+		if err != nil || pr.DirectRequest != c.want {
+			t.Errorf("%s: DirectRequest=%v want %v err=%v", c.name, pr.DirectRequest, c.want, err)
+		}
 	}
 }

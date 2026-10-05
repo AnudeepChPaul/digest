@@ -137,11 +137,10 @@ func TestReviewFooterLabelsD(t *testing.T) {
 }
 
 func TestJobPreviewHeaderShowsPID(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	m := selectionTestModel(t)
 	if err := os.WriteFile(filepath.Join(getLogsDir(), "janitor.pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		t.Fatal(err)
 	}
-	m := selectionTestModel(t)
 	selectNavItem(t, &m, "job:janitor")
 	m.mode = ViewPreview
 	m.updatePreviewViewport()

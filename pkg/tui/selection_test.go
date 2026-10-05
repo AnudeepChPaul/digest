@@ -10,7 +10,7 @@ import (
 
 func selectionTestModel(t *testing.T) Model {
 	t.Helper()
-	cfg := &config.Config{ReviewRoot: t.TempDir(), GreenOnly: true, Jobs: []config.JobSpec{{Name: "janitor"}, {Name: "repo sync"}}}
+	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true, Jobs: []config.JobSpec{{Name: "janitor"}, {Name: "repo sync"}}}
 	m := NewModel(cfg, nil)
 	m.width, m.height = 120, 40
 	return m
