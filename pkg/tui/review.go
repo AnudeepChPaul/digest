@@ -743,15 +743,21 @@ func reviewNoteID(repository string, number int) string {
 	return fmt.Sprintf("%s:%d", repository, number)
 }
 
-func reviewNoteSummary(state, title string) string {
+func reviewNoteSummary(state, repository string, number int, title string) string {
+	prefix := "Reviewed: Commented"
 	switch state {
 	case "APPROVED":
-		return "Approved: " + title
+		prefix = approvedSummaryPrefix
 	case "CHANGES_REQUESTED":
-		return "Reviewed: RequestedChanges: " + title
-	default:
-		return "Reviewed: Commented: " + title
+		prefix = "Reviewed: RequestedChanges"
 	}
+	return fmt.Sprintf("%s:%s %s", prefix, reviewNoteID(repository, number), title)
+}
+
+const approvedSummaryPrefix = "Approved"
+
+func isApprovedSummary(summary string) bool {
+	return strings.HasPrefix(summary, approvedSummaryPrefix+":")
 }
 
 func reviewNoteStatus(state string) model.Status {
@@ -808,7 +814,7 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 		for _, pr := range ordered {
 			noteID := reviewNoteID(pr.Repository, pr.Number)
 			reviewedAt := pr.ReviewedAt.Local()
-			summary := reviewNoteSummary(pr.State, pr.Title)
+			summary := reviewNoteSummary(pr.State, pr.Repository, pr.Number, pr.Title)
 			note, exists := byID[noteID]
 			switch {
 			case !exists:
@@ -851,7 +857,7 @@ func reopenApprovedNotesCmd(noteStore *store.NoteStore, pending []GitPRItem, req
 		reopened := false
 		for _, item := range pending {
 			note, exists := byID[reviewNoteID(item.Repository, item.Number)]
-			if !exists || note.Source != model.SourcePRReview || note.Status != model.StatusDone || !strings.HasPrefix(note.Summary, "Approved: ") || !note.Updated.Before(requestedSince) {
+			if !exists || note.Source != model.SourcePRReview || note.Status != model.StatusDone || !isApprovedSummary(note.Summary) || !note.Updated.Before(requestedSince) {
 				continue
 			}
 			note.Status = model.StatusActive
