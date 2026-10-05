@@ -5,9 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
-	"strings"
 	"testing"
 
 	"app/pkg/config"
@@ -66,60 +64,6 @@ func TestRepoScopesGroupsConfiguredReposByHost(t *testing.T) {
 	}
 	if RepoScopes(&config.Config{}) != nil {
 		t.Errorf("no repo roots should mean no scoping")
-	}
-}
-
-var queryPattern = regexp.MustCompile(`q='([^']*)'`)
-
-func TestScopeChunksKeepEverySearchUnderTheQueryLimit(t *testing.T) {
-	command := "gh api --hostname {host} -X GET search/issues -f q='is:pr is:open draft:false reviewed-by:@me -review-requested:@me {repos}' --jq '.items[].html_url'"
-	var fullNames []string
-	for index := range 30 {
-		fullNames = append(fullNames, fmt.Sprintf("some-organisation/repository-number-%02d", index))
-	}
-
-	chunks := scopeChunks(command, fullNames)
-	if len(chunks) < 2 {
-		t.Fatalf("expected several chunks, got %d", len(chunks))
-	}
-	var covered []string
-	for _, chunk := range chunks {
-		query := queryPattern.FindStringSubmatch(strings.ReplaceAll(command, reposPlaceholder, chunk))[1]
-		if len(query) > searchQueryLimit {
-			t.Errorf("query is %d chars: %q", len(query), query)
-		}
-		for _, qualifier := range strings.Fields(chunk) {
-			covered = append(covered, strings.TrimPrefix(qualifier, "repo:"))
-		}
-	}
-	if !reflect.DeepEqual(covered, fullNames) {
-		t.Errorf("chunks cover %v, want %v", covered, fullNames)
-	}
-}
-
-func TestHostQueries(t *testing.T) {
-	scoped := "gh api -f q='is:pr {repos}'"
-	scopes := map[string][]string{"git.example.com": {"team/service"}}
-
-	if got := hostQueries(scoped, scopes, "git.example.com"); !reflect.DeepEqual(got, []string{"repo:team/service"}) {
-		t.Errorf("scoped host queries = %v", got)
-	}
-	if got := hostQueries(scoped, scopes, "other.example.com"); len(got) != 0 {
-		t.Errorf("host without configured repos should be skipped, got %v", got)
-	}
-	if got := hostQueries(scoped, nil, "other.example.com"); !reflect.DeepEqual(got, []string{""}) {
-		t.Errorf("no scoping should run once unscoped, got %v", got)
-	}
-	if got := hostQueries("gh api -f q='is:pr'", scopes, "other.example.com"); !reflect.DeepEqual(got, []string{""}) {
-		t.Errorf("command without {repos} should run unchanged, got %v", got)
-	}
-}
-
-func TestUnloadedHosts(t *testing.T) {
-	loadedRef, missingRef := prRefOn("git.example.com", 1), prRefOn("other.example.com", 2)
-	hosts := unloadedHosts([]review.PRRef{loadedRef, missingRef}, []review.QueuedPR{{Ref: loadedRef}})
-	if !reflect.DeepEqual(hosts, []string{"other.example.com"}) {
-		t.Errorf("unloaded hosts = %v", hosts)
 	}
 }
 

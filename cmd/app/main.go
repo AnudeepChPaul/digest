@@ -123,7 +123,7 @@ func main() {
 		}
 
 		fmt.Printf("Running janitor job against %s (dry-run: %v)...\n", strings.Join(targetRoots, ", "), *dryRun)
-		needsAction, err := jobs.RunJanitor(targetRoots, patterns, *reviewRoot, cfg.PRDetailsCommand(), *dryRun)
+		needsAction, err := jobs.RunJanitor(targetRoots, patterns, *reviewRoot, *dryRun)
 		exitForJob("janitor", needsAction, err)
 
 	case "branch-reaper":

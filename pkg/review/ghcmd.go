@@ -1,20 +1,15 @@
 package review
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
-
-const DefaultDetailsParallel = 8
 
 type ActivityPR struct {
 	Number     int
@@ -23,91 +18,6 @@ type ActivityPR struct {
 	Repository string
 	State      string
 	ReviewedAt time.Time
-}
-
-var runShell = func(ctx context.Context, command string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		if message := strings.TrimSpace(stderr.String()); message != "" {
-			return nil, fmt.Errorf("%s", message)
-		}
-		return nil, err
-	}
-	return out, nil
-}
-
-func runGHCommand(ctx context.Context, command string, placeholders map[string]string) ([]byte, error) {
-	for key, value := range placeholders {
-		command = strings.ReplaceAll(command, "{"+key+"}", value)
-	}
-	return runShell(ctx, command)
-}
-
-func SearchPRs(ctx context.Context, command string, placeholders map[string]string) ([]PRRef, error) {
-	out, err := runGHCommand(ctx, command, placeholders)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var refs []PRRef
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		ref, err := ParsePRURL(line)
-		if err != nil {
-			return nil, fmt.Errorf("pr search output: %w", err)
-		}
-		if seen[ref.URL] {
-			continue
-		}
-		seen[ref.URL] = true
-		refs = append(refs, ref)
-	}
-	return refs, nil
-}
-
-var (
-	searchSortPattern  = regexp.MustCompile(`\bsort=(\w+)`)
-	searchOrderPattern = regexp.MustCompile(`\border=(\w+)`)
-)
-
-func SearchSortOf(command string) (byCreated bool, ascending bool) {
-	if match := searchSortPattern.FindStringSubmatch(command); match != nil {
-		byCreated = match[1] == "created"
-	}
-	if match := searchOrderPattern.FindStringSubmatch(command); match != nil {
-		ascending = match[1] == "asc"
-	}
-	return byCreated, ascending
-}
-
-func WithSearchSort(command string, byCreated bool, ascending bool) string {
-	sortField, order := "updated", "desc"
-	if byCreated {
-		sortField = "created"
-	}
-	if ascending {
-		order = "asc"
-	}
-	command = searchSortPattern.ReplaceAllString(command, "sort="+sortField)
-	return searchOrderPattern.ReplaceAllString(command, "order="+order)
-}
-
-func FetchPRDetails(ctx context.Context, command string, ref PRRef) (json.RawMessage, error) {
-	out, err := runGHCommand(ctx, command, map[string]string{"url": ref.URL})
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", ref.URL, err)
-	}
-	out = bytes.TrimSpace(out)
-	if !json.Valid(out) {
-		return nil, fmt.Errorf("%s: pr details are not JSON", ref.URL)
-	}
-	return json.RawMessage(out), nil
 }
 
 type checkRun struct {
@@ -145,35 +55,41 @@ func ciStateFromChecks(checks []checkRun) string {
 }
 
 type prDetails struct {
-	Number            int        `json:"number"`
-	Title             string     `json:"title"`
-	URL               string     `json:"url"`
-	State             string     `json:"state"`
-	IsDraft           bool       `json:"isDraft"`
-	CreatedAt         time.Time  `json:"createdAt"`
-	UpdatedAt         time.Time  `json:"updatedAt"`
-	Additions         int        `json:"additions"`
-	Deletions         int        `json:"deletions"`
-	ChangedFiles      int        `json:"changedFiles"`
-	HeadRefOid        string     `json:"headRefOid"`
-	HeadRefName       string     `json:"headRefName"`
-	ReviewDecision    string     `json:"reviewDecision"`
-	Author            loginNode  `json:"author"`
-	StatusCheckRollup []checkRun `json:"statusCheckRollup"`
-	Commits           []struct {
-		CommittedDate time.Time `json:"committedDate"`
-	} `json:"commits"`
-	ReviewRequests []struct {
-		Typename string `json:"__typename"`
-		Login    string `json:"login"`
-		Name     string `json:"name"`
-		Slug     string `json:"slug"`
-	} `json:"reviewRequests"`
-	LatestReviews []reviewNode  `json:"latestReviews"`
-	Comments      []commentNode `json:"comments"`
-	Files         []struct {
-		Path string `json:"path"`
-	} `json:"files"`
+	Number            int                 `json:"number"`
+	Title             string              `json:"title"`
+	URL               string              `json:"url"`
+	State             string              `json:"state"`
+	IsDraft           bool                `json:"isDraft"`
+	CreatedAt         time.Time           `json:"createdAt"`
+	UpdatedAt         time.Time           `json:"updatedAt"`
+	Additions         int                 `json:"additions"`
+	Deletions         int                 `json:"deletions"`
+	ChangedFiles      int                 `json:"changedFiles"`
+	HeadRefOid        string              `json:"headRefOid"`
+	HeadRefName       string              `json:"headRefName"`
+	ReviewDecision    string              `json:"reviewDecision"`
+	Author            loginNode           `json:"author"`
+	StatusCheckRollup []checkRun          `json:"statusCheckRollup"`
+	Commits           []commitNode        `json:"commits"`
+	ReviewRequests    []reviewRequestNode `json:"reviewRequests"`
+	LatestReviews     []reviewNode        `json:"latestReviews"`
+	Comments          []commentNode       `json:"comments"`
+	Files             []fileNode          `json:"files"`
+}
+
+type commitNode struct {
+	CommittedDate time.Time `json:"committedDate"`
+}
+
+type reviewRequestNode struct {
+	Typename string `json:"__typename"`
+	Login    string `json:"login"`
+	Name     string `json:"name"`
+	Slug     string `json:"slug"`
+}
+
+type fileNode struct {
+	Path string `json:"path"`
 }
 
 func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
@@ -226,29 +142,6 @@ func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
 	return pr, nil
 }
 
-var (
-	viewerMu     sync.Mutex
-	viewerByHost = map[string]string{}
-)
-
-func ViewerLogin(ctx context.Context, host string) (string, error) {
-	viewerMu.Lock()
-	defer viewerMu.Unlock()
-	if login, found := viewerByHost[host]; found {
-		return login, nil
-	}
-	out, err := runGHCommand(ctx, "gh api user --hostname {host} --jq .login", map[string]string{"host": host})
-	if err != nil {
-		return "", fmt.Errorf("login on %s: %w", host, err)
-	}
-	login := strings.TrimSpace(string(out))
-	if login == "" {
-		return "", fmt.Errorf("login on %s: empty", host)
-	}
-	viewerByHost[host] = login
-	return login, nil
-}
-
 var runAuthStatus = func(ctx context.Context) ([]byte, error) {
 	return exec.CommandContext(ctx, "gh", "auth", "status").CombinedOutput()
 }
@@ -277,107 +170,6 @@ func GHHosts(ctx context.Context) ([]string, error) {
 	return hosts, nil
 }
 
-type detailsCall struct {
-	done chan struct{}
-	raw  json.RawMessage
-	err  error
-}
-
-type DetailsFetcher struct {
-	command  string
-	previous map[string]json.RawMessage
-	slots    chan struct{}
-	mu       sync.Mutex
-	calls    map[string]*detailsCall
-}
-
-func NewDetailsFetcher(command string, parallel int, previous map[string]json.RawMessage) *DetailsFetcher {
-	return &DetailsFetcher{
-		command:  command,
-		previous: previous,
-		slots:    make(chan struct{}, max(parallel, 1)),
-		calls:    map[string]*detailsCall{},
-	}
-}
-
-func (f *DetailsFetcher) Fetch(ctx context.Context, ref PRRef) (json.RawMessage, error) {
-	f.mu.Lock()
-	call, found := f.calls[ref.URL]
-	if !found {
-		call = &detailsCall{done: make(chan struct{})}
-		f.calls[ref.URL] = call
-	}
-	f.mu.Unlock()
-	if !found {
-		select {
-		case f.slots <- struct{}{}:
-			call.raw, call.err = FetchPRDetails(ctx, f.command, ref)
-			<-f.slots
-		case <-ctx.Done():
-			call.err = ctx.Err()
-		}
-		close(call.done)
-	} else {
-		select {
-		case <-call.done:
-		case <-ctx.Done():
-			return f.previous[ref.URL], ctx.Err()
-		}
-	}
-	if call.err != nil {
-		return f.previous[ref.URL], call.err
-	}
-	return call.raw, nil
-}
-
-func (f *DetailsFetcher) Load(ctx context.Context, refs []PRRef) ([]QueuedPR, map[string]json.RawMessage, error) {
-	type result struct {
-		pr  QueuedPR
-		raw json.RawMessage
-		err error
-		ok  bool
-	}
-	results := make([]result, len(refs))
-	var wg sync.WaitGroup
-	for index, ref := range refs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			raw, fetchErr := f.Fetch(ctx, ref)
-			results[index].err = fetchErr
-			if raw == nil {
-				return
-			}
-			viewer, viewerErr := ViewerLogin(ctx, ref.Host)
-			if viewerErr != nil {
-				results[index].err = errors.Join(fetchErr, viewerErr)
-				return
-			}
-			pr, parseErr := ParsePRDetails(raw, viewer)
-			if parseErr != nil {
-				results[index].err = errors.Join(fetchErr, parseErr)
-				return
-			}
-			results[index] = result{pr: pr, raw: raw, err: fetchErr, ok: true}
-		}()
-	}
-	wg.Wait()
-	var prs []QueuedPR
-	details := map[string]json.RawMessage{}
-	var errs []error
-	for index, res := range results {
-		if res.err != nil {
-			errs = append(errs, res.err)
-		}
-		if !res.ok {
-			continue
-		}
-		prs = append(prs, res.pr)
-		details[refs[index].URL] = res.raw
-	}
-	return prs, details, summarizeErrors(errs)
-}
-
 func summarizeErrors(errs []error) error {
 	switch len(errs) {
 	case 0:
@@ -386,39 +178,4 @@ func summarizeErrors(errs []error) error {
 		return errs[0]
 	}
 	return fmt.Errorf("%d pr details failed, first: %w", len(errs), errs[0])
-}
-
-func FetchPRStates(ctx context.Context, detailsCommand string, refs []PRRef) (map[string]string, error) {
-	fetcher := NewDetailsFetcher(detailsCommand, DefaultDetailsParallel, nil)
-	states := map[string]string{}
-	var mu sync.Mutex
-	var errs []error
-	var wg sync.WaitGroup
-	for _, ref := range refs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			raw, err := fetcher.Fetch(ctx, ref)
-			var details struct {
-				State string `json:"state"`
-			}
-			if err == nil {
-				err = json.Unmarshal(raw, &details)
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				errs = append(errs, err)
-				return
-			}
-			if details.State != "" {
-				states[ref.URL] = details.State
-			}
-		}()
-	}
-	wg.Wait()
-	if len(states) == 0 && len(errs) > 0 {
-		return nil, summarizeErrors(errs)
-	}
-	return states, nil
 }

@@ -157,8 +157,10 @@ func (m *Model) applyGitCache(cache gitSyncCache) {
 	if cache.Date == today {
 		m.ghReviewedToday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedToday), allowedRepos)
 		m.ghReviewedYesterday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedYesterday), allowedRepos)
-		m.localCommitsToday = cache.CommitsToday
-		m.localCommitsYesterday = cache.CommitsYesterday
+		if m.cfg.DailyCommitsEnabled() {
+			m.localCommitsToday = cache.CommitsToday
+			m.localCommitsYesterday = cache.CommitsYesterday
+		}
 		m.gitSectionDates = map[string]string{
 			sectionReviewedToday:     today,
 			sectionReviewedYesterday: m.currentDate.AddDate(0, 0, -1).Format("2006-01-02"),

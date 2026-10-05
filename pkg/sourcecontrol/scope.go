@@ -10,16 +10,7 @@ import (
 	"app/pkg/jobs"
 )
 
-const (
-	reposPlaceholder     = "{repos}"
-	searchQueryLimit     = 256
-	placeholderExpansion = 16
-)
-
-var (
-	scpRemotePattern   = regexp.MustCompile(`^[^@/\s]+@([^:/\s]+):([^\s]+)$`)
-	searchQueryPattern = regexp.MustCompile(`q='([^']*)'`)
-)
+var scpRemotePattern = regexp.MustCompile(`^[^@/\s]+@([^:/\s]+):([^\s]+)$`)
 
 func parseRemoteURL(remote string) (host, fullName string, ok bool) {
 	remote = strings.TrimSpace(remote)
@@ -60,39 +51,4 @@ func RepoScopes(cfg *config.Config) map[string][]string {
 		scopes[host] = append(scopes[host], fullName)
 	}
 	return scopes
-}
-
-func scopeChunks(command string, fullNames []string) []string {
-	baseQuery := strings.ReplaceAll(command, reposPlaceholder, "")
-	if match := searchQueryPattern.FindStringSubmatch(baseQuery); match != nil {
-		baseQuery = match[1]
-	}
-	budget := searchQueryLimit - placeholderExpansion - len(baseQuery)
-
-	var chunks []string
-	var current []string
-	currentLength := 0
-	for _, fullName := range fullNames {
-		qualifier := "repo:" + fullName
-		if len(current) > 0 && currentLength+1+len(qualifier) > budget {
-			chunks = append(chunks, strings.Join(current, " "))
-			current, currentLength = nil, 0
-		}
-		if len(current) > 0 {
-			currentLength++
-		}
-		current = append(current, qualifier)
-		currentLength += len(qualifier)
-	}
-	if len(current) > 0 {
-		chunks = append(chunks, strings.Join(current, " "))
-	}
-	return chunks
-}
-
-func hostQueries(command string, scopes map[string][]string, host string) []string {
-	if scopes == nil || !strings.Contains(command, reposPlaceholder) {
-		return []string{""}
-	}
-	return scopeChunks(command, scopes[host])
 }

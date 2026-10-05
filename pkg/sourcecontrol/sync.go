@@ -2,7 +2,6 @@ package sourcecontrol
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -10,14 +9,13 @@ import (
 )
 
 type SyncParams struct {
-	Config          *config.Config
-	PreviousDetails map[string]json.RawMessage
-	Today           time.Time
-	Sort            Sort
+	Config *config.Config
+	Today  time.Time
+	Sort   Sort
 }
 
 func Sync(ctx context.Context, params SyncParams) <-chan Section {
-	engine := NewEngine(params.Config, params.PreviousDetails)
+	engine := NewEngine(params.Config)
 	sections := make(chan Section, 3)
 	var wg sync.WaitGroup
 	wg.Add(3)

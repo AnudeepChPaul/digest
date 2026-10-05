@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"sync"
 	"time"
@@ -18,7 +17,6 @@ const ghTimeout = 2 * time.Minute
 
 type Engine struct {
 	cfg        *config.Config
-	fetcher    *review.DetailsFetcher
 	hostsOnce  sync.Once
 	hosts      []string
 	hostsErr   error
@@ -26,12 +24,18 @@ type Engine struct {
 	scopes     map[string][]string
 }
 
-func NewEngine(cfg *config.Config, previousDetails map[string]json.RawMessage) *Engine {
-	return &Engine{cfg: cfg, fetcher: review.NewDetailsFetcher(cfg.PRDetailsCommand(), review.DefaultDetailsParallel, previousDetails)}
+var (
+	listGHHosts       = review.GHHosts
+	runPRSearches     = review.RunPRSearches
+	fetchLocalCommits = FetchLocalCommits
+)
+
+func NewEngine(cfg *config.Config) *Engine {
+	return &Engine{cfg: cfg}
 }
 
 func (e *Engine) ghHosts(ctx context.Context) ([]string, error) {
-	e.hostsOnce.Do(func() { e.hosts, e.hostsErr = review.GHHosts(ctx) })
+	e.hostsOnce.Do(func() { e.hosts, e.hostsErr = listGHHosts(ctx) })
 	return e.hosts, e.hostsErr
 }
 
@@ -40,93 +44,114 @@ func (e *Engine) repoScopes() map[string][]string {
 	return e.scopes
 }
 
-func searchAllHosts(ctx context.Context, hosts []string, command string, placeholders map[string]string, scopes map[string][]string) ([]review.PRRef, []string, error) {
-	type search struct {
-		host  string
-		repos string
-		refs  []review.PRRef
-		err   error
-	}
-	var searches []*search
+const (
+	pendingSearch  = "pending"
+	directSearch   = "direct"
+	reReviewSearch = "rereview"
+	reviewedSearch = "reviewed"
+)
+
+type searchKind struct {
+	key     string
+	query   string
+	details bool
+}
+
+type hostSearches struct {
+	host     string
+	searches []review.PRSearch
+}
+
+func (e *Engine) planSearches(hosts []string, kinds []searchKind) []hostSearches {
+	scopes := e.repoScopes()
+	perRepo := e.cfg.PRsPerRepo()
+	var planned []hostSearches
 	for _, host := range hosts {
-		for _, repos := range hostQueries(command, scopes, host) {
-			searches = append(searches, &search{host: host, repos: repos})
+		repos := []string{""}
+		if scopes != nil {
+			repos = scopes[host]
+		}
+		var searches []review.PRSearch
+		for _, kind := range kinds {
+			for index, repo := range repos {
+				query := kind.query
+				if repo != "" {
+					query += " repo:" + repo
+				}
+				searches = append(searches, review.PRSearch{Key: fmt.Sprintf("%s%d", kind.key, index), Kind: kind.key, Query: query, First: perRepo, Details: kind.details})
+			}
+		}
+		if len(searches) > 0 {
+			planned = append(planned, hostSearches{host: host, searches: searches})
 		}
 	}
+	return planned
+}
+
+type searchOutcome struct {
+	prs         map[string][]review.QueuedPR
+	urls        map[string]map[string]bool
+	details     map[string]json.RawMessage
+	failedHosts []string
+	err         error
+}
+
+func (e *Engine) search(ctx context.Context, kinds []searchKind) searchOutcome {
+	outcome := searchOutcome{prs: map[string][]review.QueuedPR{}, urls: map[string]map[string]bool{}, details: map[string]json.RawMessage{}}
+	hosts, err := e.ghHosts(ctx)
+	if err != nil {
+		outcome.err = err
+		return outcome
+	}
+	planned := e.planSearches(hosts, kinds)
+	results := make([][]review.SearchResult, len(planned))
+	requestErrs := make([]error, len(planned))
 	var wg sync.WaitGroup
-	for _, current := range searches {
+	for index, current := range planned {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			searchPlaceholders := maps.Clone(placeholders)
-			if searchPlaceholders == nil {
-				searchPlaceholders = map[string]string{}
-			}
-			searchPlaceholders["host"] = current.host
-			searchPlaceholders["repos"] = current.repos
-			current.refs, current.err = review.SearchPRs(ctx, command, searchPlaceholders)
+			results[index], requestErrs[index] = runPRSearches(ctx, current.host, current.searches)
 		}()
 	}
 	wg.Wait()
 
-	var refs []review.PRRef
-	var failedHosts []string
+	seenPRs := map[string]map[string]bool{}
 	var errs []error
-	seenURLs, failed := map[string]bool{}, map[string]bool{}
-	for _, current := range searches {
-		if current.err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", current.host, current.err))
-			if !failed[current.host] {
-				failed[current.host] = true
-				failedHosts = append(failedHosts, current.host)
+	for index, current := range planned {
+		failed := requestErrs[index] != nil
+		if failed {
+			errs = append(errs, fmt.Errorf("%s: %w", current.host, requestErrs[index]))
+		}
+		for _, result := range results[index] {
+			if result.Err != nil {
+				failed = true
+				errs = append(errs, fmt.Errorf("%s: %w", current.host, result.Err))
+				continue
+			}
+			if outcome.urls[result.Kind] == nil {
+				outcome.urls[result.Kind], seenPRs[result.Kind] = map[string]bool{}, map[string]bool{}
+			}
+			for _, ref := range result.Refs {
+				outcome.urls[result.Kind][ref.URL] = true
+			}
+			for _, pr := range result.PRs {
+				if seenPRs[result.Kind][pr.Ref.URL] {
+					continue
+				}
+				seenPRs[result.Kind][pr.Ref.URL] = true
+				outcome.prs[result.Kind] = append(outcome.prs[result.Kind], pr)
+				if raw, found := result.Details[pr.Ref.URL]; found {
+					outcome.details[pr.Ref.URL] = raw
+				}
 			}
 		}
-		for _, ref := range current.refs {
-			if !seenURLs[ref.URL] {
-				seenURLs[ref.URL] = true
-				refs = append(refs, ref)
-			}
+		if failed {
+			outcome.failedHosts = append(outcome.failedHosts, current.host)
 		}
 	}
-	return refs, failedHosts, errors.Join(errs...)
-}
-
-func unloadedHosts(refs []review.PRRef, loaded []review.QueuedPR) []string {
-	loadedURLs := map[string]bool{}
-	for _, pr := range loaded {
-		loadedURLs[pr.Ref.URL] = true
-	}
-	var hosts []string
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		if !loadedURLs[ref.URL] && !seen[ref.Host] {
-			seen[ref.Host] = true
-			hosts = append(hosts, ref.Host)
-		}
-	}
-	return hosts
-}
-
-func mergeHosts(hostLists ...[]string) []string {
-	var merged []string
-	seen := map[string]bool{}
-	for _, hosts := range hostLists {
-		for _, host := range hosts {
-			if !seen[host] {
-				seen[host] = true
-				merged = append(merged, host)
-			}
-		}
-	}
-	return merged
-}
-
-func urlSet(refs []review.PRRef) map[string]bool {
-	urls := make(map[string]bool, len(refs))
-	for _, ref := range refs {
-		urls[ref.URL] = true
-	}
-	return urls
+	outcome.err = errors.Join(errs...)
+	return outcome
 }
 
 func reviewRoot(cfg *config.Config) string {
@@ -150,50 +175,22 @@ func (e *Engine) FetchPendingPRs(ctx context.Context, activeSort Sort) PendingRe
 
 func (e *Engine) loadPending(ctx context.Context, activeSort Sort) ([]PRItem, map[string]json.RawMessage, []string, error) {
 	cfg := e.cfg
-	hosts, err := e.ghHosts(ctx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	scopes := e.repoScopes()
-	var pendingRefs, directRefs, reReviewRefs []review.PRRef
-	var pendingFailed, reReviewFailed []string
-	var pendingErr, directErr, reReviewErr error
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		pendingRefs, pendingFailed, pendingErr = searchAllHosts(ctx, hosts, activeSort.apply(cfg.PendingPRsCommand()), nil, scopes)
-	}()
-	go func() {
-		defer wg.Done()
-		directRefs, _, directErr = searchAllHosts(ctx, hosts, activeSort.apply(cfg.DirectRequestedPRsCommand()), nil, scopes)
-	}()
-	go func() {
-		defer wg.Done()
-		reReviewRefs, reReviewFailed, reReviewErr = searchAllHosts(ctx, hosts, activeSort.apply(cfg.RereviewPRsCommand()), nil, scopes)
-	}()
-	wg.Wait()
-	searchErr := errors.Join(pendingErr, directErr, reReviewErr)
-	if len(pendingRefs)+len(reReviewRefs) == 0 && searchErr != nil {
-		return nil, nil, mergeHosts(pendingFailed, reReviewFailed), searchErr
+	order := " " + activeSort.qualifier()
+	outcome := e.search(ctx, []searchKind{
+		{key: pendingSearch, query: "is:pr is:open draft:false review-requested:@me" + order, details: true},
+		{key: directSearch, query: "is:pr is:open draft:false user-review-requested:@me" + order},
+		{key: reReviewSearch, query: "is:pr is:open draft:false reviewed-by:@me -review-requested:@me" + order, details: true},
+	})
+	if len(outcome.prs[pendingSearch])+len(outcome.prs[reReviewSearch]) == 0 && outcome.err != nil {
+		return nil, nil, outcome.failedHosts, outcome.err
 	}
 	allowedRepos := ConfiguredRepoNames(cfg)
-	pendingRefs, reReviewRefs = FilterRefs(pendingRefs, allowedRepos), FilterRefs(reReviewRefs, allowedRepos)
-
-	requestedRefs := append(append([]review.PRRef(nil), pendingRefs...), reReviewRefs...)
-	loaded, details, loadErr := e.fetcher.Load(ctx, requestedRefs)
-	failedHosts := mergeHosts(pendingFailed, reReviewFailed, unloadedHosts(requestedRefs, loaded))
-	pendingURLs, directURLs := urlSet(pendingRefs), urlSet(directRefs)
-	var queue, reviewed []review.QueuedPR
-	for _, pr := range loaded {
-		if pendingURLs[pr.Ref.URL] {
-			pr.CodeOwner = !directURLs[pr.Ref.URL]
-			queue = append(queue, pr)
-			continue
-		}
-		reviewed = append(reviewed, pr)
+	var queue []review.QueuedPR
+	for _, pr := range FilterQueuedPRs(outcome.prs[pendingSearch], allowedRepos) {
+		pr.CodeOwner = !outcome.urls[directSearch][pr.Ref.URL]
+		queue = append(queue, pr)
 	}
-	reReviews := review.SelectReReviews(reviewed, queue)
+	reReviews := review.SelectReReviews(FilterQueuedPRs(outcome.prs[reReviewSearch], allowedRepos), queue)
 
 	root := reviewRoot(cfg)
 	_ = review.NotifyTransitions(append(append([]review.QueuedPR(nil), queue...), reReviews...), root, filepath.Join(root, ".state", "approved-seen.json"))
@@ -205,7 +202,7 @@ func (e *Engine) loadPending(ctx context.Context, activeSort Sort) ([]PRItem, ma
 	for _, pr := range review.VisibleRanked(reReviews, false) {
 		items = append(items, NewPRItem(pr, ReReviewKind))
 	}
-	return items, details, failedHosts, errors.Join(searchErr, loadErr)
+	return items, outcome.details, outcome.failedHosts, outcome.err
 }
 
 func (e *Engine) FetchDay(ctx context.Context, day Day, date time.Time) DayResult {
@@ -214,30 +211,29 @@ func (e *Engine) FetchDay(ctx context.Context, day Day, date time.Time) DayResul
 		return result
 	}
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		fetchCtx, cancel := context.WithTimeout(ctx, ghTimeout)
 		defer cancel()
 		result.Reviewed, result.Reviews, result.Details, result.FailedHosts, result.Err = e.loadReviewed(fetchCtx, date)
 	}()
-	go func() {
-		defer wg.Done()
-		result.Commits = FetchLocalCommits(ctx, e.cfg, date)
-	}()
+	if e.cfg.DailyCommitsEnabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result.Commits = fetchLocalCommits(ctx, e.cfg, date)
+		}()
+	}
 	wg.Wait()
 	return filterDayResult(result, ConfiguredRepoNames(e.cfg))
 }
 
 func (e *Engine) loadReviewed(ctx context.Context, date time.Time) ([]PRItem, []review.ActivityPR, map[string]json.RawMessage, []string, error) {
-	hosts, err := e.ghHosts(ctx)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	refs, searchFailed, searchErr := searchAllHosts(ctx, hosts, e.cfg.ReviewedPRsCommand(), map[string]string{"date": date.Format("2006-01-02")}, e.repoScopes())
-	refs = FilterRefs(refs, ConfiguredRepoNames(e.cfg))
-	loaded, details, loadErr := e.fetcher.Load(ctx, refs)
-	failedHosts := mergeHosts(searchFailed, unloadedHosts(refs, loaded))
+	outcome := e.search(ctx, []searchKind{
+		{key: reviewedSearch, query: "is:pr reviewed-by:@me updated:>=" + date.Format("2006-01-02") + " " + Sort{}.qualifier(), details: true},
+	})
+	loaded := FilterQueuedPRs(outcome.prs[reviewedSearch], ConfiguredRepoNames(e.cfg))
 	var items []PRItem
 	var reviews []review.ActivityPR
 	for _, pr := range loaded {
@@ -249,7 +245,7 @@ func (e *Engine) loadReviewed(ctx context.Context, date time.Time) ([]PRItem, []
 			reviews = append(reviews, ReviewRecord(pr, pr.MyLastReviewState, pr.MyLastReviewAt))
 		}
 	}
-	return items, reviews, details, failedHosts, errors.Join(searchErr, loadErr)
+	return items, reviews, outcome.details, outcome.failedHosts, outcome.err
 }
 
 func sameLocalDay(first, second time.Time) bool {

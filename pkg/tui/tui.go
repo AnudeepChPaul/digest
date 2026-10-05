@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -953,7 +952,6 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 		jobDryRunHasRun:     make(map[string]bool),
 		bannerWaveActive:    true,
 	}
-	m.pendingSort = sourcecontrol.SortFromCommand(cfg.PendingPRsCommand())
 	cache, cacheLoaded := loadGitCache()
 	if cacheLoaded {
 		if cache.PendingSort != nil {
@@ -1139,10 +1137,9 @@ func (m Model) gitFetchCmd(triggerWave bool) tea.Cmd {
 		ctx = context.Background()
 	}
 	sections := sourcecontrol.Sync(ctx, sourcecontrol.SyncParams{
-		Config:          m.cfg,
-		PreviousDetails: maps.Clone(m.prDetails),
-		Today:           m.currentDate,
-		Sort:            m.pendingSort,
+		Config: m.cfg,
+		Today:  m.currentDate,
+		Sort:   m.pendingSort,
 	})
 
 	cmds := []tea.Cmd{
@@ -1354,8 +1351,12 @@ func (m *Model) rebuildGitRepoStats() {
 		return stats
 	}
 
-	m.todayGitRepos = buildStats(m.ghReviewedToday, m.localCommitsToday)
-	m.yesterdayGitRepo = buildStats(m.ghReviewedYesterday, m.localCommitsYesterday)
+	commitsToday, commitsYesterday := m.localCommitsToday, m.localCommitsYesterday
+	if !m.cfg.DailyCommitsEnabled() {
+		commitsToday, commitsYesterday = nil, nil
+	}
+	m.todayGitRepos = buildStats(m.ghReviewedToday, commitsToday)
+	m.yesterdayGitRepo = buildStats(m.ghReviewedYesterday, commitsYesterday)
 	sourcecontrol.SortItems(m.ghPendingPRs, m.pendingSort)
 	m.pendingGitAction = m.ghPendingPRs
 }
@@ -1725,7 +1726,11 @@ func (m *Model) updatePreviewViewport() {
 	item := navItems[m.selected]
 	var mdContent string
 	if item.Kind == KindGitRepo {
-		mdContent = renderMarkdown(fmt.Sprintf("# Repository Activity: %s\n- Commits: %d\n- PRs Reviewed: %d\n- PRs Assigned: %d\n\nPress **[Tab]** on this repository item to view and open PRs directly in your browser.", item.GitRepo.Name, item.GitRepo.Commits, item.GitRepo.Reviewed, item.GitRepo.Assigned), innerWidth)
+		commitsLine := ""
+		if m.cfg.DailyCommitsEnabled() {
+			commitsLine = fmt.Sprintf("- Commits: %d\n", item.GitRepo.Commits)
+		}
+		mdContent = renderMarkdown(fmt.Sprintf("# Repository Activity: %s\n%s- PRs Reviewed: %d\n- PRs Assigned: %d\n\nPress **[Tab]** on this repository item to view and open PRs directly in your browser.", item.GitRepo.Name, commitsLine, item.GitRepo.Reviewed, item.GitRepo.Assigned), innerWidth)
 	} else if item.Kind == KindPendingGit && item.PendingGitPR != nil {
 		m.setPRPreviewContent(item.PendingGitPR, innerWidth, innerHeight)
 		return
@@ -2654,7 +2659,10 @@ func (m Model) renderDashboardBody() string {
 	gitLabel := m.renderSubSection("Git", 0, false, isYGitActive)
 	gitStatus := m.renderLiveSyncDot()
 
-	gitSummary := fmt.Sprintf("  %s %s   %d commits", gitLabel, gitStatus, totalCommits)
+	gitSummary := fmt.Sprintf("  %s %s", gitLabel, gitStatus)
+	if m.cfg.DailyCommitsEnabled() {
+		gitSummary += fmt.Sprintf("   %d commits", totalCommits)
+	}
 
 	b.WriteString(gitSummary + "\n")
 
@@ -2844,7 +2852,9 @@ func (m Model) renderGitRepoRow(repo *GitRepoStat, selected bool, width int) str
 	}
 
 	var statParts []string
-	statParts = append(statParts, fmt.Sprintf("%d commits", repo.Commits))
+	if m.cfg.DailyCommitsEnabled() {
+		statParts = append(statParts, fmt.Sprintf("%d commits", repo.Commits))
+	}
 	if repo.Reviewed > 0 {
 		statParts = append(statParts, fmt.Sprintf("%d reviewed", repo.Reviewed))
 	}

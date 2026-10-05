@@ -2,8 +2,6 @@ package sourcecontrol
 
 import (
 	"sort"
-
-	"app/pkg/review"
 )
 
 type Sort struct {
@@ -11,13 +9,15 @@ type Sort struct {
 	Ascending bool `json:"ascending"`
 }
 
-func SortFromCommand(command string) Sort {
-	byCreated, ascending := review.SearchSortOf(command)
-	return Sort{ByCreated: byCreated, Ascending: ascending}
-}
-
-func (s Sort) apply(command string) string {
-	return review.WithSearchSort(command, s.ByCreated, s.Ascending)
+func (s Sort) qualifier() string {
+	field, order := "updated", "desc"
+	if s.ByCreated {
+		field = "created"
+	}
+	if s.Ascending {
+		order = "asc"
+	}
+	return "sort:" + field + "-" + order
 }
 
 func SortItems(items []PRItem, activeSort Sort) {

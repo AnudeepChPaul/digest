@@ -47,22 +47,19 @@ func (j *JobSpec) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	NotesDir             string    `yaml:"notes_dir"`
-	GitRepositoryRoots   []string  `yaml:"git_repository_roots"`
-	GitLookbackDays      int       `yaml:"git_lookback_days"`
-	GitCommitsCmd        string    `yaml:"git_commits_cmd"`
-	GitAutoSyncInterval  int       `yaml:"git_auto_sync_interval"`
-	JanitorPatterns      []string  `yaml:"janitor_patterns"`
-	Jobs                 []JobSpec `yaml:"jobs"`
-	ReviewRoot           string    `yaml:"review_root"`
-	ReviewCommand        string    `yaml:"review_command"`
-	GreenOnly            bool      `yaml:"green_only"`
-	JiraBaseURL          string    `yaml:"jira_base_url"`
-	GHPendingPRs         string    `yaml:"gh_pending_prs"`
-	GHDirectRequestedPRs string    `yaml:"gh_direct_requested_prs"`
-	GHRereviewPRs        string    `yaml:"gh_rereview_prs"`
-	GHReviewedPRs        string    `yaml:"gh_reviewed_prs"`
-	GHPRDetails          string    `yaml:"gh_pr_details"`
+	NotesDir            string    `yaml:"notes_dir"`
+	GitRepositoryRoots  []string  `yaml:"git_repository_roots"`
+	GitLookbackDays     int       `yaml:"git_lookback_days"`
+	GitCommitsCmd       string    `yaml:"git_commits_cmd"`
+	GitAutoSyncInterval int       `yaml:"git_auto_sync_interval"`
+	JanitorPatterns     []string  `yaml:"janitor_patterns"`
+	Jobs                []JobSpec `yaml:"jobs"`
+	ReviewRoot          string    `yaml:"review_root"`
+	ReviewCommand       string    `yaml:"review_command"`
+	GreenOnly           bool      `yaml:"green_only"`
+	JiraBaseURL         string    `yaml:"jira_base_url"`
+	PRQuantityPerRepo   int       `yaml:"pr_quantity_per_repo"`
+	ShowDailyCommits    *bool     `yaml:"show_daily_commits"`
 }
 
 func (c *Config) ReviewRootDir() string {
@@ -79,67 +76,33 @@ func (c *Config) ReviewCommandTemplate() string {
 	return c.ReviewCommand
 }
 
-func stringOrDefault(value, fallback string) string {
-	if value == "" {
-		return fallback
+func (c *Config) PRsPerRepo() int {
+	if c == nil || c.PRQuantityPerRepo == 0 {
+		return DefaultPRQuantityPerRepo
 	}
-	return value
+	return min(max(c.PRQuantityPerRepo, 1), maxPRQuantityPerRepo)
 }
 
-func (c *Config) PendingPRsCommand() string {
-	if c == nil {
-		return DefaultGHPendingPRs
-	}
-	return stringOrDefault(c.GHPendingPRs, DefaultGHPendingPRs)
-}
-
-func (c *Config) DirectRequestedPRsCommand() string {
-	if c == nil {
-		return DefaultGHDirectRequestedPRs
-	}
-	return stringOrDefault(c.GHDirectRequestedPRs, DefaultGHDirectRequestedPRs)
-}
-
-func (c *Config) RereviewPRsCommand() string {
-	if c == nil {
-		return DefaultGHRereviewPRs
-	}
-	return stringOrDefault(c.GHRereviewPRs, DefaultGHRereviewPRs)
-}
-
-func (c *Config) ReviewedPRsCommand() string {
-	if c == nil {
-		return DefaultGHReviewedPRs
-	}
-	return stringOrDefault(c.GHReviewedPRs, DefaultGHReviewedPRs)
-}
-
-func (c *Config) PRDetailsCommand() string {
-	if c == nil {
-		return DefaultGHPRDetails
-	}
-	return stringOrDefault(c.GHPRDetails, DefaultGHPRDetails)
+func (c *Config) DailyCommitsEnabled() bool {
+	return c == nil || c.ShowDailyCommits == nil || *c.ShowDailyCommits
 }
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		NotesDir             string      `yaml:"notes_dir"`
-		GitRepositoryRoots   []string    `yaml:"git_repository_roots"`
-		LegacyRepoRoots      []string    `yaml:"repo_roots"`
-		GitLookbackDays      int         `yaml:"git_lookback_days"`
-		GitCommitsCmd        string      `yaml:"git_commits_cmd"`
-		GitAutoSyncInterval  interface{} `yaml:"git_auto_sync_interval"`
-		JanitorPatterns      []string    `yaml:"janitor_patterns"`
-		Jobs                 []JobSpec   `yaml:"jobs"`
-		ReviewRoot           string      `yaml:"review_root"`
-		ReviewCommand        string      `yaml:"review_command"`
-		GreenOnly            *bool       `yaml:"green_only"`
-		JiraBaseURL          string      `yaml:"jira_base_url"`
-		GHPendingPRs         string      `yaml:"gh_pending_prs"`
-		GHDirectRequestedPRs string      `yaml:"gh_direct_requested_prs"`
-		GHRereviewPRs        string      `yaml:"gh_rereview_prs"`
-		GHReviewedPRs        string      `yaml:"gh_reviewed_prs"`
-		GHPRDetails          string      `yaml:"gh_pr_details"`
+		NotesDir            string      `yaml:"notes_dir"`
+		GitRepositoryRoots  []string    `yaml:"git_repository_roots"`
+		LegacyRepoRoots     []string    `yaml:"repo_roots"`
+		GitLookbackDays     int         `yaml:"git_lookback_days"`
+		GitCommitsCmd       string      `yaml:"git_commits_cmd"`
+		GitAutoSyncInterval interface{} `yaml:"git_auto_sync_interval"`
+		JanitorPatterns     []string    `yaml:"janitor_patterns"`
+		Jobs                []JobSpec   `yaml:"jobs"`
+		ReviewRoot          string      `yaml:"review_root"`
+		ReviewCommand       string      `yaml:"review_command"`
+		GreenOnly           *bool       `yaml:"green_only"`
+		JiraBaseURL         string      `yaml:"jira_base_url"`
+		PRQuantityPerRepo   int         `yaml:"pr_quantity_per_repo"`
+		ShowDailyCommits    *bool       `yaml:"show_daily_commits"`
 	}
 
 	if err := value.Decode(&raw); err != nil {
@@ -159,11 +122,8 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	c.ReviewCommand = raw.ReviewCommand
 	c.GreenOnly = raw.GreenOnly == nil || *raw.GreenOnly
 	c.JiraBaseURL = raw.JiraBaseURL
-	c.GHPendingPRs = raw.GHPendingPRs
-	c.GHDirectRequestedPRs = raw.GHDirectRequestedPRs
-	c.GHRereviewPRs = raw.GHRereviewPRs
-	c.GHReviewedPRs = raw.GHReviewedPRs
-	c.GHPRDetails = raw.GHPRDetails
+	c.PRQuantityPerRepo = raw.PRQuantityPerRepo
+	c.ShowDailyCommits = raw.ShowDailyCommits
 
 	c.GitAutoSyncInterval = parseSyncInterval(raw.GitAutoSyncInterval)
 

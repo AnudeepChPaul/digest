@@ -33,7 +33,7 @@ func TestReapReviewClones(t *testing.T) {
 
 	original := lookupPRStates
 	var lookups int
-	lookupPRStates = func(ctx context.Context, detailsCommand string, refs []review.PRRef) (map[string]string, error) {
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
 		lookups++
 		if len(refs) != 3 {
 			t.Errorf("refs=%d", len(refs))
@@ -42,7 +42,7 @@ func TestReapReviewClones(t *testing.T) {
 	}
 	defer func() { lookupPRStates = original }()
 
-	actions, failures := reapReviewClones(root, "", true)
+	actions, failures := reapReviewClones(root, true)
 	if lookups != 1 {
 		t.Errorf("lookups = %d, want one batched call", lookups)
 	}
@@ -53,7 +53,7 @@ func TestReapReviewClones(t *testing.T) {
 		t.Errorf("dry run removed clone")
 	}
 
-	actions, failures = reapReviewClones(root, "", false)
+	actions, failures = reapReviewClones(root, false)
 	if len(actions) != 2 || len(failures) != 0 {
 		t.Fatalf("actions=%v failures=%v", actions, failures)
 	}
@@ -74,7 +74,7 @@ func TestReapReviewClones(t *testing.T) {
 }
 
 func TestReapReviewClonesMissingRoot(t *testing.T) {
-	actions, failures := reapReviewClones(filepath.Join(t.TempDir(), "nope"), "", false)
+	actions, failures := reapReviewClones(filepath.Join(t.TempDir(), "nope"), false)
 	if len(actions) != 0 || len(failures) != 0 {
 		t.Errorf("actions=%v failures=%v", actions, failures)
 	}
@@ -85,11 +85,11 @@ func TestReapReviewClonesKeepsClonesWhenLookupFails(t *testing.T) {
 	ref := review.PRRef{Repo: "console", Number: 9, URL: "u-9"}
 	seedReviewClone(t, root, ref)
 	original := lookupPRStates
-	lookupPRStates = func(ctx context.Context, detailsCommand string, refs []review.PRRef) (map[string]string, error) {
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
 		return nil, errors.New("boom")
 	}
 	defer func() { lookupPRStates = original }()
-	actions, failures := reapReviewClones(root, "", false)
+	actions, failures := reapReviewClones(root, false)
 	if len(actions) != 0 || len(failures) != 1 {
 		t.Fatalf("actions=%v failures=%v", actions, failures)
 	}
@@ -103,11 +103,11 @@ func TestReapReviewClonesReportsMissingState(t *testing.T) {
 	ref := review.PRRef{Repo: "console", Number: 9, URL: "u-9"}
 	seedReviewClone(t, root, ref)
 	original := lookupPRStates
-	lookupPRStates = func(ctx context.Context, detailsCommand string, refs []review.PRRef) (map[string]string, error) {
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 	defer func() { lookupPRStates = original }()
-	actions, failures := reapReviewClones(root, "", false)
+	actions, failures := reapReviewClones(root, false)
 	if len(actions) != 0 || len(failures) != 1 {
 		t.Fatalf("actions=%v failures=%v", actions, failures)
 	}

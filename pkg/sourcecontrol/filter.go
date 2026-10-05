@@ -41,14 +41,14 @@ func FilterPRItems(items []PRItem, allowed map[string]bool) []PRItem {
 	return kept
 }
 
-func FilterRefs(refs []review.PRRef, allowed map[string]bool) []review.PRRef {
+func FilterQueuedPRs(prs []review.QueuedPR, allowed map[string]bool) []review.QueuedPR {
 	if allowed == nil {
-		return refs
+		return prs
 	}
-	var kept []review.PRRef
-	for _, ref := range refs {
-		if RepoNameAllowed(ref.Repo, allowed) {
-			kept = append(kept, ref)
+	var kept []review.QueuedPR
+	for _, pr := range prs {
+		if RepoNameAllowed(pr.Ref.Repo, allowed) {
+			kept = append(kept, pr)
 		}
 	}
 	return kept

@@ -46,16 +46,15 @@ func RunRepoSync(roots []string, dryRun bool) (bool, error) {
 }
 
 // RunJanitor scans and cleans up quarantined or temporary files.
-func RunJanitor(roots, patterns []string, reviewRoot, prDetailsCommand string, dryRun bool) (bool, error) {
+func RunJanitor(roots, patterns []string, reviewRoot string, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &JanitorJob{
-		Roots:            roots,
-		Patterns:         patterns,
-		QuarantineRoot:   paths.Expand("~/digest/.quarantine"),
-		RetentionDays:    14,
-		ReviewRoot:       reviewRoot,
-		PRDetailsCommand: prDetailsCommand,
-		Logger:           logger,
+		Roots:          roots,
+		Patterns:       patterns,
+		QuarantineRoot: paths.Expand("~/digest/.quarantine"),
+		RetentionDays:  14,
+		ReviewRoot:     reviewRoot,
+		Logger:         logger,
 	}
 	res, err := job.Run(dryRun)
 	if err != nil {

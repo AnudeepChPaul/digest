@@ -15,18 +15,17 @@ import (
 )
 
 type JanitorJob struct {
-	Roots            []string
-	Patterns         []string
-	QuarantineRoot   string
-	RetentionDays    int
-	ReviewRoot       string
-	PRDetailsCommand string
-	Logger           *log.Logger
+	Roots          []string
+	Patterns       []string
+	QuarantineRoot string
+	RetentionDays  int
+	ReviewRoot     string
+	Logger         *log.Logger
 }
 
 var lookupPRStates = review.FetchPRStates
 
-func reapReviewClones(root, prDetailsCommand string, dryRun bool) ([]string, []string) {
+func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 	stateRoot := filepath.Join(root, ".state")
 	entries, err := os.ReadDir(stateRoot)
 	if err != nil {
@@ -48,7 +47,7 @@ func reapReviewClones(root, prDetailsCommand string, dryRun bool) ([]string, []s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	states, err := lookupPRStates(ctx, prDetailsCommand, refs)
+	states, err := lookupPRStates(ctx, refs)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("pr states: %v", err)}
 	}
@@ -169,7 +168,7 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 	var reviewActions []string
 	if j.ReviewRoot != "" {
 		var reviewFailures []string
-		reviewActions, reviewFailures = reapReviewClones(paths.Expand(j.ReviewRoot), j.PRDetailsCommand, dryRun)
+		reviewActions, reviewFailures = reapReviewClones(paths.Expand(j.ReviewRoot), dryRun)
 		failures = append(failures, reviewFailures...)
 		for _, action := range reviewActions {
 			if dryRun {
