@@ -74,6 +74,7 @@ const (
 	KindJobDraft
 	KindReviewRun
 	KindBragRun
+	KindMyPR
 )
 
 type GitPRItem = sourcecontrol.PRItem
@@ -104,6 +105,7 @@ type NavItem struct {
 	PendingGitPR *GitPRItem
 	ReviewRun    *review.ReviewRun
 	BragRun      *brag.Run
+	MyPR         *review.QueuedPR
 }
 
 type PendingRepoGroup struct {
@@ -142,7 +144,8 @@ type jobAbortedMsg struct {
 }
 
 type notesSavedMsg struct {
-	errs []error
+	errs     []error
+	savedIDs []string
 }
 
 type gitDay = sourcecontrol.Day
@@ -152,7 +155,7 @@ const (
 	gitDayYesterday = sourcecontrol.Yesterday
 )
 
-const gitSectionCount = 3
+const gitSectionCount = sourcecontrol.SectionCount
 
 type gitDaySectionMsg struct {
 	generation  int
@@ -161,6 +164,16 @@ type gitDaySectionMsg struct {
 	reviewed    []GitPRItem
 	reviews     []review.ActivityPR
 	details     map[string]json.RawMessage
+	failedHosts []string
+	err         error
+	sections    <-chan sourcecontrol.Section
+}
+
+type gitMyPRsMsg struct {
+	generation  int
+	partOfSync  bool
+	prs         []review.QueuedPR
+	closed      map[string]string
 	failedHosts []string
 	err         error
 	sections    <-chan sourcecontrol.Section
@@ -186,12 +199,9 @@ var (
 	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C7086"))
 	itemStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#CDD6F4"))
 
-	selectedSummaryStyle = lipgloss.NewStyle().
-				Underline(true).
-				Bold(true).
-				Foreground(lipgloss.Color("#F5E0DC"))
+	selectedSummaryStyle = itemStyle.Copy().Bold(true)
 
-	selectedTagStyle = lipgloss.NewStyle().
+	jobActiveTagStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#A6E3A1"))
 
@@ -885,6 +895,7 @@ type Model struct {
 	cancelSession      context.CancelFunc
 	searchCache        *searchMemo
 	reviewReports      *reviewReportMemo
+	changesSince       map[string]changesSinceReview
 	updateSeq          int
 	scrollPending      bool
 	settledFrame       *dashboardFrame
@@ -937,10 +948,14 @@ type Model struct {
 	ghReviewedToday         []GitPRItem
 	ghReviewedYesterday     []GitPRItem
 	ghPendingPRs            []GitPRItem
+	myPRs                   []review.QueuedPR
+	knownMyPRs              []review.PRRef
+	loadingMyPRs            bool
 	prDetails               map[string]json.RawMessage
 	pendingSort             sourcecontrol.Sort
 	pendingMeOnly           bool
 	initialSelectionPending bool
+	selectAfterReload       string
 	pendingSortChosen       bool
 	syncOnLoad              bool
 	reviewRuns              []review.ReviewRun
@@ -1187,7 +1202,11 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 		}
 		m.applyGitCache(cache)
 	}
+	if seen, err := loadMyPRsSeen(myPRsSeenPath(cfg.Root())); err == nil {
+		m.knownMyPRs = knownMyPRRefs(seen)
+	}
 	m.syncOnLoad = !cacheLoaded || !cache.hasDataFor(m.currentDate) || cache.PreviousDay != m.fetchedPreviousDay.Format("2006-01-02")
+	m.loadingMyPRs = cfg != nil
 	if m.syncOnLoad {
 		m.beginGitFetch(true)
 	} else {
@@ -1216,6 +1235,8 @@ func (m Model) Init() tea.Cmd {
 	}
 	if m.syncOnLoad {
 		cmds = append(cmds, m.gitFetchCmd())
+	} else if m.loadingMyPRs {
+		cmds = append(cmds, m.myPRsFetchCmd())
 	}
 	if m.runStatePolling {
 		cmds = append(cmds, tickRunStatePollCmd())
@@ -1251,12 +1272,15 @@ func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
 	}
 	return func() tea.Msg {
 		var errs []error
+		var savedIDs []string
 		for i := range copies {
 			if err := noteStore.Save(&copies[i]); err != nil {
 				errs = append(errs, fmt.Errorf("save %q: %w", copies[i].Summary, err))
+				continue
 			}
+			savedIDs = append(savedIDs, copies[i].ID)
 		}
-		return notesSavedMsg{errs: errs}
+		return notesSavedMsg{errs: errs, savedIDs: savedIDs}
 	}
 }
 
@@ -1349,6 +1373,9 @@ func waitForGitSection(sections <-chan sourcecontrol.Section, generation int) te
 		switch {
 		case !open:
 			return nil
+		case section.MyPRs != nil:
+			mine := section.MyPRs
+			return gitMyPRsMsg{generation: generation, partOfSync: true, prs: mine.PRs, closed: mine.Closed, failedHosts: mine.FailedHosts, err: mine.Err, sections: sections}
 		case section.Day != nil:
 			day := section.Day
 			return gitDaySectionMsg{generation: generation, day: day.Day, date: day.Date, reviewed: day.Reviewed, reviews: day.Reviews, details: day.Details, failedHosts: day.FailedHosts, err: day.Err, sections: sections}
@@ -1387,9 +1414,18 @@ func (m Model) gitFetchCmd() tea.Cmd {
 		Today:       m.currentDate,
 		PreviousDay: m.previousNoteDay(),
 		Sort:        m.pendingSort,
+		KnownMyPRs:  m.knownMyPRs,
 	})
 
 	return waitForGitSection(sections, m.fetchGeneration)
+}
+
+func (m Model) myPRsFetchCmd() tea.Cmd {
+	cfg, known, generation, ctx := m.cfg, m.knownMyPRs, m.fetchGeneration, m.sessionCtx
+	return func() tea.Msg {
+		result := sourcecontrol.NewEngine(cfg).FetchMyPRs(ctx, known)
+		return gitMyPRsMsg{generation: generation, prs: result.PRs, closed: result.Closed, failedHosts: result.FailedHosts, err: result.Err}
+	}
 }
 
 func (m *Model) cancelGitSync() {
@@ -1430,6 +1466,8 @@ func navItemKey(item NavItem) string {
 		return "review:" + item.ReviewRun.Meta.Ref.URL
 	case item.Kind == KindBragRun && item.BragRun != nil:
 		return "brag:" + item.BragRun.Meta.ID
+	case item.MyPR != nil:
+		return "mine:" + item.MyPR.Ref.URL
 	case item.PendingGitPR != nil:
 		return "pr:" + item.PendingGitPR.URL
 	case item.GitRepo != nil:
@@ -1466,6 +1504,15 @@ func (m *Model) selectLaunchItem() {
 	m.selected = 0
 }
 
+const pendingNewNote = "\x00new"
+
+func (m *Model) selectNoteByID(noteID string) {
+	items := m.allNavItems()
+	if index := slices.IndexFunc(items, func(item NavItem) bool { return item.Note != nil && item.Note.ID == noteID }); index >= 0 {
+		m.selected = index
+	}
+}
+
 func (m *Model) restoreSelection(key string, occurrence int) {
 	items := m.allNavItems()
 	if key != "" {
@@ -1490,6 +1537,7 @@ const (
 	sectionReviewedToday     = "Reviewed today"
 	sectionReviewedYesterday = "Reviewed yesterday"
 	sectionPending           = "Pending"
+	sectionMyPRs             = "My PRs"
 )
 
 func (m *Model) finishGitSection() {
@@ -1559,6 +1607,43 @@ func (m *Model) applyGitPending(msg gitPendingMsg) {
 	m.rebuildGitRepoStats()
 	m.restoreSelection(selectedKey, selectedOccurrence)
 	m.updateScrollOffset()
+}
+
+func (m *Model) applyMyPRs(msg gitMyPRsMsg) {
+	if msg.partOfSync {
+		if msg.generation != m.fetchGeneration {
+			return
+		}
+		m.finishGitSection()
+	}
+	m.loadingMyPRs = false
+	selectedKey, selectedOccurrence := m.selectedNavKey()
+	m.recordSectionError(sectionMyPRs, msg.err)
+	if msg.err == nil || len(msg.prs) > 0 {
+		m.myPRs = keepFailedHostPRs(m.myPRs, msg.prs, msg.failedHosts)
+		sortMyPRs(m.myPRs)
+	}
+	m.restoreSelection(selectedKey, selectedOccurrence)
+	m.updateScrollOffset()
+}
+
+func keepFailedHostPRs(previous, fresh []review.QueuedPR, failedHosts []string) []review.QueuedPR {
+	kept := append([]review.QueuedPR(nil), fresh...)
+	for _, pr := range previous {
+		if slices.Contains(failedHosts, pr.Ref.Host) && !slices.ContainsFunc(fresh, func(candidate review.QueuedPR) bool { return candidate.Ref.URL == pr.Ref.URL }) {
+			kept = append(kept, pr)
+		}
+	}
+	return kept
+}
+
+func sortMyPRs(prs []review.QueuedPR) {
+	slices.SortStableFunc(prs, func(a, b review.QueuedPR) int {
+		if byRepo := strings.Compare(a.Ref.Repo, b.Ref.Repo); byRepo != 0 {
+			return byRepo
+		}
+		return b.Ref.Number - a.Ref.Number
+	})
 }
 
 func keepFailedHostItems(previous, fresh []GitPRItem, failedHosts []string) []GitPRItem {
@@ -1775,6 +1860,11 @@ func (m Model) getPendingGitGroups() []PendingRepoGroup {
 
 func (m Model) allNavItems() []NavItem {
 	var items []NavItem
+	groups := m.groupNotes()
+
+	for _, n := range groups.previousDone {
+		items = append(items, NavItem{Kind: KindYesterdayDone, Note: n})
+	}
 
 	for _, repo := range m.yesterdayGitRepo {
 		items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
@@ -1784,9 +1874,8 @@ func (m Model) allNavItems() []NavItem {
 		items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
 	}
 
-	groups := m.groupNotes()
-	for _, n := range groups.previousDone {
-		items = append(items, NavItem{Kind: KindYesterdayDone, Note: n})
+	for index := range m.myPRs {
+		items = append(items, NavItem{Kind: KindMyPR, MyPR: &m.myPRs[index]})
 	}
 
 	for _, n := range groups.carried {
@@ -1855,22 +1944,26 @@ func (m Model) dayTitleText(date time.Time, spacedLabel string) string {
 	return fmt.Sprintf("%s . %s", strings.ToUpper(date.Format("Monday")), strings.ToUpper(date.Format("02 Jan")))
 }
 
+func (m Model) gitNavStart() int {
+	return len(m.groupNotes().previousDone)
+}
+
 func (m Model) renderGitStrip(width int, active bool) (lines []string, selectedRow int) {
-	leftColumnWidth := max((width-2)/2, 20)
-	columnWidths := [2]int{leftColumnWidth, max(width-2-leftColumnWidth, 20)}
+	separator := mutedStyle.Render(" │")
+	leftWidth := max((width-lipgloss.Width(separator))/2, 16)
+	rightWidth := max(width-lipgloss.Width(separator)-leftWidth, 16)
+	columnWidths := [2]int{leftWidth, rightWidth}
 	header := " " + m.renderWaveTitle("G I T", active) + "  " + m.renderSyncDot(m.loadingCommits)
-	columns := [2][]*GitRepoStat{m.yesterdayGitRepo, m.todayGitRepos}
+	repoColumns := [2][]*GitRepoStat{m.yesterdayGitRepo, m.todayGitRepos}
 	columnTitles := [2]string{
 		m.previousDayTitle(),
 		m.dayTitleText(m.currentDate, "T O D A Y"),
 	}
+	navStart := m.gitNavStart()
+	columnStarts := [2]int{navStart, navStart + len(m.yesterdayGitRepo)}
 	var captionCells [2]string
-	for side, repos := range columns {
-		firstIndex := 0
-		if side == 1 {
-			firstIndex = len(m.yesterdayGitRepo)
-		}
-		columnActive := m.selected >= firstIndex && m.selected < firstIndex+len(repos)
+	for side, repos := range repoColumns {
+		columnActive := m.selected >= columnStarts[side] && m.selected < columnStarts[side]+len(repos)
 		caption := " " + m.renderWaveTitle(columnTitles[side], columnActive)
 		if m.cfg.DailyCommitsEnabled() {
 			commits := 0
@@ -1881,20 +1974,16 @@ func (m Model) renderGitStrip(width int, active bool) (lines []string, selectedR
 		}
 		captionCells[side] = ansi.Truncate(caption, columnWidths[side], "…")
 	}
-	separator := mutedStyle.Render(" │")
-	joinCells := func(left, right string) string {
-		return left + safeRepeat(" ", leftColumnWidth-lipgloss.Width(left)) + separator + right
+	joinCells := func(cells [2]string) string {
+		return cells[0] + safeRepeat(" ", columnWidths[0]-lipgloss.Width(cells[0])) + separator + cells[1]
 	}
-	lines = []string{header, "", joinCells(captionCells[0], captionCells[1])}
+	lines = []string{header, "", joinCells(captionCells)}
 	selectedRow = -1
 	rowCount := max(len(m.yesterdayGitRepo), len(m.todayGitRepos), 1)
 	for row := range rowCount {
 		var cells [2]string
-		for side, repos := range columns {
-			globalIndex := row
-			if side == 1 {
-				globalIndex += len(m.yesterdayGitRepo)
-			}
+		for side, repos := range repoColumns {
+			globalIndex := columnStarts[side] + row
 			switch {
 			case row < len(repos):
 				selected := globalIndex == m.selected
@@ -1908,18 +1997,42 @@ func (m Model) renderGitStrip(width int, active bool) (lines []string, selectedR
 				cells[side] = mutedStyle.Render("     (no git activity)")
 			}
 		}
-		lines = append(lines, joinCells(cells[0], cells[1]))
+		lines = append(lines, joinCells(cells))
+	}
+	myPRsStart := columnStarts[1] + len(m.todayGitRepos)
+	myPRsActive := m.selected >= myPRsStart && m.selected < myPRsStart+len(m.myPRs)
+	lines = append(lines, "", ansi.Truncate(" "+m.renderWaveTitle("M Y   P R ( S )", myPRsActive)+mutedStyle.Render(fmt.Sprintf("  %d open", len(m.myPRs))), width, "…"))
+	for _, line := range m.renderMyPRBlock(myPRsStart, width) {
+		if line.navIndex >= 0 && line.navIndex == m.selected {
+			selectedRow = len(lines)
+		}
+		lines = append(lines, line.text)
 	}
 	return lines, selectedRow
 }
 
-func (m Model) gitStripColumnSwitch(towardsToday bool) (target int, ok bool) {
-	yesterdayCount, todayCount := len(m.yesterdayGitRepo), len(m.todayGitRepos)
-	switch {
-	case towardsToday && m.selected < yesterdayCount && todayCount > 0:
-		return yesterdayCount + min(m.selected, todayCount-1), true
-	case !towardsToday && m.selected >= yesterdayCount && m.selected < yesterdayCount+todayCount && yesterdayCount > 0:
-		return min(m.selected-yesterdayCount, yesterdayCount-1), true
+func (m Model) gitStripColumnSwitch(towardsRight bool) (target int, ok bool) {
+	navStart := m.gitNavStart()
+	counts := [2]int{len(m.yesterdayGitRepo), len(m.todayGitRepos)}
+	starts := [2]int{navStart, navStart + counts[0]}
+	current := -1
+	for column := range counts {
+		if m.selected >= starts[column] && m.selected < starts[column]+counts[column] {
+			current = column
+		}
+	}
+	if current < 0 {
+		return 0, false
+	}
+	step := -1
+	if towardsRight {
+		step = 1
+	}
+	row := m.selected - starts[current]
+	for column := current + step; column >= 0 && column < len(counts); column += step {
+		if counts[column] > 0 {
+			return starts[column] + min(row, counts[column]-1), true
+		}
 	}
 	return 0, false
 }
@@ -2040,6 +2153,8 @@ func (m *Model) updatePreviewViewport() {
 		mdContent = renderMarkdown(reviewRunPreview(m.reviewRoot(), *item.ReviewRun), innerWidth)
 	} else if item.Kind == KindBragRun && item.BragRun != nil {
 		mdContent = renderMarkdown(bragRunPreview(m.bragRoot(), *item.BragRun), innerWidth)
+	} else if item.Kind == KindMyPR && item.MyPR != nil {
+		mdContent = renderMarkdown(myPRDetailsMarkdown(*item.MyPR), innerWidth)
 	} else if item.Note != nil {
 		fullText := fmt.Sprintf("# %s", item.Note.Summary)
 		if strings.TrimSpace(item.Note.Body) != "" {
@@ -2105,28 +2220,14 @@ func (m Model) renderArchivedContent(width int, selectedIdx int) string {
 
 		gap := summaryWidth - len(summary)
 
-		var line string
-		if i == selectedIdx {
-			renderedSummary := selectedSummaryStyle.Render(summary)
-			line = fmt.Sprintf("%s%s %s%s%s   %s\n",
-				prefix,
-				box,
-				renderedSummary,
-				safeRepeat(" ", gap),
-				selectedTagStyle.Render(src),
-				mutedStyle.Bold(true).Render(age),
-			)
+		selected := i == selectedIdx
+		if selected {
+			summary = selectedTitle(summary)
 		} else {
-			line = fmt.Sprintf("%s%s %s%s%s   %s\n",
-				prefix,
-				box,
-				summary,
-				safeRepeat(" ", gap),
-				dimBlueText.Render(src),
-				mutedStyle.Render(age),
-			)
+			summary = itemStyle.Render(summary)
 		}
-		b.WriteString(line)
+		rightBlock := fmt.Sprintf("%s   %s", dimBlueText.Render(src), mutedStyle.Render(age))
+		b.WriteString(fmt.Sprintf("%s%s %s%s%s\n", prefix, box, summary, safeRepeat(" ", gap), underlinedWhen(selected, rightBlock)))
 	}
 
 	return b.String()
@@ -2210,6 +2311,11 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.errs) > 0 {
 			m.showError("STORE ERROR", msg.errs...)
 		}
+		if m.selectAfterReload == pendingNewNote && len(msg.savedIDs) == 1 {
+			m.selectAfterReload = msg.savedIDs[0]
+		} else if m.selectAfterReload == pendingNewNote {
+			m.selectAfterReload = ""
+		}
 		return m, m.loadNotesCmd
 
 	case autoSyncTickMsg:
@@ -2232,6 +2338,9 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_, editorWidth, editorHeight := previewModalSize(msg.Width, msg.Height)
 		m.editor.SetWidth(editorWidth)
 		m.editor.SetHeight(editorHeight)
+		if m.mode == ViewInlineEdit && m.currentNote != nil {
+			m.inlineInput.Width = m.inlineEditWidth(m.currentNote)
+		}
 		m.updateScrollOffset()
 		if m.mode == ViewPreview {
 			m.updatePreviewViewport()
@@ -2245,6 +2354,10 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.initialSelectionPending {
 			m.initialSelectionPending = false
 			m.selectLaunchItem()
+		}
+		if m.selectAfterReload != "" && m.selectAfterReload != pendingNewNote {
+			m.selectNoteByID(m.selectAfterReload)
+			m.selectAfterReload = ""
 		}
 		var refetchPreviousDay tea.Cmd
 		if !isSameDay(m.previousNoteDay(), m.fetchedPreviousDay) {
@@ -2288,6 +2401,35 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.afterGitSection(cmds)
 
+	case gitMyPRsMsg:
+		var cmds []tea.Cmd
+		current := !msg.partOfSync || msg.generation == m.fetchGeneration
+		if current && (len(msg.prs) > 0 || len(msg.closed) > 0) {
+			cmds = append(cmds, myPRNotesCmd(m.store, myPRsSeenPath(m.cfg.Root()), msg.prs, msg.closed, msg.failedHosts, time.Now()))
+		}
+		if msg.sections != nil {
+			cmds = append(cmds, waitForGitSection(msg.sections, msg.generation))
+		}
+		wasSyncing := m.loadingGit || m.loadingCommits
+		m.applyMyPRs(msg)
+		if wasSyncing || !msg.partOfSync {
+			cmds = append(cmds, m.gitCacheSaveCmd())
+		}
+		return m.afterGitSection(cmds)
+
+	case myPRNotesMsg:
+		if msg.known != nil || msg.err == nil {
+			m.knownMyPRs = msg.known
+		}
+		if msg.err != nil {
+			m.recordSectionError(sectionMyPRs, msg.err)
+			return m, nil
+		}
+		if !msg.saved {
+			return m, nil
+		}
+		return m.Update(loadNotesMsg{notes: msg.notes})
+
 	case gitPendingMsg:
 		var cmds []tea.Cmd
 		if msg.generation == m.fetchGeneration && msg.err == nil {
@@ -2312,6 +2454,8 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.startLoadGitStatsCmd(true)
 
+	case changesSinceReviewMsg:
+		return m.handleChangesSinceReview(msg)
 	case relatedHistoryMsg:
 		return m.handleRelatedHistory(msg)
 
@@ -2588,8 +2732,8 @@ func (m Model) View() string {
 				}
 
 				if i == m.gitPopupSelected {
-					renderedTitle := selectedSummaryStyle.Render(title)
-					listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, renderedTitle, safeRepeat(" ", gap), selectedTagStyle.Render(kindTag)))
+					renderedTitle := selectedTitle(title)
+					listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, renderedTitle, safeRepeat(" ", gap), underlined(mutedStyle.Render(kindTag))))
 				} else {
 					listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, itemStyle.Render(title), safeRepeat(" ", gap), mutedStyle.Render(kindTag)))
 				}
@@ -2710,6 +2854,12 @@ func (m Model) View() string {
 						statusBadge = badgeActive.Render(fmt.Sprintf("RUNNING · PID %d", pid))
 					}
 					tagBadge = tagStyle.Render("#github")
+				}
+			case KindMyPR:
+				if item.MyPR != nil {
+					headerTitle = fmt.Sprintf(" MY PR: %s #%d ", item.MyPR.Ref.Repo, item.MyPR.Ref.Number)
+					statusBadge = badgeActive.Render(strings.ToUpper(myPRCIText(item.MyPR.CIState)))
+					tagBadge = tagStyle.Render("#my-pr")
 				}
 			case KindReviewRun:
 				headerTitle = fmt.Sprintf(" REVIEW JOB: %s ", reviewRunLabel(*item.ReviewRun))
@@ -2862,7 +3012,7 @@ func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
 	m.updatePreviewViewport()
 	m.mode = ViewPreview
 	if item.PendingGitPR != nil {
-		cmds := []tea.Cmd{m.relatedHistoryCmd(item.PendingGitPR)}
+		cmds := []tea.Cmd{m.relatedHistoryCmd(item.PendingGitPR), m.changesSinceReviewCmd(item.PendingGitPR)}
 		if m.anyReviewRunning() {
 			cmds = append(cmds, m.ensureReviewPoll())
 		}
@@ -2987,27 +3137,26 @@ func (m Model) buildDashboardContent() (content string, selectedLine int) {
 	closedCount := len(todayDoneNotes)
 
 	pendingGroups := m.getPendingGitGroups()
-	m.tagSlots = m.computeTagSlots(slices.Concat(yNotes, olderNotes, todayNotes, todayDoneNotes), pendingGroups)
+	m.tagSlots = m.dashboardTagSlots(groups, pendingGroups)
 	pendingGitCount := 0
 	for _, g := range pendingGroups {
 		pendingGitCount += len(g.Items)
 	}
 
-	gitUpdatesCount := len(m.todayGitRepos)
+	gitUpdatesCount := len(m.todayGitRepos) + len(m.myPRs)
 	drafts := m.getJobDrafts()
 	draftsCount := len(drafts) + len(m.reviewRuns) + len(m.bragRuns)
 
-	// Calculate index boundaries
-	yGitStart := 0
+	yNotesStart := 0
+	yNotesEnd := yNotesStart + yNotesCount
+
+	yGitStart := yNotesEnd
 	yGitEnd := yGitStart + yGitCount
 
 	gitUpdatesStart := yGitEnd
 	gitUpdatesEnd := gitUpdatesStart + gitUpdatesCount
 
-	yNotesStart := gitUpdatesEnd
-	yNotesEnd := yNotesStart + yNotesCount
-
-	carriedStart := yNotesEnd
+	carriedStart := gitUpdatesEnd
 	carriedEnd := carriedStart + carriedCount
 
 	addedStart := carriedEnd
@@ -3039,17 +3188,8 @@ func (m Model) buildDashboardContent() (content string, selectedLine int) {
 		}
 	}
 
-	stripLines, stripSelectedRow := m.renderGitStrip(rowWidth, isGitStripActive)
-	b.WriteString("\n")
-	if stripSelectedRow >= 0 {
-		selectedLine = strings.Count(b.String(), "\n") + stripSelectedRow
-	}
-	b.WriteString(strings.Join(stripLines, "\n") + "\n")
-	globalIdx = gitUpdatesEnd
-
-	// --- YESTERDAY SECTION ---
 	yTitleText := m.previousDayTitleFor(groups.previousDay)
-	b.WriteString(sectionGap + " " + m.renderWaveTitle(yTitleText, isYesterdayActive) + "\n")
+	b.WriteString("\n " + m.renderWaveTitle(yTitleText, isYesterdayActive) + "\n")
 	if len(yNotes) > 0 {
 		b.WriteString("\n")
 	}
@@ -3059,6 +3199,14 @@ func (m Model) buildDashboardContent() (content string, selectedLine int) {
 		b.WriteString(m.renderRow(n, isSel, rowWidth))
 		globalIdx++
 	}
+
+	stripLines, stripSelectedRow := m.renderGitStrip(rowWidth, isGitStripActive)
+	b.WriteString(sectionGap)
+	if stripSelectedRow >= 0 {
+		selectedLine = strings.Count(b.String(), "\n") + stripSelectedRow
+	}
+	b.WriteString(strings.Join(stripLines, "\n") + "\n")
+	globalIdx = gitUpdatesEnd
 
 	// --- TODAY SECTION ---
 	b.WriteString(sectionGap)
@@ -3219,11 +3367,8 @@ func (m Model) renderGitRepoRow(repo *GitRepoStat, selected bool, width int) str
 		stats = "…" + string([]rune(stats)[len([]rune(stats))-max(room-1, 1):])
 	}
 
-	nameStyle, statsStyle := subSectionStyle, mutedStyle
-	if selected {
-		nameStyle, statsStyle = selectedSummaryStyle, selectedTagStyle
-	}
-	return alignRight("     "+nameStyle.Render(repo.Name), []string{statsStyle.Render(stats)}, width) + "\n"
+	nameStyle := subSectionStyle
+	return alignRightSelected("     "+underlinedWhen(selected, nameStyle.Render(repo.Name)), []string{mutedStyle.Render(stats)}, width, selected) + "\n"
 }
 
 const tagGap = "  "
@@ -3237,12 +3382,16 @@ func slotted(cell string, slotWidth int) string {
 }
 
 func alignRight(left string, tags []string, width int) string {
+	return alignRightSelected(left, tags, width, false)
+}
+
+func alignRightSelected(left string, tags []string, width int, selected bool) string {
 	tagBlock := joinTags(tags)
 	room := width - lipgloss.Width(tagBlock) - 1
 	if lipgloss.Width(left) > room {
 		left = ansi.Truncate(left, max(room, 0), "…")
 	}
-	return left + safeRepeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tagBlock)) + tagBlock
+	return left + safeRepeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tagBlock)) + underlinedWhen(selected, tagBlock)
 }
 
 func joinTags(tags []string) string {
@@ -3255,20 +3404,13 @@ func joinTags(tags []string) string {
 	return strings.Join(shown, tagGap)
 }
 
-func (m Model) prTagCells(item *GitPRItem, selected bool) (size, age, state string) {
+func (m Model) prTagCells(item *GitPRItem) (size, age, state string) {
 	if item.PR == nil {
-		kindTag := fmt.Sprintf("[%s]", item.Kind)
-		if selected {
-			return "", "", selectedTagStyle.Render(kindTag)
-		}
-		return "", "", mutedStyle.Render(kindTag)
+		return "", "", mutedStyle.Render(fmt.Sprintf("[%s]", item.Kind))
 	}
 	now := time.Now()
 	prState := m.prState(item)
 	state = stateStyle(prState).Render(string(prState))
-	if selected {
-		state = selectedTagStyle.Render(string(prState))
-	}
 	if prState == review.StateReviewing {
 		state = m.renderReviewRunningIndicator()
 	}
@@ -3303,24 +3445,28 @@ func reviewRequestIcon(item *GitPRItem) string {
 	return dimBlueText.Render(strings.Join(icons, " "))
 }
 
-func (m Model) prTags(item *GitPRItem, selected bool) []string {
-	size, age, state := m.prTagCells(item, selected)
+func (m Model) prTags(item *GitPRItem) []string {
+	size, age, state := m.prTagCells(item)
 	if item.PR == nil {
 		return []string{slotted(state, m.tagSlots.prState)}
 	}
 	return []string{reviewRequestIcon(item), slotted(size, m.tagSlots.prSize), slotted(age, m.tagSlots.prAge), slotted(state, m.tagSlots.prState)}
 }
 
+func (m Model) dashboardTagSlots(groups noteGroups, pendingGroups []PendingRepoGroup) rowTagSlots {
+	return m.computeTagSlots(slices.Concat(groups.previousDone, groups.carried, groups.today, groups.todayDone), pendingGroups)
+}
+
 func (m Model) computeTagSlots(notes []*model.Note, pendingGroups []PendingRepoGroup) rowTagSlots {
 	var slots rowTagSlots
 	for _, n := range notes {
-		age, source := m.noteTagCells(n, false)
+		age, source := m.noteTagCells(n)
 		slots.noteAge = max(slots.noteAge, lipgloss.Width(age))
 		slots.noteSource = max(slots.noteSource, lipgloss.Width(source))
 	}
 	for _, group := range pendingGroups {
 		for i := range group.Items {
-			size, age, state := m.prTagCells(&group.Items[i], false)
+			size, age, state := m.prTagCells(&group.Items[i])
 			slots.prSize = max(slots.prSize, lipgloss.Width(size))
 			slots.prAge = max(slots.prAge, lipgloss.Width(age))
 			slots.prState = max(slots.prState, lipgloss.Width(state))
@@ -3334,8 +3480,8 @@ func (m Model) renderPendingGitRow(item *GitPRItem, selected bool, width int) st
 	if selected {
 		titleStyle = selectedSummaryStyle
 	}
-	leftBlock := fmt.Sprintf("      %s %s", pendingPRIcon.Render(), titleStyle.Render(item.Title))
-	return alignRight(leftBlock, m.prTags(item, selected), width) + "\n"
+	leftBlock := fmt.Sprintf("      %s %s", pendingPRIcon.Render(), underlinedWhen(selected, titleStyle.Render(item.Title)))
+	return alignRightSelected(leftBlock, m.prTags(item), width, selected) + "\n"
 }
 
 func (m Model) renderDraftRow(draft *JobDraft, selected bool, width int) string {
@@ -3369,7 +3515,7 @@ func (m Model) renderDraftRow(draft *JobDraft, selected bool, width int) string 
 
 	var leftBlock string
 	if selected {
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, icon, selectedSummaryStyle.Render(label))
+		leftBlock = fmt.Sprintf("%s%s %s", prefix, icon, selectedTitle(label))
 	} else {
 		leftBlock = fmt.Sprintf("%s%s %s", prefix, icon, itemStyle.Render(label))
 	}
@@ -3382,26 +3528,22 @@ func (m Model) renderDraftRow(draft *JobDraft, selected bool, width int) string 
 	var rightBlock string
 	if m.jobRunning(draft.Name) {
 		runningIndicator := m.renderJobRunningIndicator()
-		rightBlock = fmt.Sprintf("%s   %s", selectedTagStyle.Render("#job"), runningIndicator)
+		rightBlock = fmt.Sprintf("%s   %s", jobActiveTagStyle.Render("#job"), runningIndicator)
 	} else if draft.DryRunInFlight {
-		rightBlock = fmt.Sprintf("%s   %s", selectedTagStyle.Render("#job"), m.renderDryRunIndicator())
+		rightBlock = fmt.Sprintf("%s   %s", jobActiveTagStyle.Render("#job"), m.renderDryRunIndicator())
 	} else {
 		statusText := "need to act"
 		if draft.HasRunDryRun && draft.ExitCode == 0 {
 			statusText = "success"
 		}
 
-		if selected {
-			rightBlock = fmt.Sprintf("%s   %s", selectedTagStyle.Render("#job"), mutedStyle.Bold(true).Render(statusText))
-		} else {
-			rightBlock = fmt.Sprintf("%s   %s", dimBlueText.Render("#job"), mutedStyle.Render(statusText))
-		}
+		rightBlock = fmt.Sprintf("%s   %s", dimBlueText.Render("#job"), mutedStyle.Render(statusText))
 	}
 
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), rightBlock)
+	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
 }
 
-func (m Model) noteTagCells(n *model.Note, selected bool) (age, source string) {
+func (m Model) noteTagCells(n *model.Note) (age, source string) {
 	sourceText := string(n.Source)
 	if sourceText == "" {
 		sourceText = "manual"
@@ -3410,9 +3552,6 @@ func (m Model) noteTagCells(n *model.Note, selected bool) (age, source string) {
 		sourceText = "#" + sourceText
 	}
 	source = dimBlueText.Render(sourceText)
-	if selected {
-		source = selectedTagStyle.Render(sourceText)
-	}
 
 	ageText := "08:40"
 	carriedOver := false
@@ -3426,19 +3565,23 @@ func (m Model) noteTagCells(n *model.Note, selected bool) (age, source string) {
 	default:
 		ageText = n.Created.Format("15:04")
 	}
-	switch {
-	case carriedOver:
+	age = mutedStyle.Render(ageText)
+	if carriedOver {
 		age = yellowBadgeStyle.Render(ageText)
-	case selected:
-		age = mutedStyle.Bold(true).Render(ageText)
-	default:
-		age = mutedStyle.Render(ageText)
 	}
 	return age, source
 }
 
+func (m Model) inlineEditWidth(n *model.Note) int {
+	m.tagSlots = m.dashboardTagSlots(m.groupNotes(), m.getPendingGitGroups())
+	age, source := m.noteTagCells(n)
+	tags := []string{slotted(age, m.tagSlots.noteAge), slotted(source, m.tagSlots.noteSource)}
+	rowWidth := m.width - 3
+	return max(rowWidth-lipgloss.Width(strings.Join(tags, tagGap))-3-4, 5)
+}
+
 func (m Model) renderRow(n *model.Note, selected bool, width int) string {
-	age, source := m.noteTagCells(n, selected)
+	age, source := m.noteTagCells(n)
 	tags := []string{slotted(age, m.tagSlots.noteAge), slotted(source, m.tagSlots.noteSource)}
 	prefix := "   "
 
@@ -3451,7 +3594,6 @@ func (m Model) renderRow(n *model.Note, selected bool, width int) string {
 	var leftBlock string
 	switch {
 	case selected && m.mode == ViewInlineEdit:
-		m.inlineInput.Width = max(width-lipgloss.Width(strings.Join(tags, tagGap))-len(prefix)-4, 5)
 		leftBlock = fmt.Sprintf("%s%s %s", prefix, checkPending.Render(), m.inlineInput.View())
 	case selected:
 		boxStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#CDD6F4"))
@@ -3462,19 +3604,19 @@ func (m Model) renderRow(n *model.Note, selected bool, width int) string {
 		if isTodayDone {
 			summaryStyle = summaryStyle.Strikethrough(true)
 		}
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, boxStyle.Render(boxChar), summaryStyle.Render(n.Summary))
+		leftBlock = fmt.Sprintf("%s%s %s", prefix, boxStyle.Render(boxChar), underlined(summaryStyle.Render(n.Summary)))
 	default:
 		box := checkPending.Render()
 		if n.Status == model.StatusDone {
 			box = checkDone.Render()
 		}
-		summary := n.Summary
+		summary := itemStyle.Render(n.Summary)
 		if isTodayDone {
-			summary = itemStyle.Copy().Strikethrough(true).Render(summary)
+			summary = itemStyle.Copy().Strikethrough(true).Render(n.Summary)
 		}
 		leftBlock = fmt.Sprintf("%s%s %s", prefix, box, summary)
 	}
-	return alignRight(leftBlock, tags, width) + "\n"
+	return alignRightSelected(leftBlock, tags, width, selected) + "\n"
 }
 
 var archiveFooterItems = footerItemsFrom(archivedBindings())

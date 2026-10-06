@@ -114,6 +114,18 @@ func WriteMeta(dir string, meta Meta) error {
 	return os.WriteFile(filepath.Join(dir, metaFile), data, 0644)
 }
 
+func LocalReviewOutdated(root string, pr QueuedPR) bool {
+	if pr.HeadSHA == "" {
+		return false
+	}
+	dir := StateDir(root, pr.Ref)
+	if Status(dir) != RunDone {
+		return false
+	}
+	meta, err := ReadMeta(dir)
+	return err == nil && meta.HeadSHA != "" && meta.HeadSHA != pr.HeadSHA
+}
+
 func ReadMeta(dir string) (Meta, error) {
 	var meta Meta
 	data, err := os.ReadFile(filepath.Join(dir, metaFile))

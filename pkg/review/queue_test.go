@@ -84,7 +84,7 @@ func TestReReviewsExcludesPending(t *testing.T) {
 		{Ref: PRRef{URL: "u3"}, MyLastReviewAt: review, LastCommitAt: review.Add(-time.Hour)},
 	}
 	pending := []QueuedPR{{Ref: PRRef{URL: "u2"}}}
-	got := SelectReReviews(reviewed, pending)
+	got := SelectReReviews(reviewed, pending, NeedsReReview)
 	if len(got) != 1 || got[0].Ref.URL != "u1" {
 		t.Errorf("got %+v", got)
 	}

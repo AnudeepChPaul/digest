@@ -62,7 +62,16 @@ type PendingResult struct {
 	Err         error
 }
 
+type MyPRsResult struct {
+	PRs         []review.QueuedPR
+	Closed      map[string]string
+	StartedAt   time.Time
+	FailedHosts []string
+	Err         error
+}
+
 type Section struct {
 	Day     *DayResult
 	Pending *PendingResult
+	MyPRs   *MyPRsResult
 }

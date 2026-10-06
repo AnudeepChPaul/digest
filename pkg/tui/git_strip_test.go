@@ -28,10 +28,10 @@ func selectedRepoName(m Model) string {
 	return item.GitRepo.Name
 }
 
-func TestGitStripSitsAboveYesterdayWithSideBySideColumns(t *testing.T) {
+func TestBoardShowsYesterdayThenGitThenToday(t *testing.T) {
 	m := gitStripTestModel(t)
 	lines := plainLines(m.renderDashboardBody())
-	stripLine, captionLine, yesterdayLine, sharedLine := -1, -1, -1, -1
+	yesterdayLine, stripLine, captionLine, sharedLine, todayLine := -1, -1, -1, -1, -1
 	for index, line := range lines {
 		switch {
 		case strings.TrimSpace(line) != "" && strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(line, "│")), "G I T") && stripLine < 0:
@@ -42,13 +42,32 @@ func TestGitStripSitsAboveYesterdayWithSideBySideColumns(t *testing.T) {
 			yesterdayLine = index
 		case strings.Contains(line, "alpha") && strings.Contains(line, "gamma"):
 			sharedLine = index
+		case strings.Contains(line, "T O D A Y") && strings.Contains(line, "jobs"):
+			todayLine = index
 		}
 	}
-	if stripLine < 0 || captionLine < stripLine || sharedLine < captionLine || yesterdayLine < sharedLine {
-		t.Fatalf("strip %d captions %d shared %d yesterday %d:\n%s", stripLine, captionLine, sharedLine, yesterdayLine, strings.Join(lines, "\n"))
+	if yesterdayLine < 0 || stripLine < yesterdayLine || captionLine < stripLine || sharedLine < captionLine || todayLine < sharedLine {
+		t.Fatalf("yesterday %d strip %d captions %d shared %d today %d:\n%s", yesterdayLine, stripLine, captionLine, sharedLine, todayLine, strings.Join(lines, "\n"))
 	}
 	if body := strings.Join(lines, "\n"); strings.Contains(body, "Git Updates") || strings.Contains(body, "/ Git") {
 		t.Errorf("Git Updates subsection should be gone:\n%s", body)
+	}
+}
+
+func TestNavOrderFollowsBoard(t *testing.T) {
+	m := gitStripTestModel(t)
+	yesterday := m.currentDate.AddDate(0, 0, -1)
+	m.notes = append(m.notes, &model.Note{Summary: "done yesterday", Status: model.StatusDone, Created: yesterday, Updated: yesterday, Source: model.SourceManual})
+	items := m.allNavItems()
+	if items[0].Kind != KindYesterdayDone || items[1].GitRepo == nil || items[1].GitRepo.Name != "alpha" {
+		t.Fatalf("first items = %+v, %+v", items[0], items[1])
+	}
+	m.selected = 2
+	if m = press(t, m, runes("l")); selectedRepoName(m) != "gamma" {
+		t.Errorf("l from beta should land on gamma, got %q", selectedRepoName(m))
+	}
+	if m = press(t, m, runes("h")); selectedRepoName(m) != "alpha" {
+		t.Errorf("h from gamma should land on alpha, got %q", selectedRepoName(m))
 	}
 }
 
@@ -121,6 +140,9 @@ func TestGitStripColumnsStayAlignedWhenNarrow(t *testing.T) {
 	lines, _ := m.renderGitStrip(m.width-4, false)
 	dividerColumn := -1
 	for _, line := range lines[2:] {
+		if strings.TrimSpace(stripANSI(line)) == "" {
+			break
+		}
 		plain := []rune(stripANSI(line))
 		column := strings.Index(string(plain), " │")
 		column = len([]rune(string(plain)[:column]))

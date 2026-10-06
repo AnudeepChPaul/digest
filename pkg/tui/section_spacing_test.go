@@ -42,7 +42,7 @@ func TestSectionsAreEquallySpaced(t *testing.T) {
 	content, _ := m.dashboardContent()
 	lines := strings.Split(stripANSI(content), "\n")
 
-	for _, section := range []string{"Y E S T E R D A Y", "T O D A Y", "Added Today", "Closed Today", "Pending Git Actions", "Jobs"} {
+	for _, section := range []string{"G I T", "T O D A Y", "Added Today", "Closed Today", "Pending Git Actions", "Jobs"} {
 		if gap := blankLinesBefore(lines, lastLineContaining(lines, section)); gap != 2 {
 			t.Errorf("%q should have 2 blank lines before it, got %d", section, gap)
 		}

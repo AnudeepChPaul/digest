@@ -209,6 +209,7 @@ func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 		gitDaySectionMsg{generation: generation, day: gitDayYesterday},
 		gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}},
 		gitDaySectionMsg{generation: generation, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}},
+		gitMyPRsMsg{generation: generation, partOfSync: true},
 		commitsLoadedMsg{generation: m.commitsGeneration},
 	} {
 		next, cmd := m.Update(msg)

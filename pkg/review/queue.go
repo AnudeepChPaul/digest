@@ -14,6 +14,7 @@ var jiraKeyPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-[0-9]+\b`)
 type QueuedPR struct {
 	Ref               PRRef
 	Title             string
+	Body              string `json:",omitempty"`
 	Author            string
 	State             string
 	HeadSHA           string
@@ -37,6 +38,13 @@ type QueuedPR struct {
 	Files             []string
 	Approved          bool
 	JiraKey           string
+	Reviews           []PRReview `json:",omitempty"`
+}
+
+type PRReview struct {
+	Author      string
+	State       string
+	SubmittedAt time.Time
 }
 
 func (p QueuedPR) Size() int {
@@ -62,24 +70,25 @@ type commentNode struct {
 	Author    loginNode `json:"author"`
 }
 
-func isBot(login string) bool {
+func IsBot(login string) bool {
 	return strings.HasSuffix(login, "[bot]") || strings.HasPrefix(login, "copilot") || strings.HasPrefix(login, "svc-")
 }
 
 func (p *QueuedPR) applyReviews(viewer string, reviews []reviewNode) {
 	for _, review := range reviews {
+		p.Reviews = append(p.Reviews, PRReview{Author: review.Author.Login, State: review.State, SubmittedAt: review.SubmittedAt})
 		if review.Author.Login == viewer && review.SubmittedAt.After(p.MyLastReviewAt) {
 			p.MyLastReviewAt = review.SubmittedAt
 			p.MyLastReviewState = review.State
 		}
-		if review.State == "APPROVED" && !isBot(review.Author.Login) {
+		if review.State == "APPROVED" && !IsBot(review.Author.Login) {
 			p.Approved = true
 		}
 	}
 }
 
 func (p *QueuedPR) applyReply(viewer string, comment commentNode) {
-	if comment.Author.Login == viewer || isBot(comment.Author.Login) {
+	if comment.Author.Login == viewer || IsBot(comment.Author.Login) {
 		return
 	}
 	if comment.CreatedAt.After(p.LastReplyAt) {
@@ -94,14 +103,14 @@ func NeedsReReview(pr QueuedPR) bool {
 	return pr.LastCommitAt.After(pr.MyLastReviewAt) || pr.LastReplyAt.After(pr.MyLastReviewAt)
 }
 
-func SelectReReviews(reviewed, pending []QueuedPR) []QueuedPR {
+func SelectReReviews(reviewed, pending []QueuedPR, needsReReview func(QueuedPR) bool) []QueuedPR {
 	pendingURLs := make(map[string]bool, len(pending))
 	for _, pr := range pending {
 		pendingURLs[pr.Ref.URL] = true
 	}
 	var selected []QueuedPR
 	for _, pr := range reviewed {
-		if !pendingURLs[pr.Ref.URL] && NeedsReReview(pr) {
+		if !pendingURLs[pr.Ref.URL] && needsReReview(pr) {
 			selected = append(selected, pr)
 		}
 	}

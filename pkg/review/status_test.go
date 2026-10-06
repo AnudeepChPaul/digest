@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +72,16 @@ func TestStateOfFailed(t *testing.T) {
 	pr.Approved = true
 	if StateOf(pr, root) != StateApproved {
 		t.Errorf("approved should win over failed")
+	}
+}
+
+func TestNotificationArgsGroupUnderDigest(t *testing.T) {
+	withURL := strings.Join(notificationArgs("PR reviewed", "console #1", "https://x/pull/1"), " ")
+	if withURL != "-title digest -subtitle PR reviewed -message console #1 -open https://x/pull/1" {
+		t.Errorf("with url = %q", withURL)
+	}
+	withoutURL := strings.Join(notificationArgs("PR reviewed", "console #1", ""), " ")
+	if withoutURL != "-title digest -subtitle PR reviewed -message console #1" {
+		t.Errorf("without url = %q", withoutURL)
 	}
 }

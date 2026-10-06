@@ -29,6 +29,7 @@ type gitSyncCache struct {
 	CommitsYesterday  map[string][]GitPRItem     `json:"commits_yesterday"`
 	Details           map[string]json.RawMessage `json:"details,omitempty"`
 	PendingSort       *sourcecontrol.Sort        `json:"pending_sort,omitempty"`
+	MyPRs             []review.QueuedPR          `json:"my_prs,omitempty"`
 }
 
 var gitCachePath = func() string {
@@ -128,6 +129,7 @@ func (m *Model) gitCacheSnapshot() gitSyncCache {
 		CommitsToday:      m.localCommitsToday,
 		CommitsYesterday:  m.localCommitsYesterday,
 		Details:           m.listedPRDetails(),
+		MyPRs:             m.myPRs,
 	}
 	if m.pendingSortChosen {
 		activeSort := m.pendingSort
@@ -150,7 +152,7 @@ func (c gitSyncCache) hasDataFor(today time.Time) bool {
 	if c.Date != today.Format("2006-01-02") {
 		return false
 	}
-	return len(c.Pending)+len(c.ReviewedToday)+len(c.ReviewedYesterday)+len(c.CommitsToday)+len(c.CommitsYesterday) > 0
+	return len(c.Pending)+len(c.MyPRs)+len(c.ReviewedToday)+len(c.ReviewedYesterday)+len(c.CommitsToday)+len(c.CommitsYesterday) > 0
 }
 
 func (m *Model) mergePRDetails(details map[string]json.RawMessage) {
@@ -179,6 +181,7 @@ func (m *Model) applyGitCache(cache gitSyncCache) {
 	m.prDetails = cache.Details
 	allowedRepos := sourcecontrol.ConfiguredRepoNames(m.cfg)
 	m.ghPendingPRs = sourcecontrol.FilterPRItems(fromCachedItems(cache.Pending), allowedRepos)
+	m.myPRs = sourcecontrol.FilterQueuedPRs(cache.MyPRs, allowedRepos)
 	today := m.currentDate.Format("2006-01-02")
 	if cache.Date == today && cache.PreviousDay == m.fetchedPreviousDay.Format("2006-01-02") {
 		m.ghReviewedToday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedToday), allowedRepos)

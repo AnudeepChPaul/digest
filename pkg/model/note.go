@@ -23,6 +23,7 @@ const (
 	SourceStandup      Source = "standup"
 	SourceJournal      Source = "journal"
 	SourcePRReview     Source = "pr-review"
+	SourceMyPR         Source = "my-pr"
 )
 
 type Note struct {

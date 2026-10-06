@@ -70,6 +70,10 @@ func TestSectionsApplyIndependently(t *testing.T) {
 	if len(m.ghPendingPRs) != 1 || !m.loadingGit {
 		t.Fatalf("pending=%d loading=%v", len(m.ghPendingPRs), m.loadingGit)
 	}
+	m.applyMyPRs(gitMyPRsMsg{generation: generation, partOfSync: true})
+	if !m.loadingGit {
+		t.Fatalf("my PRs finished the sync early")
+	}
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, reviewed: []GitPRItem{reviewedItem("console", 2)}})
 	if len(m.ghReviewedToday) != 1 || m.loadingGit {
 		t.Fatalf("today=%d loading=%v", len(m.ghReviewedToday), m.loadingGit)

@@ -38,12 +38,16 @@ func StateOf(pr QueuedPR, root string) PRState {
 	}
 }
 
-var sendNotification = func(title, message, openURL string) error {
-	args := []string{"-title", title, "-message", message, "-group", openURL}
+func notificationArgs(title, message, openURL string) []string {
+	args := []string{"-title", "digest", "-subtitle", title, "-message", message}
 	if openURL != "" {
 		args = append(args, "-open", openURL)
 	}
-	return exec.Command("terminal-notifier", args...).Run()
+	return args
+}
+
+var sendNotification = func(title, message, openURL string) error {
+	return exec.Command("terminal-notifier", notificationArgs(title, message, openURL)...).Run()
 }
 
 func Notify(title, message, openURL string) error {

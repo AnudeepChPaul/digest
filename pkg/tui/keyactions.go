@@ -356,6 +356,10 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		_ = openURL(item.PendingGitPR.URL)
 		return m, nil
 	}
+	if item.Kind == KindMyPR && item.MyPR != nil {
+		_ = openURL(item.MyPR.Ref.URL)
+		return m, nil
+	}
 	if item.Note != nil {
 		return m.beginNoteEdit(item.Note, ViewDashboard)
 	}
@@ -366,6 +370,7 @@ func (m Model) inlineEditSelected(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if item, ok := m.selectedNavItem(); ok && item.Note != nil {
 		m.currentNote = item.Note
 		m.mode = ViewInlineEdit
+		m.inlineInput.Width = m.inlineEditWidth(item.Note)
 		m.inlineInput.SetValue(item.Note.Summary)
 		m.inlineInput.Focus()
 		return m, textinput.Blink
@@ -672,7 +677,7 @@ func (m Model) previewPrevious(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetReviewView()
 		m.updatePreviewViewport()
 	}
-	return m, nil
+	return m, m.changesSinceReviewCmd(m.currentPRItem())
 }
 
 func (m Model) previewNext(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -683,7 +688,7 @@ func (m Model) previewNext(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetReviewView()
 		m.updatePreviewViewport()
 	}
-	return m, nil
+	return m, m.changesSinceReviewCmd(m.currentPRItem())
 }
 
 func (m Model) copyPreviewItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -701,12 +706,38 @@ func (m Model) copyPreviewItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 			textToCopy = item.Draft.Name
 		}
 	} else if item.PendingGitPR != nil {
-		textToCopy = fmt.Sprintf("%s\n%s", item.PendingGitPR.Title, item.PendingGitPR.URL)
+		_, findings := m.loadFindings(item.PendingGitPR)
+		textToCopy = reviewCopyText(item.PendingGitPR, findings)
 	} else if item.GitRepo != nil {
 		textToCopy = item.GitRepo.Name
 	}
 	_ = copyToClipboard(strings.TrimSpace(textToCopy))
 	return m, nil
+}
+
+func reviewCopyText(item *GitPRItem, findings []review.Finding) string {
+	var text strings.Builder
+	fmt.Fprintf(&text, "%s\n%s", item.Title, item.URL)
+	if len(findings) > 0 {
+		text.WriteString("\n\n## Review findings\n")
+	}
+	for _, group := range review.GroupBySeverity(findings) {
+		fmt.Fprintf(&text, "\n### %s (%d)\n\n", strings.ToUpper(group.Severity), len(group.Findings))
+		for _, finding := range group.Findings {
+			fmt.Fprintf(&text, "- **%s**", finding.Title)
+			if finding.Path != "" {
+				fmt.Fprintf(&text, " — `%s:%d`", finding.Path, finding.Line)
+			}
+			text.WriteString("\n")
+			if finding.Body != "" {
+				text.WriteString(indent(strings.TrimSpace(finding.Body), "  ") + "\n")
+			}
+			if finding.Suggestion != "" {
+				text.WriteString(indent("Suggestion: "+strings.TrimSpace(finding.Suggestion), "  ") + "\n")
+			}
+		}
+	}
+	return strings.TrimSpace(text.String())
 }
 
 func (m Model) previewStop(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -743,6 +774,14 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.deleteTargetNotes = nil
 		m.deleteReturnMode = ViewPreview
 		m.mode = ViewDeleteConfirm
+		return m, nil
+	}
+	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
+		_ = openURL(item.PendingGitPR.URL)
+		return m, nil
+	}
+	if item.Kind == KindMyPR && item.MyPR != nil {
+		_ = openURL(item.MyPR.Ref.URL)
 		return m, nil
 	}
 	if prURL := prReviewNoteURL(item.Note); prURL != "" {
@@ -969,6 +1008,9 @@ func (m Model) saveNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	m.currentNote.Summary = summary
 	m.currentNote.Body = body
+	if m.currentNote.ID == "" {
+		m.selectAfterReload = pendingNewNote
+	}
 
 	m.mode = m.returnFromEdit()
 	return m, m.saveNotesCmd(m.currentNote)

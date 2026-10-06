@@ -239,3 +239,38 @@ func TestParsePRDetailsFlagsExplicitViewerRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestBodySearchUsesMyPRFragmentOnly(t *testing.T) {
+	query := buildSearchQuery([]PRSearch{
+		{Key: "mine0", Query: "is:pr author:@me", First: 5, Details: true, Body: true},
+		{Key: "pending0", Query: "is:pr review-requested:@me", First: 5, Details: true},
+	})
+	for _, want := range []string{"fragment PRFields on PullRequest", "fragment MyPRFields on PullRequest { ...PRFields body }", "{ ...MyPRFields }", "{ ...PRFields }"} {
+		if !strings.Contains(query, want) {
+			t.Errorf("query missing %q:\n%s", want, query)
+		}
+	}
+	if withoutBody := buildSearchQuery([]PRSearch{{Key: "pending0", Query: "q", First: 5, Details: true}}); strings.Contains(withoutBody, "MyPRFields") {
+		t.Errorf("unused MyPRFields fragment makes GitHub reject the query:\n%s", withoutBody)
+	}
+}
+
+func TestRunPRSearchesDecodesBodyAndReviews(t *testing.T) {
+	node := strings.Replace(samplePRNode, `"number": 6,`, `"number": 6, "body": "Fixes the picker",`, 1)
+	node = strings.Replace(node, `{"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-10-01T12:00:00Z"}`,
+		`{"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-10-01T12:00:00Z"}, {"author": {"login": "alice"}, "state": "APPROVED", "submittedAt": "2026-10-02T08:00:00Z"}`, 1)
+	stubGraphQL(t, func(host, query string) string {
+		return `{"data": {"viewer": {"login": "me"}, "mine0": {"nodes": [` + node + `]}}}`
+	})
+	results, err := RunPRSearches(context.Background(), "github.com", []PRSearch{{Key: "mine0", Kind: "mine", Query: "q", First: 5, Details: true, Body: true}})
+	if err != nil || len(results) != 1 || len(results[0].PRs) != 1 {
+		t.Fatalf("results=%+v err=%v", results, err)
+	}
+	pr := results[0].PRs[0]
+	if pr.Body != "Fixes the picker" {
+		t.Errorf("body = %q", pr.Body)
+	}
+	if len(pr.Reviews) != 2 || pr.Reviews[1].Author != "alice" || pr.Reviews[1].State != "APPROVED" || pr.Reviews[1].SubmittedAt.IsZero() {
+		t.Errorf("reviews = %+v", pr.Reviews)
+	}
+}

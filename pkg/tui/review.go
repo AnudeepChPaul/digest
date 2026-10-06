@@ -209,7 +209,7 @@ func shortAge(d time.Duration) string {
 }
 
 func (m Model) renderPRTag(item *GitPRItem, selected bool) string {
-	return joinTags(m.prTags(item, selected))
+	return underlinedWhen(selected, joinTags(m.prTags(item)))
 }
 
 func (m Model) renderPreviewTabs() string {
@@ -420,6 +420,7 @@ func (m Model) renderDetailsMarkdown(item *GitPRItem) string {
 	if !pr.MyLastReviewAt.IsZero() {
 		fmt.Fprintf(&b, "- **Your last review:** %s ago\n", shortAge(now.Sub(pr.MyLastReviewAt)))
 	}
+	b.WriteString(m.changesSinceReviewMarkdown(item))
 	if len(pr.Files) > 0 {
 		b.WriteString("\n## Changed files\n\n")
 		for _, file := range pr.Files {
@@ -507,10 +508,10 @@ func (m Model) renderReviewContent(item *GitPRItem, width int) (string, int) {
 					box = checkDone.String()
 				}
 				pointer := "  "
-				title := finding.Title
+				title := itemStyle.Render(finding.Title)
 				if index == m.reviewCursor {
 					pointer = cursorStyle.Render("▸ ")
-					title = selectedSummaryStyle.Render(title)
+					title = selectedTitle(finding.Title)
 					cursorLine = lineCount()
 				}
 				location := ""
@@ -812,7 +813,7 @@ func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int
 	label := reviewRunLabel(run)
 	labelText := itemStyle.Render(label)
 	if selected {
-		labelText = selectedSummaryStyle.Render(label)
+		labelText = selectedTitle(label)
 	}
 	leftBlock := fmt.Sprintf("%s%s %s", prefix, icon, labelText)
 	leftPadding := max(leftWidth-lipgloss.Width(leftBlock), 0)
@@ -820,7 +821,7 @@ func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int
 	if run.Status == review.RunRunning {
 		rightBlock = m.renderReviewRunningIndicator()
 	}
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), rightBlock)
+	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
 }
 
 func reviewRunPreview(root string, run review.ReviewRun) string {

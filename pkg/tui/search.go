@@ -412,7 +412,7 @@ func (m Model) renderSearchRow(note *model.Note, selected bool, query searchQuer
 	summaryWidth := max(5, width-summaryIndent-ansi.StringWidth(trailingText)-1)
 	summary := ansi.Truncate(note.Summary, summaryWidth, "…")
 	gap := max(1, summaryWidth-ansi.StringWidth(summary)+1)
-	row := marker + dateColumn + "  " + highlightMatches(summary, query.words, summaryStyle) + safeRepeat(" ", gap) + trailingText
+	row := marker + dateColumn + "  " + underlinedWhen(selected, highlightMatches(summary, query.words, summaryStyle)) + safeRepeat(" ", gap) + underlinedWhen(selected, trailingText)
 
 	snippet, found := bodySnippet(note.Body, query.words, min(searchSnippetWidth, max(8, width-summaryIndent)))
 	if !found {

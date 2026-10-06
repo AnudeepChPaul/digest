@@ -268,6 +268,7 @@ func TestSyncTrimsPRDetailsToListedPRs(t *testing.T) {
 		gitDaySectionMsg{generation: generation, day: gitDayYesterday},
 		gitDaySectionMsg{generation: generation, day: gitDayToday, date: m.currentDate.Format("2006-01-02")},
 		gitPendingMsg{generation: generation, pending: []GitPRItem{listed}, details: map[string]json.RawMessage{listed.URL: json.RawMessage(`{}`)}},
+		gitMyPRsMsg{generation: generation, partOfSync: true},
 		commitsLoadedMsg{generation: m.commitsGeneration},
 	} {
 		m = update(m, msg)

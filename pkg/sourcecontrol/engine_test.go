@@ -3,6 +3,7 @@ package sourcecontrol
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -241,5 +242,135 @@ func TestSyncFetchesThePreviousDayGiven(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no search from the previous day: %+v", *recorded)
+	}
+}
+
+func TestFetchMyPRsSearchesOpenAuthoredPRsWithBodyPerRepo(t *testing.T) {
+	cfg := engineConfig(t, 0)
+	recorded := stubEngineGitHub(t, []string{"git.example.com"}, func(host string, search review.PRSearch) review.SearchResult {
+		if !strings.Contains(search.Query, "repo:team/service") {
+			return review.SearchResult{}
+		}
+		pr := queued(7, func(pr *review.QueuedPR) { pr.Body = "desc" })
+		return review.SearchResult{Refs: []review.PRRef{pr.Ref}, PRs: []review.QueuedPR{pr}}
+	})
+	result := NewEngine(cfg).FetchMyPRs(context.Background(), nil)
+	if result.Err != nil || len(result.PRs) != 1 || result.PRs[0].Body != "desc" {
+		t.Fatalf("result = %+v", result)
+	}
+	searches := (*recorded)[0].searches
+	if len(searches) != 2 {
+		t.Fatalf("want one search per monitored repo, got %+v", searches)
+	}
+	for _, search := range searches {
+		if search.Kind != myPRsSearch || !search.Details || !search.Body || !strings.Contains(search.Query, "is:pr is:open author:@me") || !strings.Contains(search.Query, "repo:team/") {
+			t.Errorf("search = %+v", search)
+		}
+	}
+}
+
+func TestFetchMyPRsLooksUpKnownPRsThatLeftTheOpenSearch(t *testing.T) {
+	cfg := engineConfig(t, 0)
+	stillOpen := queued(7, nil)
+	stubEngineGitHub(t, []string{"git.example.com"}, func(host string, search review.PRSearch) review.SearchResult {
+		if !strings.Contains(search.Query, "repo:team/service") {
+			return review.SearchResult{}
+		}
+		return review.SearchResult{Refs: []review.PRRef{stillOpen.Ref}, PRs: []review.QueuedPR{stillOpen}}
+	})
+	var lookedUp []review.PRRef
+	original := fetchPRStates
+	fetchPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		lookedUp = refs
+		return map[string]string{prRefOn("git.example.com", 8).URL: "MERGED"}, nil
+	}
+	t.Cleanup(func() { fetchPRStates = original })
+	result := NewEngine(cfg).FetchMyPRs(context.Background(), []review.PRRef{stillOpen.Ref, prRefOn("git.example.com", 8)})
+	if len(lookedUp) != 1 || lookedUp[0].Number != 8 {
+		t.Errorf("looked up %+v, want only #8", lookedUp)
+	}
+	if result.Closed[prRefOn("git.example.com", 8).URL] != "MERGED" || len(result.Closed) != 1 {
+		t.Errorf("closed = %+v", result.Closed)
+	}
+}
+
+func TestFetchMyPRsSkipsClosedLookupWhenSearchFailed(t *testing.T) {
+	cfg := engineConfig(t, 0)
+	originalHosts := listGHHosts
+	listGHHosts = func(ctx context.Context) ([]string, error) { return nil, errors.New("offline") }
+	t.Cleanup(func() { listGHHosts = originalHosts })
+	called := false
+	original := fetchPRStates
+	fetchPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		called = true
+		return nil, nil
+	}
+	t.Cleanup(func() { fetchPRStates = original })
+	result := NewEngine(cfg).FetchMyPRs(context.Background(), []review.PRRef{prRefOn("git.example.com", 8)})
+	if result.Err == nil || called || len(result.Closed) != 0 {
+		t.Errorf("failed search must not mark known PRs closed: %+v called=%v", result, called)
+	}
+}
+
+func TestSyncSendsMyPRsSection(t *testing.T) {
+	cfg := engineConfig(t, 20)
+	stubEngineGitHub(t, []string{"git.example.com"}, func(host string, search review.PRSearch) review.SearchResult {
+		if search.Kind != myPRsSearch || !strings.Contains(search.Query, "repo:team/service") {
+			return review.SearchResult{}
+		}
+		pr := queued(9, nil)
+		return review.SearchResult{Refs: []review.PRRef{pr.Ref}, PRs: []review.QueuedPR{pr}}
+	})
+	var mine *MyPRsResult
+	count := 0
+	for section := range Sync(context.Background(), SyncParams{Config: cfg, Today: time.Now()}) {
+		count++
+		if section.MyPRs != nil {
+			mine = section.MyPRs
+		}
+	}
+	if count != SectionCount || mine == nil || len(mine.PRs) != 1 || mine.PRs[0].Ref.Number != 9 {
+		t.Errorf("sections=%d mine=%+v", count, mine)
+	}
+}
+
+func TestLoadPendingMarksPRsWithOutdatedLocalReviewAsReReview(t *testing.T) {
+	cfg := engineConfig(t, 20)
+	requested := queued(1, func(pr *review.QueuedPR) { pr.HeadSHA = "new" })
+	reviewedQuiet := queued(3, func(pr *review.QueuedPR) {
+		pr.HeadSHA, pr.MyLastReviewAt, pr.LastCommitAt = "moved", time.Now(), time.Now().Add(-time.Hour)
+	})
+	for _, pr := range []review.QueuedPR{requested, reviewedQuiet} {
+		dir := review.StateDir(cfg.ReviewRootDir(), pr.Ref)
+		if err := review.WriteMeta(dir, review.Meta{Ref: pr.Ref, HeadSHA: "old"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, review.FindingsFile), []byte(`{"findings":[]}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubEngineGitHub(t, []string{"git.example.com"}, func(host string, search review.PRSearch) review.SearchResult {
+		if !strings.Contains(search.Query, "repo:team/service") {
+			return review.SearchResult{}
+		}
+		switch search.Kind {
+		case "pending":
+			return review.SearchResult{Refs: []review.PRRef{requested.Ref}, PRs: []review.QueuedPR{requested}}
+		case "direct":
+			return review.SearchResult{}
+		default:
+			return review.SearchResult{Refs: []review.PRRef{reviewedQuiet.Ref}, PRs: []review.QueuedPR{reviewedQuiet}}
+		}
+	})
+	items, _, _, err := NewEngine(cfg).loadPending(context.Background(), Sort{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[int]string{}
+	for _, item := range items {
+		kinds[item.Number] = item.Kind
+	}
+	if kinds[1] != ReReviewKind || kinds[3] != ReReviewKind {
+		t.Errorf("kinds = %v; both PRs moved past the local review", kinds)
 	}
 }

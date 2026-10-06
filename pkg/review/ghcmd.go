@@ -58,6 +58,7 @@ func ciStateFromChecks(checks []checkRun) string {
 type prDetails struct {
 	Number            int                 `json:"number"`
 	Title             string              `json:"title"`
+	Body              string              `json:"body,omitempty"`
 	URL               string              `json:"url"`
 	State             string              `json:"state"`
 	IsDraft           bool                `json:"isDraft"`
@@ -105,6 +106,7 @@ func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
 	pr := QueuedPR{
 		Ref:            ref,
 		Title:          details.Title,
+		Body:           details.Body,
 		Author:         details.Author.Login,
 		State:          details.State,
 		HeadSHA:        details.HeadRefOid,

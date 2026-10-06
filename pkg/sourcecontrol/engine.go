@@ -27,6 +27,7 @@ type Engine struct {
 var (
 	listGHHosts   = review.GHHosts
 	runPRSearches = review.RunPRSearches
+	fetchPRStates = review.FetchPRStates
 )
 
 func NewEngine(cfg *config.Config) *Engine {
@@ -50,12 +51,14 @@ const (
 	reviewedSearch = "reviewed"
 	openedSearch   = "opened"
 	mergedSearch   = "merged"
+	myPRsSearch    = "mine"
 )
 
 type searchKind struct {
 	key     string
 	query   string
 	details bool
+	body    bool
 }
 
 type hostSearches struct {
@@ -79,7 +82,7 @@ func (e *Engine) planSearches(hosts []string, kinds []searchKind) []hostSearches
 				if repo != "" {
 					query += " repo:" + repo
 				}
-				searches = append(searches, review.PRSearch{Key: fmt.Sprintf("%s%d", kind.key, index), Kind: kind.key, Query: query, First: perRepo, Details: kind.details})
+				searches = append(searches, review.PRSearch{Key: fmt.Sprintf("%s%d", kind.key, index), Kind: kind.key, Query: query, First: perRepo, Details: kind.details, Body: kind.body})
 			}
 		}
 		if len(searches) > 0 {
@@ -188,14 +191,19 @@ func (e *Engine) loadPending(ctx context.Context, activeSort Sort) ([]PRItem, ma
 		pr.CodeOwner = !outcome.urls[directSearch][pr.Ref.URL]
 		queue = append(queue, pr)
 	}
-	reReviews := review.SelectReReviews(FilterQueuedPRs(outcome.prs[reReviewSearch], allowedRepos), queue)
-
 	root := reviewRoot(cfg)
+	reReviews := review.SelectReReviews(FilterQueuedPRs(outcome.prs[reReviewSearch], allowedRepos), queue, func(pr review.QueuedPR) bool {
+		return review.NeedsReReview(pr) || review.LocalReviewOutdated(root, pr)
+	})
 	_ = review.NotifyTransitions(append(append([]review.QueuedPR(nil), queue...), reReviews...), root, filepath.Join(root, ".state", "approved-seen.json"))
 
 	var items []PRItem
 	for _, pr := range review.VisibleRanked(queue, cfg.GreenOnly) {
-		items = append(items, NewPRItem(pr, PendingReviewKind))
+		kind := PendingReviewKind
+		if review.LocalReviewOutdated(root, pr) {
+			kind = ReReviewKind
+		}
+		items = append(items, NewPRItem(pr, kind))
 	}
 	for _, pr := range review.VisibleRanked(reReviews, false) {
 		items = append(items, NewPRItem(pr, ReReviewKind))
@@ -250,6 +258,48 @@ func (e *Engine) AuthoredPRs(ctx context.Context, start, end time.Time) ([]revie
 	})
 	allowedRepos := ConfiguredRepoNames(e.cfg)
 	return FilterQueuedPRs(outcome.prs[openedSearch], allowedRepos), FilterQueuedPRs(outcome.prs[mergedSearch], allowedRepos), outcome.err
+}
+
+func (e *Engine) FetchMyPRs(ctx context.Context, known []review.PRRef) MyPRsResult {
+	result := MyPRsResult{StartedAt: time.Now()}
+	if e.cfg == nil {
+		return result
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, ghTimeout)
+	defer cancel()
+	outcome := e.search(fetchCtx, []searchKind{
+		{key: myPRsSearch, query: "is:pr is:open author:@me " + Sort{}.qualifier(), details: true, body: true},
+	})
+	result.FailedHosts, result.Err = outcome.failedHosts, outcome.err
+	allowedRepos := ConfiguredRepoNames(e.cfg)
+	result.PRs = FilterQueuedPRs(outcome.prs[myPRsSearch], allowedRepos)
+	if len(outcome.urls[myPRsSearch]) == 0 && outcome.err != nil {
+		return result
+	}
+	failedHosts := map[string]bool{}
+	for _, host := range outcome.failedHosts {
+		failedHosts[host] = true
+	}
+	var gone []review.PRRef
+	for _, ref := range known {
+		if !outcome.urls[myPRsSearch][ref.URL] && !failedHosts[ref.Host] && RepoNameAllowed(ref.Repo, allowedRepos) {
+			gone = append(gone, ref)
+		}
+	}
+	if len(gone) == 0 {
+		return result
+	}
+	states, err := fetchPRStates(fetchCtx, gone)
+	result.Err = errors.Join(result.Err, err)
+	for url, state := range states {
+		if state == "MERGED" || state == "CLOSED" {
+			if result.Closed == nil {
+				result.Closed = map[string]string{}
+			}
+			result.Closed[url] = state
+		}
+	}
+	return result
 }
 
 func sameLocalDay(first, second time.Time) bool {

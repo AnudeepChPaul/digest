@@ -326,11 +326,11 @@ func TestSelectedBragRowHighlightsOnlyTitleAndStatus(t *testing.T) {
 	if !strings.HasPrefix(line, "     \x1b[") {
 		t.Errorf("indent should stay unstyled: %q", line)
 	}
-	if !strings.Contains(line, selectedSummaryStyle.Render("Week 40 · 28 Sep – 04 Oct")+" ") {
+	if !strings.Contains(line, selectedTitle("Week 40 · 28 Sep – 04 Oct")+" ") {
 		t.Errorf("title should be highlighted and followed by a plain gap: %q", line)
 	}
-	if !strings.HasSuffix(line, selectedSummaryStyle.Render(m.bragStateLabel(row))) {
-		t.Errorf("status should be highlighted: %q", line)
+	if !strings.HasSuffix(line, underlined(m.renderBragStatus(row, false))) {
+		t.Errorf("status should keep its colour and be underlined: %q", line)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,8 @@ const prFieldsFragment = `fragment PRFields on PullRequest {
   files(first: 100) { nodes { path } }
 }
 `
+
+const myPRFieldsFragment = "fragment MyPRFields on PullRequest { ...PRFields body }\n"
 
 var runGraphQL = func(ctx context.Context, host, query string) ([]byte, error) {
 	body, err := json.Marshal(map[string]string{"query": query})
@@ -109,6 +112,7 @@ type PRSearch struct {
 	Query   string
 	First   int
 	Details bool
+	Body    bool
 }
 
 type SearchResult struct {
@@ -121,17 +125,20 @@ type SearchResult struct {
 
 func buildSearchQuery(searches []PRSearch) string {
 	var query strings.Builder
-	for _, search := range searches {
-		if search.Details {
-			query.WriteString(prFieldsFragment)
-			break
-		}
+	if slices.ContainsFunc(searches, func(search PRSearch) bool { return search.Details }) {
+		query.WriteString(prFieldsFragment)
+	}
+	if slices.ContainsFunc(searches, func(search PRSearch) bool { return search.Details && search.Body }) {
+		query.WriteString(myPRFieldsFragment)
 	}
 	query.WriteString("query {\n  viewer { login }\n")
 	for _, search := range searches {
 		selection := "url"
 		if search.Details {
 			selection = "...PRFields"
+		}
+		if search.Details && search.Body {
+			selection = "...MyPRFields"
 		}
 		fmt.Fprintf(&query, "  %s: search(type: ISSUE, first: %d, query: %s) { nodes { ... on PullRequest { %s } } }\n", search.Key, search.First, graphQLString(search.Query), selection)
 	}
@@ -267,6 +274,7 @@ func (result *SearchResult) decode(raw json.RawMessage, details bool, viewer str
 type graphPR struct {
 	Number         int       `json:"number"`
 	Title          string    `json:"title"`
+	Body           string    `json:"body"`
 	URL            string    `json:"url"`
 	State          string    `json:"state"`
 	IsDraft        bool      `json:"isDraft"`
@@ -311,6 +319,7 @@ func (pr graphPR) toDetails() prDetails {
 	details := prDetails{
 		Number:         pr.Number,
 		Title:          pr.Title,
+		Body:           pr.Body,
 		URL:            pr.URL,
 		State:          pr.State,
 		IsDraft:        pr.IsDraft,

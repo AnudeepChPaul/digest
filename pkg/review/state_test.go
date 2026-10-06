@@ -126,3 +126,32 @@ func TestListRunsMissingRoot(t *testing.T) {
 		t.Errorf("runs = %v", runs)
 	}
 }
+
+func writeLocalReview(t *testing.T, root string, ref PRRef, headSHA string) {
+	t.Helper()
+	dir := StateDir(root, ref)
+	if err := WriteMeta(dir, Meta{Ref: ref, HeadSHA: headSHA}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FindingsFile), []byte(`{"findings":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, exitFile), []byte("0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalReviewOutdated(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Host: "github.com", Owner: "o", Repo: "r", Number: 1, URL: "https://github.com/o/r/pull/1"}
+	if LocalReviewOutdated(root, QueuedPR{Ref: ref, HeadSHA: "new"}) {
+		t.Error("no local review must not be outdated")
+	}
+	writeLocalReview(t, root, ref, "old")
+	if !LocalReviewOutdated(root, QueuedPR{Ref: ref, HeadSHA: "new"}) {
+		t.Error("head moved since the local review")
+	}
+	if LocalReviewOutdated(root, QueuedPR{Ref: ref, HeadSHA: "old"}) || LocalReviewOutdated(root, QueuedPR{Ref: ref}) {
+		t.Error("same or unknown head must not be outdated")
+	}
+}

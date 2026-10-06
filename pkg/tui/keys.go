@@ -306,6 +306,10 @@ func (m Model) previewBindings() []keyBinding {
 			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "dismiss").shownWhen(!running),
 			hiddenKeyBinding(actionPreviewEnter, "enter"),
 		}, previewTailBindings()...)
+	case item.Kind == KindMyPR && item.MyPR != nil:
+		return append([]keyBinding{
+			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"),
+		}, previewTailBindings()...)
 	case item.Kind == KindJobDraft && item.Draft != nil:
 		running := m.jobRunning(item.Draft.Name)
 		return append([]keyBinding{
@@ -353,8 +357,10 @@ func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
 			newKeyBinding(actionSelectAllFindings, []string{"ctrl+a"}, "ctrl+a", "all"),
 		)
 	}
-	if onReviewTab {
-		bindings = append(bindings, newKeyBinding(actionPostReview, []string{"enter"}, "enter", "post review").shownWhen(m.selectedCount() > 0))
+	if onReviewTab && m.selectedCount() > 0 {
+		bindings = append(bindings, newKeyBinding(actionPostReview, []string{"enter"}, "enter", "post review"))
+	} else {
+		bindings = append(bindings, newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"))
 	}
 	bindings = append(bindings,
 		newKeyBinding(actionApprove, []string{"a", "y"}, "a|y", "approve"),

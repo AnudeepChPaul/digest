@@ -374,9 +374,9 @@ func (m Model) renderBragRow(row bragRow, selected bool, width int) string {
 		indent, titleStyle = "   ", bragMonthStyle
 	}
 	if selected {
-		titleStyle = selectedSummaryStyle
+		titleStyle = titleStyle.Copy().Bold(true)
 	}
-	left := indent + titleStyle.Render(row.title())
+	left := indent + underlinedWhen(selected, titleStyle.Render(row.title()))
 	right := m.renderBragStatus(row, selected)
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return left + safeRepeat(" ", gap) + right
@@ -387,19 +387,14 @@ func (m Model) renderBragStatus(row bragRow, selected bool) string {
 	if label == "" {
 		return ""
 	}
+	return underlinedWhen(selected, m.bragStatusCell(row, label))
+}
+
+func (m Model) bragStatusCell(row bragRow, label string) string {
 	if label == "Bragging..." {
-		if selected {
-			return m.renderPulseDot() + " " + selectedSummaryStyle.Render(label)
-		}
 		return m.renderPulseIndicator(label)
 	}
 	failed := m.bragRowStateFor(row.period).failed
-	if selected {
-		if failed {
-			label += " · last run failed"
-		}
-		return selectedSummaryStyle.Render(label)
-	}
 	switch {
 	case label == "View your brag":
 		return bragDoneStyle.Render(label)
@@ -499,7 +494,7 @@ func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
 	leftWidth := max(width-rightColWidth, 15)
 	labelText := itemStyle.Render(bragRunLabel(run))
 	if selected {
-		labelText = selectedSummaryStyle.Render(bragRunLabel(run))
+		labelText = selectedTitle(bragRunLabel(run))
 	}
 	leftBlock := fmt.Sprintf("   %s %s", amberDiamond.Render(), labelText)
 	leftPadding := max(leftWidth-lipgloss.Width(leftBlock), 0)
@@ -507,7 +502,7 @@ func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
 	if run.Status == brag.RunRunning {
 		rightBlock = m.renderPulseIndicator("bragging...")
 	}
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), rightBlock)
+	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
 }
 
 func bragRunPreview(root string, run brag.Run) string {

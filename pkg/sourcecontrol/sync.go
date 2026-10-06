@@ -6,20 +6,24 @@ import (
 	"time"
 
 	"app/pkg/config"
+	"app/pkg/review"
 )
+
+const SectionCount = 4
 
 type SyncParams struct {
 	Config      *config.Config
 	Today       time.Time
 	PreviousDay time.Time
 	Sort        Sort
+	KnownMyPRs  []review.PRRef
 }
 
 func Sync(ctx context.Context, params SyncParams) <-chan Section {
 	engine := NewEngine(params.Config)
-	sections := make(chan Section, 3)
+	sections := make(chan Section, SectionCount)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(SectionCount)
 	sendDay := func(day Day, date time.Time) {
 		defer wg.Done()
 		result := engine.FetchDay(ctx, day, date)
@@ -35,6 +39,11 @@ func Sync(ctx context.Context, params SyncParams) <-chan Section {
 		defer wg.Done()
 		result := engine.FetchPendingPRs(ctx, params.Sort)
 		sections <- Section{Pending: &result}
+	}()
+	go func() {
+		defer wg.Done()
+		result := engine.FetchMyPRs(ctx, params.KnownMyPRs)
+		sections <- Section{MyPRs: &result}
 	}()
 	go func() {
 		wg.Wait()
