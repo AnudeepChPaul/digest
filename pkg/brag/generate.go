@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var commandWaitDelay = 2 * time.Second
 
+var bragCommandTimeout = 5 * time.Minute
+
 var runBragCommand = func(ctx context.Context, command, input string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.WaitDelay = commandWaitDelay
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Stdin = strings.NewReader(input)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -29,7 +34,12 @@ var runBragCommand = func(ctx context.Context, command, input string) (string, e
 }
 
 func GenerateSummary(ctx context.Context, command, prompt string, period Period, facts string) (string, error) {
-	output, err := runBragCommand(ctx, command, prompt+"\n\n"+factsHeading+"\n\n"+facts+"\n")
+	commandCtx, cancel := context.WithTimeout(ctx, bragCommandTimeout)
+	defer cancel()
+	output, err := runBragCommand(commandCtx, command, prompt+"\n\n"+factsHeading+"\n\n"+facts+"\n")
+	if errors.Is(commandCtx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("brag command timed out after %s", bragCommandTimeout)
+	}
 	if err != nil {
 		return "", err
 	}

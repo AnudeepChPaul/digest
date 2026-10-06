@@ -144,10 +144,13 @@ func TestBragPromptsAcceptStringOrList(t *testing.T) {
 	}
 }
 
-func TestBragDefaultsArePlainClaude(t *testing.T) {
+func TestBragDefaultsAreIsolatedClaude(t *testing.T) {
 	var nilConfig *Config
-	if nilConfig.BragCommandTemplate() != "claude -p" {
-		t.Errorf("default command = %q", nilConfig.BragCommandTemplate())
+	command := nilConfig.BragCommandTemplate()
+	for _, flag := range []string{"claude -p", `--tools ""`, `--setting-sources ""`, "--strict-mcp-config", "--permission-prompts none", "--disable-slash-commands"} {
+		if !strings.Contains(command, flag) {
+			t.Errorf("default command %q missing %s", command, flag)
+		}
 	}
 	for _, kind := range []PromptKind{PromptWeek, PromptMonth, PromptYear} {
 		if strings.TrimSpace(nilConfig.BragPrompt(kind)) == "" {

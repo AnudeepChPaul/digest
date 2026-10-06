@@ -46,6 +46,16 @@ func reviewEntries(note *model.Note) []reviewEntry {
 	return entries
 }
 
+func noteFact(note *model.Note) string {
+	lines := []string{"- " + note.Summary}
+	for _, line := range strings.Split(note.Body, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, "  "+trimmed)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func BuildFacts(week Week, sources Sources) string {
 	var completed, started []string
 	var reviews []reviewEntry
@@ -64,9 +74,9 @@ func BuildFacts(week Week, sources Sources) string {
 		finished := note.Status == model.StatusDone || note.Status == model.StatusArchived
 		switch {
 		case finished && week.Contains(note.Updated):
-			completed = append(completed, "- "+note.Summary)
+			completed = append(completed, noteFact(note))
 		case !finished && week.Contains(note.Created):
-			started = append(started, "- "+note.Summary)
+			started = append(started, noteFact(note))
 		}
 	}
 	sort.SliceStable(reviews, func(i, j int) bool { return reviews[i].at.Before(reviews[j].at) })

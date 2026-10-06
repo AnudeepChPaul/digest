@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"app/pkg/brag"
 	"app/pkg/config"
@@ -171,7 +173,9 @@ func main() {
 		}
 		fmt.Printf("Bragging about %s into %s...\n", period.Label(), period.Path(cfg.BragDir()))
 		loadNotes := func() ([]*model.Note, error) { return store.New(cfg.NotesDir()).List() }
-		err = brag.RunJob(context.Background(), cfg, period, *regenerate, loadNotes)
+		signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		err = brag.RunJob(signalCtx, cfg, period, *regenerate, loadNotes)
+		stopSignals()
 		if err == nil {
 			fmt.Println("Done.")
 		}

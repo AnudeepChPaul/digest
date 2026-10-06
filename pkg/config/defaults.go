@@ -12,7 +12,7 @@ var DefaultJanitorPatterns = []string{
 
 const DefaultDigestRoot = "~/digest"
 
-const DefaultBragCommand = "claude -p"
+const DefaultBragCommand = `claude -p --tools "" --setting-sources "" --strict-mcp-config --permission-prompts none --disable-slash-commands`
 
 const DefaultWeekBragPrompt = `Below are facts about my work for one ISO week. They are the only source of truth; never invent work, metrics or people.
 Write a concise, impact-focused brag summary as grouped bullet points under a '## Summary' heading. Do not repeat the facts verbatim. Output only markdown.`

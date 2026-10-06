@@ -129,6 +129,29 @@ func TestBuildFacts(t *testing.T) {
 	}
 }
 
+func TestBuildFactsIncludesNoteBodies(t *testing.T) {
+	week := WeekOf(localDate(2026, 9, 30))
+	inWeek := localDate(2026, 10, 1)
+	notes := []*model.Note{
+		{Summary: "Debugged WFM", Status: model.StatusDone, Source: model.SourceManual, Updated: inWeek, Body: "\nhttps://jira/PROJ-1\n\n  Findings in slack thread  \n"},
+		{Summary: "Draft RFC", Status: model.StatusActive, Source: model.SourceManual, Created: inWeek, Updated: inWeek, Body: "Outline ready"},
+		{Summary: "No details", Status: model.StatusDone, Source: model.SourceManual, Updated: inWeek},
+	}
+	facts := BuildFacts(week, Sources{Notes: notes})
+	for _, want := range []string{
+		"- Debugged WFM\n  https://jira/PROJ-1\n  Findings in slack thread\n",
+		"- Draft RFC\n  Outline ready",
+		"- No details",
+	} {
+		if !strings.Contains(facts, want) {
+			t.Errorf("facts missing %q:\n%s", want, facts)
+		}
+	}
+	if strings.Contains(facts, "\n  \n") || strings.Contains(facts, "- No details\n  ") {
+		t.Errorf("facts include blank body lines:\n%s", facts)
+	}
+}
+
 func TestGenerateSummaryKeepsOurFacts(t *testing.T) {
 	original := runBragCommand
 	var stdin string
@@ -149,6 +172,50 @@ func TestGenerateSummaryKeepsOurFacts(t *testing.T) {
 	runBragCommand = func(ctx context.Context, command, input string) (string, error) { return "   ", nil }
 	if _, err := GenerateSummary(context.Background(), "x", "p", week, "f"); err == nil {
 		t.Errorf("empty output should fail")
+	}
+}
+
+func TestGenerateSummaryTimesOutHungCommand(t *testing.T) {
+	originalCommand, originalTimeout := runBragCommand, bragCommandTimeout
+	defer func() { runBragCommand, bragCommandTimeout = originalCommand, originalTimeout }()
+	bragCommandTimeout = 50 * time.Millisecond
+	runBragCommand = func(ctx context.Context, command, input string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	started := time.Now()
+	_, err := GenerateSummary(context.Background(), "x", "p", WeekOf(localDate(2026, 10, 1)), "f")
+	if err == nil || !strings.Contains(err.Error(), "timed out after") {
+		t.Errorf("hung command err = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("timeout took %v", elapsed)
+	}
+}
+
+func TestRunBragCommandKillsChildrenOnCancel(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := runBragCommand(ctx, `sleep 30 & echo $! > "`+pidFile+`"; wait`, ""); err == nil {
+		t.Fatal("cancelled command should fail")
+	}
+	childPID, ok := readInt(pidFile)
+	if !ok {
+		t.Fatal("child pid not recorded")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for processAlive(childPID) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if processAlive(childPID) {
+		t.Errorf("child %d still running after cancel", childPID)
+	}
+}
+
+func TestDefaultBragTimeoutIsFiveMinutes(t *testing.T) {
+	if bragCommandTimeout != 5*time.Minute {
+		t.Errorf("brag timeout = %v", bragCommandTimeout)
 	}
 }
 
