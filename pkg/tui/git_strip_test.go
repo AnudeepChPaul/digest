@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"app/pkg/model"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func gitStripTestModel(t *testing.T) Model {
@@ -73,6 +75,21 @@ func TestGitStripNavigation(t *testing.T) {
 	m.selected = 3
 	if m = press(t, m, runes("l")); m.selected != 3 {
 		t.Errorf("l outside the strip should do nothing, selected %d", m.selected)
+	}
+}
+
+func TestGitStripArrowKeysSwitchColumnsWithoutChangingDay(t *testing.T) {
+	m := gitStripTestModel(t)
+	startDate := m.currentDate
+	m.selected = 1
+	if m = press(t, m, tea.KeyMsg{Type: tea.KeyRight}); selectedRepoName(m) != "gamma" {
+		t.Errorf("right from beta should clamp to gamma, got %q", selectedRepoName(m))
+	}
+	if m = press(t, m, tea.KeyMsg{Type: tea.KeyLeft}); selectedRepoName(m) != "alpha" {
+		t.Errorf("left from gamma should land on alpha, got %q", selectedRepoName(m))
+	}
+	if !m.currentDate.Equal(startDate) {
+		t.Errorf("arrow keys changed the day from %v to %v", startDate, m.currentDate)
 	}
 }
 

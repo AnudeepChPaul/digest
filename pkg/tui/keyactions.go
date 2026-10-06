@@ -472,7 +472,7 @@ func (m Model) dashboardCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) switchGitColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if target, ok := m.gitStripColumnSwitch(msg.String() == "l"); ok {
+	if target, ok := m.gitStripColumnSwitch(msg.String() == "l" || msg.String() == "right"); ok {
 		m.selected = target
 		m.updateScrollOffset()
 	}
