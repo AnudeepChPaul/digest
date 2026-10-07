@@ -173,7 +173,7 @@ func TestPRTagsHugTheRightEdgeWithoutPadding(t *testing.T) {
 			t.Errorf("%s: tags should end at the right edge without padding: %q", title, lines[row])
 		}
 	}
-	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+"  "+firstReviewIcon) {
+	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+" "+firstReviewIcon) {
 		t.Errorf("a row with no audience should end with status then the first-review marker: %q", row)
 	}
 }

@@ -160,6 +160,9 @@ func withRecommendation(stateDir string, state localReviewState, previous map[st
 }
 
 func recommendationLabel(recommendation string) string {
+	if strings.EqualFold(strings.TrimSpace(recommendation), string(review.EventRequestChanges)) {
+		return "rec:Changes"
+	}
 	words := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(recommendation), "_", " "))
 	if words == "" {
 		return ""

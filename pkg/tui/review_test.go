@@ -134,7 +134,7 @@ func TestReviewTabRendersGroupedFindings(t *testing.T) {
 	if cursorLine < 0 {
 		t.Errorf("cursor line not tracked")
 	}
-	for _, want := range []string{"CRITICAL (1)", "HIGH (1)", "C1", "H1", "b.ts:5", "rec:Request changes"} {
+	for _, want := range []string{"CRITICAL (1)", "HIGH (1)", "C1", "H1", "b.ts:5", "rec:Changes"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("review content missing %q", want)
 		}
@@ -174,18 +174,18 @@ func TestLocallyReviewedPRShowsTheRecommendation(t *testing.T) {
 	m := reviewTestModel(t)
 	m.mode = ViewDashboard
 	row := plainRow(m.renderPendingGitRow(m.currentPRItem(), false, 120))
-	if !strings.Contains(row, "rec:Request changes") || strings.Contains(row, string(review.StateReviewed)) {
+	if !strings.Contains(row, "rec:Changes") || strings.Contains(row, string(review.StateReviewed)) {
 		t.Errorf("row should show the recommendation: %q", row)
 	}
 	m.mode = ViewPreview
 	m.updatePreviewViewport()
-	if view := stripANSI(m.View()); !strings.Contains(view, "rec:Request changes") {
+	if view := stripANSI(m.View()); !strings.Contains(view, "rec:Changes") {
 		t.Errorf("preview should show the recommendation:\n%s", view)
 	}
 }
 
 func TestRecommendationLabels(t *testing.T) {
-	cases := map[string]string{"APPROVE": "rec:Approve", "COMMENT": "rec:Comment", "REQUEST_CHANGES": "rec:Request changes", "needs_work": "rec:Needs work"}
+	cases := map[string]string{"APPROVE": "rec:Approve", "COMMENT": "rec:Comment", "REQUEST_CHANGES": "rec:Changes", "needs_work": "rec:Needs work"}
 	for recommendation, want := range cases {
 		if got := recommendationLabel(recommendation); got != want {
 			t.Errorf("%s: got %q want %q", recommendation, got, want)

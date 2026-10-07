@@ -148,11 +148,11 @@ func (m Model) prTags(item *GitPRItem, selected bool) []string {
 	if item.PR == nil {
 		return []string{state}
 	}
-	icons := reviewRequestIcon(item)
+	stateWithIcons := state + " " + reviewRequestIcon(item)
 	if !selected && !m.cfg.ShowAllTags() {
-		return []string{state, icons}
+		return []string{stateWithIcons}
 	}
-	return []string{size, age, state, icons}
+	return []string{size, age, stateWithIcons}
 }
 
 func (m Model) renderPendingGitRow(item *GitPRItem, selected bool, width int) string {
