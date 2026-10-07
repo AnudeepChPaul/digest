@@ -70,3 +70,23 @@ func TestRepoScopesGroupsConfiguredReposByHost(t *testing.T) {
 func prRefOn(host string, number int) review.PRRef {
 	return review.PRRef{Host: host, Owner: "team", Repo: "service", Number: number, URL: fmt.Sprintf("https://%s/team/service/pull/%d", host, number)}
 }
+
+func TestRepoScopesAreReusedUntilTheCacheExpires(t *testing.T) {
+	repo := gitRepoWithOrigin(t, filepath.Join(t.TempDir(), "service"), "git@git.example.com:team/service.git")
+	cfg := &config.Config{GitRepositoryRoots: []string{repo}}
+	if scopes := RepoScopes(cfg); !reflect.DeepEqual(scopes, map[string][]string{"git.example.com": {"team/service"}}) {
+		t.Fatalf("scopes = %v", scopes)
+	}
+	if err := exec.Command("git", "-C", repo, "remote", "set-url", "origin", "git@other.example.com:team/service.git").Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, moved := RepoScopes(cfg)["other.example.com"]; moved {
+		t.Error("scopes should be reused within the cache lifetime")
+	}
+	originalTTL := repoCacheTTL
+	repoCacheTTL = 0
+	t.Cleanup(func() { repoCacheTTL = originalTTL })
+	if _, moved := RepoScopes(cfg)["other.example.com"]; !moved {
+		t.Error("an expired cache should read the remotes again")
+	}
+}

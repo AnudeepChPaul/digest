@@ -25,7 +25,7 @@ const (
 	olderDateFormat    = "Monday, 02 January 2006"
 )
 
-var searchHighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(lipgloss.Color("#F9E2AF"))
+var searchHighlightStyle = lipgloss.NewStyle().Bold(true).Foreground(colourBase).Background(colourYellow)
 
 type searchQuery struct {
 	words        []string
@@ -431,7 +431,7 @@ func (m Model) renderSearchModal(modalWidth int) string {
 	countText := mutedStyle.Render(fmt.Sprintf("%d results", len(results)))
 	topLine := titleText + safeRepeat(" ", innerWidth-lipgloss.Width(titleText)-lipgloss.Width(countText)) + countText
 
-	searchInput := m.searchInput
+	searchInput := *m.searchInput
 	searchInput.Width = max(10, innerWidth-lipgloss.Width(searchInput.Prompt)-1)
 
 	hintLine := ""
@@ -539,6 +539,5 @@ func (m Model) renderSearchPreview(modalWidth int) string {
 	m.previewViewport.Height = max(3, previewContentHeight(m.height)-fixedHeight)
 
 	popupContent := lipgloss.JoinVertical(lipgloss.Left, topLine, "", m.previewViewport.View(), "", footerText)
-	modal := modalStyle.Width(modalWidth).Render(popupContent)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
+	return m.framedPopup(popupContent, modalWidth)
 }

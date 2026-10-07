@@ -173,7 +173,7 @@ func GHHosts(ctx context.Context) ([]string, error) {
 	output, statusErr := runAuthStatus(ctx)
 	hosts := parseAuthHosts(string(output))
 	if len(hosts) == 0 {
-		return nil, fmt.Errorf("gh auth status lists no logged-in hosts: %v %s", statusErr, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf("gh auth status lists no logged-in hosts (%v); run gh auth login", statusErr)
 	}
 	return hosts, nil
 }

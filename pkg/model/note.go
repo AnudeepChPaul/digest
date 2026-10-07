@@ -36,6 +36,8 @@ type Note struct {
 	Subject string    `yaml:"subject,omitempty"`
 	Repo    string    `yaml:"repo,omitempty"`
 
+	Automated string `yaml:"automated,omitempty"`
+
 	Body     string `yaml:"-"`
 	FilePath string `yaml:"-"`
 }

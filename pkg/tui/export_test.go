@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"app/pkg/model"
+	"app/pkg/paths"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -50,6 +51,9 @@ func TestWriteSearchCSV(t *testing.T) {
 	}
 	if filepath.Base(exportPath) != "search-2026-10-02-091400.csv" {
 		t.Errorf("file = %s", exportPath)
+	}
+	if info, err := os.Stat(exportPath); err != nil || info.Mode().Perm() != paths.PrivateFileMode {
+		t.Errorf("export should be owner-only: %v %v", info, err)
 	}
 	exportFile, err := os.Open(exportPath)
 	if err != nil {
@@ -112,11 +116,11 @@ func TestExportNothing(t *testing.T) {
 	}
 }
 
-func TestExportErrorShowsModal(t *testing.T) {
+func TestExportErrorShowsInTheHeader(t *testing.T) {
 	m := searchTestModel(t)
 	next, _ := m.Update(searchExportedMsg{err: errors.New("disk full")})
 	m = next.(Model)
-	if m.mode != ViewError || m.errorReturnMode != ViewSearch {
-		t.Errorf("mode = %d return = %d", m.mode, m.errorReturnMode)
+	if m.mode != ViewSearch || !strings.Contains(latestMessageText(m), "disk full") {
+		t.Errorf("mode = %d message = %q", m.mode, latestMessageText(m))
 	}
 }

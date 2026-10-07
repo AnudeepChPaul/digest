@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
@@ -50,23 +51,6 @@ func TestSyncPulseRunsAsOneLoop(t *testing.T) {
 	stopped := next.(Model)
 	if stopped.ensureSyncPulse() == nil {
 		t.Error("a stopped pulse should start again")
-	}
-}
-
-func TestHeaderWaveRunsAsOneLoopAndRestartsItsFrames(t *testing.T) {
-	m := syncTestModel(t)
-	m.startLoadGitStatsCmd(true)
-	m.waveFrame = 12
-	if m.startLoadGitStatsCmd(true); m.waveFrame != 0 || !m.waveActive {
-		t.Errorf("a new sync should restart the wave: frame=%d active=%v", m.waveFrame, m.waveActive)
-	}
-	if !m.headerWaveRunning || m.restartHeaderWave() != nil {
-		t.Error("a running wave should not add another loop")
-	}
-	m.waveFrame = 31
-	next, cmd := m.Update(headerWaveTickMsg{})
-	if cmd != nil || next.(Model).headerWaveRunning {
-		t.Error("the wave loop should end after its last frame")
 	}
 }
 
@@ -143,7 +127,7 @@ func TestReviewPollRunsOnlyWhileAReviewRuns(t *testing.T) {
 		t.Errorf("an idle PR preview should not poll: mode=%v polling=%v", m.mode, m.reviewPolling)
 	}
 	m.reviewPolling = true
-	next, cmd = m.Update(reviewPollTickMsg{})
+	next, cmd = m.Update(reviewPollTickMsg{snapshot: m.loadReviewPollSnapshot()})
 	if cmd != nil || next.(Model).reviewPolling {
 		t.Error("the review poll should stop when nothing runs")
 	}
@@ -159,7 +143,7 @@ func TestRedrawsUseCachedRunStates(t *testing.T) {
 	if strings.Contains(m.View(), "reviewing...") {
 		t.Error("a redraw should not read review state from disk")
 	}
-	m = update(m, reviewPollTickMsg{})
+	m = update(m, reviewPollTickMsg{snapshot: m.loadReviewPollSnapshot()})
 	if !strings.Contains(m.View(), "reviewing...") {
 		t.Error("the review poll should refresh the cached state")
 	}
@@ -201,7 +185,7 @@ func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 	}
 	t.Cleanup(func() { writeGitCache = original })
 	m := syncTestModel(t)
-	m.startLoadGitStatsCmd(false)
+	m.startLoadGitStatsCmd()
 	generation := m.fetchGeneration
 	today := m.currentDate.Format("2006-01-02")
 	var cmds []tea.Cmd
@@ -257,5 +241,23 @@ func TestPRHistoryLoadsInTheBackground(t *testing.T) {
 	}
 	if calls != 1 || !strings.Contains(m.previewViewport.View(), "abc123") {
 		t.Errorf("history should appear once loaded: calls=%d", calls)
+	}
+}
+
+func TestReviewPollReadsRunStatesInTheBackground(t *testing.T) {
+	originalInterval := reviewPollInterval
+	reviewPollInterval = time.Millisecond
+	t.Cleanup(func() { reviewPollInterval = originalInterval })
+	m := reviewTestModel(t)
+	m.mode = ViewDashboard
+	m.width, m.height = 160, 50
+	ref := m.ghPendingPRs[0].PR.Ref
+	markRunning(t, m, ref)
+	msg := m.tickReviewPollCmd()()
+	if err := os.Remove(filepath.Join(review.StateDir(m.reviewRoot(), ref), "review.pid")); err != nil {
+		t.Fatal(err)
+	}
+	if m = update(m, msg); !strings.Contains(m.View(), "reviewing...") {
+		t.Error("the poll should apply the states it read in the background, not re-read them")
 	}
 }

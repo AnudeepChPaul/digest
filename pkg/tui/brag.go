@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -135,8 +137,35 @@ func (m Model) selectedBragRow() (bragRow, bool) {
 }
 
 func (m *Model) refreshBragRuns() {
-	m.bragRuns = brag.ListRuns(m.bragRoot())
+	m.bragStates = nil
+	m.applyBragRuns(brag.ListRuns(m.bragRoot()))
+}
+
+func (m *Model) applyBragRuns(runs []brag.Run) {
+	unchanged := m.bragStates != nil && slices.EqualFunc(m.bragRuns, runs, func(previous, current brag.Run) bool {
+		return previous.Meta == current.Meta && previous.Status == current.Status && previous.StartedAt.Equal(current.StartedAt)
+	})
+	m.bragRuns = runs
+	if unchanged {
+		return
+	}
 	m.bragStates = make(map[string]bragRowState)
+	m.bragSaved = &bragSavedMemo{}
+}
+
+type bragSavedMemo struct {
+	weekStart time.Time
+	saved     bool
+}
+
+func (m Model) weekBragged(week brag.Week) bool {
+	if m.bragSaved == nil {
+		return brag.Exists(m.bragRoot(), week)
+	}
+	if !m.bragSaved.weekStart.Equal(week.Start) {
+		m.bragSaved.weekStart, m.bragSaved.saved = week.Start, brag.Exists(m.bragRoot(), week)
+	}
+	return m.bragSaved.saved
 }
 
 func (m Model) anyBragRunning() bool {
@@ -265,6 +294,7 @@ func (m Model) editBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = ViewBragEdit
 	m.editor.SetValue(m.bragEntry.Body())
 	m.editor.Focus()
+	startEditorAtTop(m.editor)
 	return m, textarea.Blink
 }
 
@@ -349,16 +379,16 @@ func (m Model) unbraggedWeekNotice() string {
 	if first.IsZero() || brag.WeekOf(first.In(now.Location())).Start.After(lastWeek.Start) {
 		return ""
 	}
-	if brag.Exists(m.bragRoot(), lastWeek) {
+	if m.weekBragged(lastWeek) {
 		return ""
 	}
 	return fmt.Sprintf("Last week (W%02d) isn't bragged — press b", lastWeek.Number)
 }
 
 var (
-	bragYearStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#89B4FA")).Bold(true)
-	bragMonthStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#CBA6F7")).Bold(true)
-	bragDoneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1"))
+	bragYearStyle  = lipgloss.NewStyle().Foreground(colourBlue).Bold(true)
+	bragMonthStyle = lipgloss.NewStyle().Foreground(colourMauve).Bold(true)
+	bragDoneStyle  = lipgloss.NewStyle().Foreground(colourGreen)
 )
 
 func (m Model) renderBragRow(row bragRow, selected bool, width int) string {
@@ -374,12 +404,10 @@ func (m Model) renderBragRow(row bragRow, selected bool, width int) string {
 		indent, titleStyle = "   ", bragMonthStyle
 	}
 	if selected {
-		titleStyle = titleStyle.Copy().Bold(true)
+		titleStyle = titleStyle.Bold(true)
 	}
 	left := indent + underlinedWhen(selected, titleStyle.Render(row.title()))
-	right := m.renderBragStatus(row, selected)
-	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
-	return left + safeRepeat(" ", gap) + right
+	return alignRight(left, []string{m.renderBragStatus(row, selected)}, width, false)
 }
 
 func (m Model) renderBragStatus(row bragRow, selected bool) string {
@@ -433,8 +461,7 @@ func (m Model) renderBragList() string {
 }
 
 func (m Model) placeBragModal(content string, modalWidth int) string {
-	modal := modalStyle.Width(modalWidth).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
+	return m.framedPopup(content, modalWidth)
 }
 
 func (m Model) renderBragView() string {
@@ -487,22 +514,11 @@ func bragRunLabel(run brag.Run) string {
 }
 
 func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
-	rightColWidth := 26
-	if width < 60 {
-		rightColWidth = 20
-	}
-	leftWidth := max(width-rightColWidth, 15)
-	labelText := itemStyle.Render(bragRunLabel(run))
-	if selected {
-		labelText = selectedTitle(bragRunLabel(run))
-	}
-	leftBlock := fmt.Sprintf("   %s %s", amberDiamond.Render(), labelText)
-	leftPadding := max(leftWidth-lipgloss.Width(leftBlock), 0)
 	rightBlock := stateStyle(review.StateFailed).Render("failed")
 	if run.Status == brag.RunRunning {
 		rightBlock = m.renderPulseIndicator("bragging...")
 	}
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
+	return renderJobStyleRow(amberDiamond.Render(), bragRunLabel(run), rightBlock, selected, width)
 }
 
 func bragRunPreview(root string, run brag.Run) string {
@@ -510,7 +526,7 @@ func bragRunPreview(root string, run brag.Run) string {
 	if run.Status == brag.RunRunning {
 		status = "RUNNING"
 	}
-	logText := strings.TrimSpace(brag.ReadLog(root, run.Meta.ID))
+	logText := strings.TrimSpace(readFileTail(filepath.Join(brag.StateDir(root, run.Meta.ID), brag.RunLogFile), jobLogTailBytes))
 	if logText == "" {
 		logText = "(no log output yet)"
 	}
@@ -551,7 +567,10 @@ var hiddenDashboardHelp = map[keyAction]helpEntry{
 	actionToggleSortField:    {"s", "sort field (pending PRs)"},
 	actionToggleSortOrder:    {"w", "sort order (pending PRs)"},
 	actionTogglePendingScope: {"m", "me only (pending PRs)"},
-	actionDismissSyncErrors:  {"esc", "dismiss sync errors"},
+	actionDismissSyncErrors:  {"esc", "dismiss messages"},
+	actionOpenMessages:       {"!", "all messages"},
+	actionOpenActions:        {"@|.", "actions on the selected note"},
+	actionOpenSetup:          {",", "setup"},
 }
 
 func (m Model) helpEntries() []helpEntry {

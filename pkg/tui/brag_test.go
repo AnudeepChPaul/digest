@@ -347,3 +347,35 @@ func TestMondayNoticeSitsRightOfHeaderDate(t *testing.T) {
 		t.Errorf("footer should no longer show the notice")
 	}
 }
+
+func TestUnbraggedWeekNoticeDoesNotReadDiskPerRedraw(t *testing.T) {
+	monday := time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local)
+	m, _ := bragTestModel(t, monday)
+	m.View()
+	lastWeek := brag.WeekOf(monday).Previous()
+	if err := (&brag.Brag{Period: lastWeek, Facts: "- x"}).Save(m.cfg.BragDir()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stripANSI(m.View()), "isn't bragged") {
+		t.Error("a redraw should use the cached brag check")
+	}
+	m.refreshBragRuns()
+	if strings.Contains(stripANSI(m.View()), "isn't bragged") {
+		t.Error("refreshing brag runs should re-check the saved brag")
+	}
+}
+
+func TestUnchangedBragRunsKeepTheirMemos(t *testing.T) {
+	var m Model
+	runs := []brag.Run{{Meta: brag.RunMeta{ID: "week-1"}, Status: brag.RunRunning, StartedAt: time.Now()}}
+	m.applyBragRuns(runs)
+	m.bragStates["week-1"] = bragRowState{label: "cached"}
+	m.applyBragRuns(append([]brag.Run(nil), runs...))
+	if m.bragStates["week-1"].label != "cached" {
+		t.Errorf("unchanged runs should keep the row memo")
+	}
+	m.applyBragRuns([]brag.Run{{Meta: brag.RunMeta{ID: "week-1"}, Status: brag.RunDone, StartedAt: runs[0].StartedAt}})
+	if _, kept := m.bragStates["week-1"]; kept {
+		t.Errorf("changed runs should reset the row memo")
+	}
+}

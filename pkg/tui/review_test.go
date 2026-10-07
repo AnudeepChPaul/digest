@@ -134,12 +134,91 @@ func TestReviewTabRendersGroupedFindings(t *testing.T) {
 	if cursorLine < 0 {
 		t.Errorf("cursor line not tracked")
 	}
-	for _, want := range []string{"CRITICAL (1)", "HIGH (1)", "C1", "H1", "b.ts:5", "REVIEWED"} {
+	for _, want := range []string{"CRITICAL (1)", "HIGH (1)", "C1", "H1", "b.ts:5", "rec:Request changes"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("review content missing %q", want)
 		}
 	}
 	if m.prState(m.currentPRItem()) != review.StateReviewed {
 		t.Errorf("state = %s", m.prState(m.currentPRItem()))
+	}
+}
+
+func TestDashboardRejectSendsEveryFinding(t *testing.T) {
+	m := reviewTestModel(t)
+	m.cfg.ShowKeyHints = true
+	m.mode = ViewDashboard
+	m = press(t, m, runes("d"))
+	if m.mode != ViewReviewConfirm || m.reviewEvent != review.EventRequestChanges || m.selectedCount() != 2 {
+		t.Errorf("mode=%d event=%s selected=%d", m.mode, m.reviewEvent, m.selectedCount())
+	}
+	if !strings.Contains(m.View(), "Includes 2 selected comment(s)") {
+		t.Errorf("confirm should list both findings:\n%s", m.View())
+	}
+}
+
+func TestDashboardRejectWithoutFindingsAsksForAComment(t *testing.T) {
+	m := reviewTestModel(t)
+	if err := os.Remove(filepath.Join(review.StateDir(m.reviewRoot(), m.currentPRItem().PR.Ref), review.FindingsFile)); err != nil {
+		t.Fatal(err)
+	}
+	m.cfg.ShowKeyHints = true
+	m.mode = ViewDashboard
+	m = press(t, m, runes("d"))
+	if m.mode != ViewRejectComment {
+		t.Errorf("mode=%d", m.mode)
+	}
+}
+
+func TestLocallyReviewedPRShowsTheRecommendation(t *testing.T) {
+	m := reviewTestModel(t)
+	m.mode = ViewDashboard
+	row := plainRow(m.renderPendingGitRow(m.currentPRItem(), false, 120))
+	if !strings.Contains(row, "rec:Request changes") || strings.Contains(row, string(review.StateReviewed)) {
+		t.Errorf("row should show the recommendation: %q", row)
+	}
+	m.mode = ViewPreview
+	m.updatePreviewViewport()
+	if view := stripANSI(m.View()); !strings.Contains(view, "rec:Request changes") {
+		t.Errorf("preview should show the recommendation:\n%s", view)
+	}
+}
+
+func TestRecommendationLabels(t *testing.T) {
+	cases := map[string]string{"APPROVE": "rec:Approve", "COMMENT": "rec:Comment", "REQUEST_CHANGES": "rec:Request changes", "needs_work": "rec:Needs work"}
+	for recommendation, want := range cases {
+		if got := recommendationLabel(recommendation); got != want {
+			t.Errorf("%s: got %q want %q", recommendation, got, want)
+		}
+	}
+}
+
+func TestReviewWithoutRecommendationStaysReviewed(t *testing.T) {
+	m := reviewTestModel(t)
+	stateDir := review.StateDir(m.reviewRoot(), m.currentPRItem().PR.Ref)
+	if err := os.WriteFile(filepath.Join(stateDir, review.FindingsFile), []byte(`{"findings":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshLocalReviews()
+	if row := plainRow(m.renderPendingGitRow(m.currentPRItem(), false, 120)); !strings.Contains(row, string(review.StateReviewed)) || strings.Contains(row, "rec:") {
+		t.Errorf("row = %q", row)
+	}
+}
+
+func TestUnchangedReviewIsNotReparsedOnEveryPoll(t *testing.T) {
+	m := reviewTestModel(t)
+	loads := 0
+	original := loadRecommendation
+	loadRecommendation = func(stateDir string) string {
+		loads++
+		return original(stateDir)
+	}
+	t.Cleanup(func() { loadRecommendation = original })
+	refs := m.listedReviewRefs()
+	first := readLocalReviews(m.reviewRoot(), refs, nil)
+	second := readLocalReviews(m.reviewRoot(), refs, first)
+	stateDir := review.StateDir(m.reviewRoot(), refs[0])
+	if loads != 1 || second[stateDir].recommendation != "REQUEST_CHANGES" {
+		t.Errorf("loads = %d, recommendation = %q", loads, second[stateDir].recommendation)
 	}
 }

@@ -1,29 +1,23 @@
 package tui
 
 import (
-	"bytes"
+	"app/pkg/automation"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net/url"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"app/pkg/brag"
 	"app/pkg/config"
+	"app/pkg/habit"
 	"app/pkg/model"
+	"app/pkg/notify"
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
 	"app/pkg/store"
@@ -32,9 +26,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -60,6 +51,11 @@ const (
 	ViewBragView
 	ViewBragConfirm
 	ViewBragEdit
+	ViewAutomationEdit
+	ViewAutomationConfirm
+	ViewActionMenu
+	ViewNotifyInput
+	ViewSetup
 )
 
 type NavItemKind int
@@ -74,6 +70,7 @@ const (
 	KindJobDraft
 	KindReviewRun
 	KindBragRun
+	KindAutomationRun
 	KindMyPR
 )
 
@@ -98,14 +95,15 @@ type JobDraft struct {
 }
 
 type NavItem struct {
-	Kind         NavItemKind
-	Note         *model.Note
-	GitRepo      *GitRepoStat
-	Draft        *JobDraft
-	PendingGitPR *GitPRItem
-	ReviewRun    *review.ReviewRun
-	BragRun      *brag.Run
-	MyPR         *review.QueuedPR
+	Kind          NavItemKind
+	Note          *model.Note
+	GitRepo       *GitRepoStat
+	Draft         *JobDraft
+	PendingGitPR  *GitPRItem
+	ReviewRun     *review.ReviewRun
+	BragRun       *brag.Run
+	AutomationRun *automation.Run
+	MyPR          *review.QueuedPR
 }
 
 type PendingRepoGroup struct {
@@ -113,7 +111,6 @@ type PendingRepoGroup struct {
 	Items []GitPRItem
 }
 
-type headerWaveTickMsg struct{}
 type bannerWaveTickMsg struct{}
 type syncPulseTickMsg struct{}
 type ctrlCResetMsg struct{}
@@ -132,10 +129,11 @@ const jobLogTailLines = 400
 type runStatePollTickMsg struct{}
 
 type localReviewState struct {
-	status     review.RunStatus
-	finishedAt time.Time
-	finished   bool
-	pid        int
+	status         review.RunStatus
+	finishedAt     time.Time
+	finished       bool
+	pid            int
+	recommendation string
 }
 
 type jobAbortedMsg struct {
@@ -189,68 +187,6 @@ type gitPendingMsg struct {
 	sections    <-chan sourcecontrol.Section
 }
 
-var (
-	borderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#45475A"))
-	headerTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#CDD6F4"))
-
-	// Section & Sub-section Title Styles
-	sectionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#CDD6F4"))
-	subSectionStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#89B4FA"))
-	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C7086"))
-	itemStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#CDD6F4"))
-
-	selectedSummaryStyle = itemStyle.Copy().Bold(true)
-
-	jobActiveTagStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#A6E3A1"))
-
-	tabActiveStyle = lipgloss.NewStyle().
-			Bold(true).
-			Underline(true).
-			Foreground(lipgloss.Color("#89B4FA")).
-			Padding(0, 1)
-
-	tabInactiveStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#6C7086")).
-				Padding(0, 1)
-
-	checkDone        = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).SetString("✔")
-	checkPending     = lipgloss.NewStyle().Foreground(lipgloss.Color("#CDD6F4")).SetString("☐")
-	amberDiamond     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).SetString("◆")
-	yellowBadgeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).Bold(true)
-	pendingPRIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("#74C7EC")).SetString("⊙")
-	dimBlueText      = lipgloss.NewStyle().Foreground(lipgloss.Color("#74C7EC"))
-
-	// Live status indicators
-	dotSynced = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).SetString("● synced")
-
-	keyStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#CDD6F4"))
-	actionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#6C7086"))
-	warnKeyStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F38BA8"))
-	warnActionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF"))
-
-	badgeActive = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
-	badgeDone   = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).Bold(true)
-	tagStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#89B4FA")).Bold(true)
-
-	// Popups strictly use terminal native background color
-	modalStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#7D56F4")).
-			Padding(1, 2)
-
-	modalTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#7D56F4"))
-
-	deleteTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#F38BA8"))
-
-	modalHelpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6ADC8")).Bold(true)
-)
-
 func safeRepeat(s string, count int) string {
 	if count <= 0 {
 		return ""
@@ -288,7 +224,7 @@ func startReaped(cmd *exec.Cmd) (<-chan error, error) {
 	return exited, nil
 }
 
-func copyToClipboard(text string) error {
+var copyToClipboard = func(text string) error {
 	if text == "" {
 		return nil
 	}
@@ -325,557 +261,6 @@ func daysAgo(from, to time.Time) int {
 	return days
 }
 
-type footerItem struct {
-	key    string
-	action string
-	isWarn bool
-}
-
-func capitaliseWord(word string) string {
-	if word == "" {
-		return word
-	}
-	return strings.ToUpper(word[:1]) + word[1:]
-}
-
-func splitFooterAction(action string) (firstLine, secondLine string) {
-	words := strings.Fields(action)
-	for index, word := range words {
-		words[index] = capitaliseWord(word)
-	}
-	if len(words) == 0 {
-		return "", ""
-	}
-	return words[0], strings.Join(words[1:], " ")
-}
-
-func footerLineCount(items []footerItem) int {
-	for _, item := range items {
-		if _, secondLine := splitFooterAction(item.action); secondLine != "" {
-			return 3
-		}
-	}
-	return 2
-}
-
-func renderFooterLines(items []footerItem) (keysLine, firstActionLine, secondActionLine string) {
-	var keysParts, firstParts, secondParts []string
-	for _, item := range items {
-		firstWord, secondWord := splitFooterAction(item.action)
-		width := max(lipgloss.Width(item.key), lipgloss.Width(firstWord), lipgloss.Width(secondWord))
-		keyPadded := item.key + safeRepeat(" ", width-lipgloss.Width(item.key))
-		firstPadded := firstWord + safeRepeat(" ", width-lipgloss.Width(firstWord))
-		secondPadded := secondWord + safeRepeat(" ", width-lipgloss.Width(secondWord))
-		currentKeyStyle, currentActionStyle := keyStyle, actionStyle
-		if item.isWarn {
-			currentKeyStyle, currentActionStyle = warnKeyStyle, warnActionStyle
-		}
-		keysParts = append(keysParts, currentKeyStyle.Render(keyPadded))
-		firstParts = append(firstParts, currentActionStyle.Render(firstPadded))
-		secondParts = append(secondParts, currentActionStyle.Render(secondPadded))
-	}
-	return strings.Join(keysParts, "   "), strings.Join(firstParts, "   "), strings.Join(secondParts, "   ")
-}
-
-func renderModalFooter(items []footerItem, maxWidth int) string {
-	var renderedRows []string
-	for _, row := range splitFooterRows(items, maxWidth) {
-		keysLine, firstActionLine, secondActionLine := renderFooterLines(row)
-		if footerLineCount(row) == 2 {
-			renderedRows = append(renderedRows, keysLine+"\n"+firstActionLine)
-		} else {
-			renderedRows = append(renderedRows, keysLine+"\n"+firstActionLine+"\n"+secondActionLine)
-		}
-	}
-	return strings.Join(renderedRows, "\n\n")
-}
-
-// --- Job Log & Execution Management ---
-
-var digestRoot = (*config.Config)(nil).Root()
-
-var createdLogsDirs sync.Map
-
-func getLogsDir() string {
-	dir := filepath.Join(digestRoot, "logs")
-	if _, created := createdLogsDirs.Load(dir); !created {
-		if os.MkdirAll(dir, 0755) == nil {
-			createdLogsDirs.Store(dir, true)
-		}
-	}
-	return dir
-}
-
-func isProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("cmd", "/c", fmt.Sprintf("tasklist /FI \"PID eq %d\"", pid))
-		out, err := cmd.Output()
-		if err != nil {
-			return false
-		}
-		return strings.Contains(string(out), strconv.Itoa(pid))
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
-
-func runningJobPID(jobName string) (int, bool) {
-	data, err := os.ReadFile(filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName)))
-	if err != nil {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || !isProcessAlive(pid) {
-		return 0, false
-	}
-	return pid, true
-}
-
-func isJobRunning(jobName string) bool {
-	pidFile := filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName))
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return false
-	}
-	if isProcessAlive(pid) {
-		return true
-	}
-	_ = os.Remove(pidFile)
-	return false
-}
-
-func dryRunFilePath(jobName string, suffix string) string {
-	return filepath.Join(getLogsDir(), fmt.Sprintf("%s.dryrun.%s", jobName, suffix))
-}
-
-func isDryRunInFlight(jobName string) bool {
-	pidFile := dryRunFilePath(jobName, "pid")
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err == nil && isProcessAlive(pid) {
-		return true
-	}
-	_ = os.Remove(pidFile)
-	return false
-}
-
-func loadDryRunResult(jobName string) (string, int, bool) {
-	exitData, err := os.ReadFile(dryRunFilePath(jobName, "exit"))
-	if err != nil {
-		return "", 0, false
-	}
-	exitCode, err := strconv.Atoi(strings.TrimSpace(string(exitData)))
-	if err != nil {
-		exitCode = 1
-	}
-	output, _ := readDryRunLog(dryRunFilePath(jobName, "log"))
-	return string(output), exitCode, true
-}
-
-var readDryRunLog = os.ReadFile
-
-func dryRunStamp(jobName string) string {
-	var stamp strings.Builder
-	for _, suffix := range []string{"exit", "log"} {
-		if info, err := os.Stat(dryRunFilePath(jobName, suffix)); err == nil {
-			fmt.Fprintf(&stamp, "%s:%d:%d|", suffix, info.Size(), info.ModTime().UnixNano())
-		}
-	}
-	return stamp.String()
-}
-
-func writeDryRunFailure(jobName string, failure error) {
-	_ = os.WriteFile(dryRunFilePath(jobName, "log"), []byte(failure.Error()+"\n"), 0644)
-	_ = os.WriteFile(dryRunFilePath(jobName, "exit"), []byte("1"), 0644)
-}
-
-func startDryRunBackground(spec config.JobSpec) error {
-	cmdStr, err := resolveJobCommand(spec, true)
-	if err != nil {
-		writeDryRunFailure(spec.Name, err)
-		return err
-	}
-
-	logPath := dryRunFilePath(spec.Name, "log")
-	pidPath := dryRunFilePath(spec.Name, "pid")
-	exitPath := dryRunFilePath(spec.Name, "exit")
-	_ = os.Remove(exitPath)
-
-	f, err := os.Create(logPath)
-	if err != nil {
-		writeDryRunFailure(spec.Name, err)
-		return err
-	}
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", cmdStr)
-	} else {
-		cmd = exec.Command("sh", "-c", `sh -c "$1"; echo $? > "$2"`, "digest-dry-run", cmdStr, exitPath)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true,
-		}
-	}
-	cmd.Env = os.Environ()
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
-	cmd.Stdout = f
-	cmd.Stderr = f
-
-	if err := cmd.Start(); err != nil {
-		f.Close()
-		writeDryRunFailure(spec.Name, err)
-		return err
-	}
-
-	ownPid := strconv.Itoa(cmd.Process.Pid)
-	pidWriteErr := os.WriteFile(pidPath, []byte(ownPid), 0644)
-
-	go func() {
-		waitErr := cmd.Wait()
-		_ = f.Close()
-		if runtime.GOOS == "windows" {
-			exitCode := 0
-			if exitErr, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else if waitErr != nil {
-				exitCode = 1
-			}
-			_ = os.WriteFile(exitPath, []byte(strconv.Itoa(exitCode)), 0644)
-		}
-		if data, err := os.ReadFile(pidPath); err == nil && strings.TrimSpace(string(data)) == ownPid {
-			_ = os.Remove(pidPath)
-		}
-	}()
-
-	if pidWriteErr != nil {
-		return fmt.Errorf("dry run for %q started but its pid file could not be written: %w", spec.Name, pidWriteErr)
-	}
-	return nil
-}
-
-func tickRunStatePollCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return runStatePollTickMsg{}
-	})
-}
-
-func (m *Model) ensureRunStatePoll() tea.Cmd {
-	if m.runStatePolling {
-		return nil
-	}
-	m.runStatePolling = true
-	return tickRunStatePollCmd()
-}
-
-func (m *Model) refreshJobStates() {
-	runningPIDs := make(map[string]int)
-	inFlight := make(map[string]bool)
-	if m.cfg != nil {
-		for _, j := range m.cfg.Jobs {
-			if pid, running := runningJobPID(j.Name); running {
-				runningPIDs[j.Name] = pid
-			}
-			if isDryRunInFlight(j.Name) {
-				inFlight[j.Name] = true
-			}
-		}
-	}
-	m.runningJobPIDs, m.dryRunsInFlight = runningPIDs, inFlight
-}
-
-func (m Model) jobRunning(jobName string) bool {
-	return m.runningJobPIDs[jobName] > 0
-}
-
-func (m Model) isAnyDryRunInFlight() bool {
-	return len(m.dryRunsInFlight) > 0
-}
-
-func (m *Model) refreshDryRunResults() {
-	m.refreshJobStates()
-	if m.cfg == nil {
-		return
-	}
-	if m.jobDryRunOutputs == nil {
-		m.jobDryRunOutputs = make(map[string]string)
-		m.jobDryRunExitCodes = make(map[string]int)
-		m.jobDryRunHasRun = make(map[string]bool)
-	}
-	if m.dryRunLogStamps == nil {
-		m.dryRunLogStamps = make(map[string]string)
-	}
-	for _, j := range m.cfg.Jobs {
-		if m.dryRunsInFlight[j.Name] {
-			continue
-		}
-		stamp := dryRunStamp(j.Name)
-		if previous, seen := m.dryRunLogStamps[j.Name]; seen && previous == stamp {
-			continue
-		}
-		m.dryRunLogStamps[j.Name] = stamp
-		output, exitCode, ok := loadDryRunResult(j.Name)
-		if !ok {
-			delete(m.jobDryRunOutputs, j.Name)
-			delete(m.jobDryRunExitCodes, j.Name)
-			delete(m.jobDryRunHasRun, j.Name)
-			continue
-		}
-		m.jobDryRunOutputs[j.Name] = output
-		m.jobDryRunExitCodes[j.Name] = exitCode
-		m.jobDryRunHasRun[j.Name] = true
-	}
-}
-
-func (m Model) isAnyJobRunning() bool {
-	return len(m.runningJobPIDs) > 0
-}
-
-var builtinJobNames = map[string]bool{
-	"repo-sync":     true,
-	"janitor":       true,
-	"branch-reaper": true,
-}
-
-var errNoJobCommand = errors.New("no command configured")
-
-func resolveJobCommand(spec config.JobSpec, dryRun bool) (string, error) {
-	configured := spec.Command
-	if dryRun {
-		configured = spec.DryRunCommand
-	}
-	if configured != "" {
-		return configured, nil
-	}
-	if !builtinJobNames[spec.Name] {
-		return "", fmt.Errorf("job %q: %w", spec.Name, errNoJobCommand)
-	}
-	execPath, err := os.Executable()
-	if err != nil {
-		execPath = "digest"
-	}
-	commandStr := fmt.Sprintf("%s %s", execPath, spec.Name)
-	if dryRun {
-		commandStr += " --dry-run"
-	}
-	return commandStr, nil
-}
-
-func findJobSpec(cfg *config.Config, jobName string) config.JobSpec {
-	if cfg != nil {
-		for _, j := range cfg.Jobs {
-			if j.Name == jobName {
-				return j
-			}
-		}
-	}
-	return config.JobSpec{Name: jobName}
-}
-
-const jobLogArchiveFormat = "20060102-150405"
-
-func pruneJobLogArchives(logsDir, jobName string, retentionDays int, now time.Time) {
-	archives, _ := filepath.Glob(filepath.Join(logsDir, jobName+"-*.log"))
-	cutoff := now.AddDate(0, 0, -retentionDays)
-	for _, archive := range archives {
-		stamp := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(archive), jobName+"-"), ".log")
-		if _, err := time.Parse(jobLogArchiveFormat, stamp); err != nil {
-			continue
-		}
-		if info, err := os.Stat(archive); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(archive)
-		}
-	}
-}
-
-func executeJobBackground(cfg *config.Config, jobName string) error {
-	commandStr, err := resolveJobCommand(findJobSpec(cfg, jobName), false)
-	if err != nil {
-		return err
-	}
-
-	logsDir := getLogsDir()
-	activeLog := filepath.Join(logsDir, fmt.Sprintf("%s.log", jobName))
-	pidFile := filepath.Join(logsDir, fmt.Sprintf("%s.pid", jobName))
-
-	if _, err := os.Stat(activeLog); err == nil {
-		timestamp := time.Now().Format(jobLogArchiveFormat)
-		archivedLog := filepath.Join(logsDir, fmt.Sprintf("%s-%s.log", jobName, timestamp))
-		_ = os.Rename(activeLog, archivedLog)
-	}
-	pruneJobLogArchives(logsDir, jobName, cfg.Retention(), time.Now())
-
-	f, err := os.Create(activeLog)
-	if err != nil {
-		return err
-	}
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", commandStr)
-	} else {
-		cmd = exec.Command("sh", "-c", commandStr)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true,
-		}
-	}
-
-	cmd.Env = os.Environ()
-
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
-	if cfg != nil {
-		cmd.Dir = cfg.NotesDir()
-	}
-
-	cmd.Stdout = f
-	cmd.Stderr = f
-
-	if err := cmd.Start(); err != nil {
-		f.Close()
-		return err
-	}
-
-	ownPid := strconv.Itoa(cmd.Process.Pid)
-	pidWriteErr := os.WriteFile(pidFile, []byte(ownPid), 0644)
-
-	go func() {
-		_ = cmd.Wait()
-		_ = f.Close()
-		if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) == ownPid {
-			_ = os.Remove(pidFile)
-		}
-	}()
-
-	if pidWriteErr != nil {
-		return fmt.Errorf("job %q started but its pid file could not be written (abort unavailable): %w", jobName, pidWriteErr)
-	}
-	return nil
-}
-
-func signalJobGroup(pid int, sig syscall.Signal) error {
-	if runtime.GOOS == "windows" {
-		return exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
-	}
-	return syscall.Kill(-pid, sig)
-}
-
-func abortJobCmd(jobName string) tea.Cmd {
-	return func() tea.Msg {
-		pidFile := filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName))
-		data, err := os.ReadFile(pidFile)
-		if err != nil {
-			return jobAbortedMsg{jobName: jobName, err: fmt.Errorf("failed to read pid file for %q: %w", jobName, err)}
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil {
-			return jobAbortedMsg{jobName: jobName, err: fmt.Errorf("invalid pid file for %q: %w", jobName, err)}
-		}
-
-		var abortErr error
-		if isProcessAlive(pid) {
-			if err := signalJobGroup(pid, syscall.SIGTERM); err != nil {
-				abortErr = fmt.Errorf("failed to terminate job %q: %w", jobName, err)
-			}
-			deadline := time.Now().Add(3 * time.Second)
-			for isProcessAlive(pid) && time.Now().Before(deadline) {
-				time.Sleep(100 * time.Millisecond)
-			}
-			if isProcessAlive(pid) {
-				if err := signalJobGroup(pid, syscall.SIGKILL); err != nil {
-					abortErr = fmt.Errorf("failed to kill job %q: %w", jobName, err)
-				}
-			}
-		}
-
-		activeLog := filepath.Join(getLogsDir(), fmt.Sprintf("%s.log", jobName))
-		if f, err := os.OpenFile(activeLog, os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-			_, _ = f.WriteString("\n[JOB ABORTED BY USER]\n")
-			f.Close()
-		}
-
-		if current, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(current)) == strconv.Itoa(pid) {
-			_ = os.Remove(pidFile)
-		}
-		return jobAbortedMsg{jobName: jobName, err: abortErr}
-	}
-}
-
-const jobLogTailBytes = 256 * 1024
-
-func readFileTail(path string, maxBytes int64) string {
-	file, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || info.Size() == 0 {
-		return ""
-	}
-	offset := max(info.Size()-maxBytes, 0)
-	data := make([]byte, info.Size()-offset)
-	if _, err := file.ReadAt(data, offset); err != nil && !errors.Is(err, io.EOF) {
-		return ""
-	}
-	if offset > 0 {
-		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
-			data = data[newline+1:]
-		}
-	}
-	return string(data)
-}
-
-func readJobLog(jobName string) string {
-	return readFileTail(filepath.Join(getLogsDir(), fmt.Sprintf("%s.log", jobName)), jobLogTailBytes)
-}
-
-func jobLogModTime(path string) time.Time {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
-	}
-	return info.ModTime()
-}
-
-func latestJobOutput(jobName string, dryRunOutput string) (string, bool) {
-	realLog := readJobLog(jobName)
-	if isJobRunning(jobName) || strings.TrimSpace(dryRunOutput) == "" {
-		return realLog, false
-	}
-	if realLog == "" {
-		return dryRunOutput, true
-	}
-	realModTime := jobLogModTime(filepath.Join(getLogsDir(), fmt.Sprintf("%s.log", jobName)))
-	dryRunModTime := jobLogModTime(dryRunFilePath(jobName, "log"))
-	if dryRunModTime.After(realModTime) {
-		return dryRunOutput, true
-	}
-	return realLog, false
-}
-
-func (m Model) jobDryRunOutputFor(jobName string) string {
-	if m.jobDryRunHasRun == nil || !m.jobDryRunHasRun[jobName] {
-		return ""
-	}
-	return m.jobDryRunOutputs[jobName]
-}
-
 type Model struct {
 	mode             ViewMode
 	cfg              *config.Config
@@ -896,9 +281,10 @@ type Model struct {
 	searchCache        *searchMemo
 	reviewReports      *reviewReportMemo
 	changesSince       map[string]changesSinceReview
-	updateSeq          int
+	contentVersion     int
 	scrollPending      bool
-	settledFrame       *dashboardFrame
+	frames             *dashboardFrameCache
+	bragSaved          *bragSavedMemo
 	dryRunLogStamps    map[string]string
 	gitCancel          context.CancelFunc
 	gitFetchCtx        context.Context
@@ -912,39 +298,33 @@ type Model struct {
 	currentNote        *model.Note
 	currentDate        time.Time
 
-	// Dynamic Job Dry-Run & Execution state
 	jobDryRunOutputs   map[string]string
 	jobDryRunExitCodes map[string]int
 	jobDryRunHasRun    map[string]bool
 
-	// Multi-select, Delete, and Job execution state
 	archivedSelectedMap map[int]bool
 	deleteTargetNotes   []*model.Note
 	deleteReturnMode    ViewMode
 	jobToExecute        string
 	jobToAbort          string
 
-	// Wave and Sync Pulse Animation State
-	waveActive       bool
-	waveFrame        int
 	syncPulseFrame   int
 	bannerWaveActive bool
 	bannerWaveFrame  int
 
 	syncPulseRunning      bool
-	headerWaveRunning     bool
 	jobLogRunning         bool
 	jobLogStamp           string
 	runStatePolling       bool
 	runningJobPIDs        map[string]int
 	dryRunsInFlight       map[string]bool
 	localReviews          map[string]localReviewState
+	previewPollStamp      previewStamp
 	previewJobLogFinished bool
 	previewFindingsCount  int
 	bragStates            map[string]bragRowState
 	historyRequested      map[string]bool
 
-	// Active git items rendered on screen
 	ghReviewedToday         []GitPRItem
 	ghReviewedYesterday     []GitPRItem
 	ghPendingPRs            []GitPRItem
@@ -956,6 +336,7 @@ type Model struct {
 	pendingMeOnly           bool
 	initialSelectionPending bool
 	selectAfterReload       string
+	awaitingNewNoteSave     bool
 	pendingSortChosen       bool
 	syncOnLoad              bool
 	reviewRuns              []review.ReviewRun
@@ -963,7 +344,9 @@ type Model struct {
 	reviewRunTarget         review.PRRef
 	reviewRunReturnMode     ViewMode
 	localCommitsToday       map[string][]GitPRItem
-	tagSlots                rowTagSlots
+	tagCells                *rowTagCellCache
+	noteRows                *noteRowCache
+	popupMemo               *framedPopupMemo
 	loadingCommits          bool
 	localCommitsYesterday   map[string][]GitPRItem
 	fetchedPreviousDay      time.Time
@@ -976,6 +359,25 @@ type Model struct {
 	bragRegenerate          bool
 	bragConfirmReturn       ViewMode
 	bragNotice              string
+	automationRuns          map[string]automation.Run
+	automationNoteID        string
+	automationReturnMode    ViewMode
+	actionMenuNoteID        string
+	actionMenuItems         []noteAction
+	actionMenuSelected      int
+	actionUsage             map[string]int
+	notifyInput             *textinput.Model
+	notifyNotice            string
+	notifyEntries           map[string]notify.Entry
+	hintGeneration          int
+	hintVisible             bool
+	prActionFromDashboard   bool
+	setup                   *setupState
+	setupInput              *textinput.Model
+	configPath              string
+	automationName          string
+	automationPhase         automation.Phase
+	automationNotice        string
 
 	gitPopupRepo     *GitRepoStat
 	gitPopupTab      int
@@ -984,15 +386,15 @@ type Model struct {
 	previewViewport  viewport.Model
 	archivedViewport viewport.Model
 
-	editor      textarea.Model
-	searchInput textinput.Model
+	editor      *textarea.Model
+	searchInput *textinput.Model
 
 	searchSelected  int
 	searchScroll    int
 	searchPreviewID string
 	searchNotice    string
 	editReturnMode  ViewMode
-	inlineInput     textinput.Model
+	inlineInput     *textinput.Model
 
 	previewTab     int
 	reviewCursor   int
@@ -1000,13 +402,17 @@ type Model struct {
 	reviewEvent    review.Event
 	reviewBody     string
 	reviewNotice   string
-	rejectInput    textarea.Model
+	rejectInput    *textarea.Model
 	contextCache   map[string]string
 	reviewPolling  bool
 
-	errorTitle      string
-	errorLines      []string
-	errorReturnMode ViewMode
+	errorTitle           string
+	messages             []appMessage
+	messageExpiryPending bool
+	closedMyPRs          map[string]string
+	prAlertsDue          bool
+	errorLines           []string
+	errorReturnMode      ViewMode
 
 	width  int
 	height int
@@ -1015,116 +421,6 @@ type Model struct {
 type loadNotesMsg struct {
 	notes []*model.Note
 	err   error
-}
-
-func tickHeaderWaveCmd() tea.Cmd {
-	return tea.Tick(35*time.Millisecond, func(t time.Time) tea.Msg {
-		return headerWaveTickMsg{}
-	})
-}
-
-func tickBannerWaveCmd() tea.Cmd {
-	return tea.Tick(35*time.Millisecond, func(t time.Time) tea.Msg {
-		return bannerWaveTickMsg{}
-	})
-}
-
-func tickSyncPulseCmd() tea.Cmd {
-	return tea.Tick(90*time.Millisecond, func(t time.Time) tea.Msg {
-		return syncPulseTickMsg{}
-	})
-}
-
-func (m *Model) ensureSyncPulse() tea.Cmd {
-	if m.syncPulseRunning {
-		return nil
-	}
-	m.syncPulseRunning = true
-	return tickSyncPulseCmd()
-}
-
-func (m Model) anythingBusy() bool {
-	return m.loadingGit || m.loadingCommits || m.isAnyJobRunning() || m.isAnyDryRunInFlight() || m.anyReviewRunning() || m.anyBragRunning()
-}
-
-func (m *Model) restartHeaderWave() tea.Cmd {
-	m.waveActive = true
-	m.waveFrame = 0
-	if m.headerWaveRunning {
-		return nil
-	}
-	m.headerWaveRunning = true
-	return tickHeaderWaveCmd()
-}
-
-func tickCtrlCResetCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-		return ctrlCResetMsg{}
-	})
-}
-
-func tickJobLogCmd() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
-		return jobLogTickMsg{}
-	})
-}
-
-func (m *Model) ensureJobLogRefresh() tea.Cmd {
-	if m.jobLogRunning {
-		return nil
-	}
-	m.jobLogRunning = true
-	return tickJobLogCmd()
-}
-
-func jobLogStampFor(jobName string, running bool) string {
-	stamp := strconv.FormatBool(running)
-	for _, path := range []string{filepath.Join(getLogsDir(), jobName+".log"), dryRunFilePath(jobName, "log")} {
-		if info, err := os.Stat(path); err == nil {
-			stamp += fmt.Sprintf("|%d:%d", info.Size(), info.ModTime().UnixNano())
-		}
-	}
-	return stamp
-}
-
-func (m Model) previewedRunningJob() string {
-	if m.mode != ViewPreview {
-		return ""
-	}
-	navItems := m.allNavItems()
-	if m.selected >= len(navItems) {
-		return ""
-	}
-	if item := navItems[m.selected]; item.Kind == KindJobDraft && item.Draft != nil {
-		return item.Draft.Name
-	}
-	return ""
-}
-
-func (m Model) handleJobLogTick() (tea.Model, tea.Cmd) {
-	jobName := m.previewedRunningJob()
-	if jobName == "" {
-		m.jobLogRunning = false
-		return m, nil
-	}
-	m.refreshJobStates()
-	running := m.jobRunning(jobName)
-	if stamp := jobLogStampFor(jobName, running); stamp != m.jobLogStamp {
-		m.jobLogStamp = stamp
-		wasAtBottom := m.previewViewport.AtBottom()
-		previousOffset := m.previewViewport.YOffset
-		m.updatePreviewViewport()
-		if wasAtBottom {
-			m.previewViewport.GotoBottom()
-		} else {
-			m.previewViewport.SetYOffset(previousOffset)
-		}
-	}
-	if !running {
-		m.jobLogRunning = false
-		return m, nil
-	}
-	return m, tickJobLogCmd()
 }
 
 func autoSyncTickCmd(intervalSecs int) tea.Cmd {
@@ -1143,11 +439,17 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	ii := textinput.New()
 	ii.Prompt = ""
 
+	notifyInput := textinput.New()
+	notifyInput.Prompt = "@notify:"
+	notifyInput.Placeholder = "1h"
+	notifyInput.CharLimit = 16
+	notifyInput.Width = lipgloss.Width(notifyInput.Prompt + notifyInput.Placeholder)
+
 	ta := textarea.New()
 	ta.Placeholder = "First line: Summary\n\nRemaining lines: Body..."
 	ta.ShowLineNumbers = false
 
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#CDD6F4")).UnsetBackground()
+	textStyle := lipgloss.NewStyle().Foreground(colourText).UnsetBackground()
 	placeholderStyle := lipgloss.NewStyle().UnsetBackground()
 
 	ta.FocusedStyle.Base = textStyle
@@ -1160,6 +462,10 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
 
 	ta.BlurredStyle = ta.FocusedStyle
+	disableTextareaDeleteShortcuts(&ta)
+	for _, input := range []*textinput.Model{&ti, &ii, &notifyInput} {
+		disableInputDeleteShortcuts(input)
+	}
 
 	storePath := cfg.NotesDir()
 	digestRoot = cfg.Root()
@@ -1169,21 +475,25 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	rejectArea.ShowLineNumbers = false
 	rejectArea.FocusedStyle = ta.FocusedStyle
 	rejectArea.BlurredStyle = ta.FocusedStyle
+	disableTextareaDeleteShortcuts(&rejectArea)
 
 	m := Model{
 		initialSelectionPending: true,
-		rejectInput:             rejectArea,
+		rejectInput:             &rejectArea,
 		reviewSelected:          make(map[int]bool),
 		contextCache:            make(map[string]string),
 		mode:                    ViewDashboard,
 		cfg:                     cfg,
 		store:                   store.New(storePath),
-		searchInput:             ti,
-		inlineInput:             ii,
-		editor:                  ta,
+		searchInput:             &ti,
+		inlineInput:             &ii,
+		notifyInput:             &notifyInput,
+		frames:                  newDashboardFrameCache(),
+		noteRows:                newNoteRowCache(),
+		popupMemo:               &framedPopupMemo{},
+		editor:                  &ta,
 		searchCache:             &searchMemo{},
 		reviewReports:           &reviewReportMemo{},
-		loadingGit:              true,
 		loadingCommits:          cfg != nil && cfg.DailyCommitsEnabled(),
 		currentDate:             time.Now(),
 		archivedSelectedMap:     make(map[int]bool),
@@ -1194,30 +504,20 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	}
 	m.sessionCtx, m.cancelSession = context.WithCancel(context.Background())
 	m.notes, m.startupNotesErr = m.store.List()
+	m.actionUsage = loadActionUsage(cfg.CacheDir())
+	m.notifyEntries = listNotifyEntries(cfg.Root()).entries
 	m.fetchedPreviousDay = m.previousNoteDay()
-	cache, cacheLoaded := loadGitCache()
-	if cacheLoaded {
-		if cache.PendingSort != nil {
-			m.pendingSort, m.pendingSortChosen = *cache.PendingSort, true
-		}
-		m.applyGitCache(cache)
-	}
-	if seen, err := loadMyPRsSeen(myPRsSeenPath(cfg.Root())); err == nil {
-		m.knownMyPRs = knownMyPRRefs(seen)
-	}
-	m.syncOnLoad = !cacheLoaded || !cache.hasDataFor(m.currentDate) || cache.PreviousDay != m.fetchedPreviousDay.Format("2006-01-02")
-	m.loadingMyPRs = cfg != nil
-	if m.syncOnLoad {
-		m.beginGitFetch(true)
-	} else {
-		m.loadingGit = false
+	m.loadingGit = false
+	if cfg.GitEnabled() {
+		m.loadGitOnStartup()
 	}
 	m.refreshDryRunResults()
 	m.refreshReviewRuns()
+	m.commitsCtx, m.commitsCancel = context.WithCancel(context.Background())
 	m.refreshBragRuns()
-	m.reviewPolling = m.anyReviewRunning() || m.anyBragRunning()
+	m.applyAutomationRuns(automation.ListRuns(m.automationRoot()))
+	m.reviewPolling = m.anyReviewRunning() || m.anyBragRunning() || m.anyAutomationRunning()
 	m.syncPulseRunning = m.anythingBusy()
-	m.headerWaveRunning = m.waveActive
 	m.runStatePolling = m.isAnyDryRunInFlight() || m.isAnyJobRunning()
 	if startupErr != nil {
 		m.showError("CONFIG ERROR", startupErr)
@@ -1225,13 +525,31 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	return m
 }
 
+func (m *Model) loadGitOnStartup() {
+	m.loadingGit = true
+	cache, cacheLoaded := loadGitCache()
+	if cacheLoaded {
+		if cache.PendingSort != nil {
+			m.pendingSort, m.pendingSortChosen = *cache.PendingSort, true
+		}
+		m.applyGitCache(cache)
+	}
+	if seen, err := loadMyPRsSeen(myPRsSeenPath(m.cfg.Root())); err == nil {
+		m.knownMyPRs = knownMyPRRefs(seen)
+	}
+	m.syncOnLoad = !cacheLoaded || !cache.hasDataFor(m.currentDate) || cache.PreviousDay != m.fetchedPreviousDay.Format("2006-01-02")
+	m.loadingMyPRs = true
+	if m.syncOnLoad {
+		m.beginGitFetch()
+	} else {
+		m.loadingGit = false
+	}
+}
+
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.startupNotesCmd(), tickBannerWaveCmd(), m.loadCommitsCmd()}
+	cmds := []tea.Cmd{m.startupNotesCmd(), tickBannerWaveCmd(), m.loadCommitsCmd(), m.startupHintCmd()}
 	if m.syncPulseRunning {
 		cmds = append(cmds, tickSyncPulseCmd())
-	}
-	if m.headerWaveRunning {
-		cmds = append(cmds, tickHeaderWaveCmd())
 	}
 	if m.syncOnLoad {
 		cmds = append(cmds, m.gitFetchCmd())
@@ -1242,9 +560,9 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, tickRunStatePollCmd())
 	}
 	if m.reviewPolling {
-		cmds = append(cmds, tickReviewPollCmd())
+		cmds = append(cmds, m.tickReviewPollCmd())
 	}
-	if m.cfg != nil && m.cfg.GitAutoSyncInterval > 0 {
+	if m.cfg.GitEnabled() && m.cfg.GitAutoSyncInterval > 0 {
 		cmds = append(cmds, autoSyncTickCmd(m.cfg.GitAutoSyncInterval))
 	}
 	return tea.Batch(cmds...)
@@ -1262,14 +580,19 @@ func (m Model) loadNotesCmd() tea.Msg {
 	return loadNotesMsg{notes: notes, err: err}
 }
 
-func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
-	noteStore := m.store
+func copyNotes(notes []*model.Note) []model.Note {
 	copies := make([]model.Note, 0, len(notes))
-	for _, n := range notes {
-		if n != nil {
-			copies = append(copies, *n)
+	for _, note := range notes {
+		if note != nil {
+			copies = append(copies, *note)
 		}
 	}
+	return copies
+}
+
+func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
+	noteStore := m.store
+	copies := copyNotes(notes)
 	return func() tea.Msg {
 		var errs []error
 		var savedIDs []string
@@ -1286,12 +609,7 @@ func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
 
 func (m Model) deleteNotesCmd(notes ...*model.Note) tea.Cmd {
 	noteStore := m.store
-	copies := make([]model.Note, 0, len(notes))
-	for _, n := range notes {
-		if n != nil {
-			copies = append(copies, *n)
-		}
-	}
+	copies := copyNotes(notes)
 	return func() tea.Msg {
 		var errs []error
 		for i := range copies {
@@ -1325,137 +643,7 @@ func (m *Model) showError(title string, errs ...error) {
 	if len(lines) == 0 {
 		return
 	}
-	if m.mode != ViewError {
-		m.errorReturnMode = m.mode
-		m.errorTitle = title
-		m.errorLines = nil
-	} else if title != m.errorTitle {
-		for i, line := range lines {
-			lines[i] = title + ": " + line
-		}
-	}
-	m.errorLines = append(m.errorLines, lines...)
-	m.mode = ViewError
-}
-
-func (m *Model) startJobDryRunsCmd() tea.Cmd {
-	if m.cfg == nil || len(m.cfg.Jobs) == 0 {
-		return nil
-	}
-	started := 0
-	var errs []error
-	for _, j := range m.cfg.Jobs {
-		if m.dryRunsInFlight[j.Name] {
-			continue
-		}
-		if err := startDryRunBackground(j); err != nil {
-			errs = append(errs, err)
-		} else {
-			started++
-		}
-	}
-	m.refreshDryRunResults()
-	if m.mode == ViewPreview {
-		m.updatePreviewViewport()
-	}
-	if len(errs) > 0 {
-		m.showError("JOB ERROR", errs...)
-	}
-	if started == 0 {
-		return nil
-	}
-	return tea.Batch(m.ensureRunStatePoll(), m.ensureSyncPulse())
-}
-
-func waitForGitSection(sections <-chan sourcecontrol.Section, generation int) tea.Cmd {
-	return func() tea.Msg {
-		section, open := <-sections
-		switch {
-		case !open:
-			return nil
-		case section.MyPRs != nil:
-			mine := section.MyPRs
-			return gitMyPRsMsg{generation: generation, partOfSync: true, prs: mine.PRs, closed: mine.Closed, failedHosts: mine.FailedHosts, err: mine.Err, sections: sections}
-		case section.Day != nil:
-			day := section.Day
-			return gitDaySectionMsg{generation: generation, day: day.Day, date: day.Date, reviewed: day.Reviewed, reviews: day.Reviews, details: day.Details, failedHosts: day.FailedHosts, err: day.Err, sections: sections}
-		default:
-			pending := section.Pending
-			return gitPendingMsg{generation: generation, startedAt: pending.StartedAt, pending: pending.Items, details: pending.Details, failedHosts: pending.FailedHosts, err: pending.Err, sections: sections}
-		}
-	}
-}
-
-func (m *Model) beginGitFetch(triggerWave bool) {
-	if m.gitCancel != nil {
-		m.gitCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.gitFetchCtx = ctx
-	m.gitCancel = cancel
-	m.fetchGeneration++
-	m.fetchedPreviousDay = m.previousNoteDay()
-	m.loadingGit = true
-	m.gitSectionsPending = gitSectionCount
-
-	if triggerWave {
-		m.waveActive = true
-		m.waveFrame = 0
-	}
-}
-
-func (m Model) gitFetchCmd() tea.Cmd {
-	ctx := m.gitFetchCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	sections := sourcecontrol.Sync(ctx, sourcecontrol.SyncParams{
-		Config:      m.cfg,
-		Today:       m.currentDate,
-		PreviousDay: m.previousNoteDay(),
-		Sort:        m.pendingSort,
-		KnownMyPRs:  m.knownMyPRs,
-	})
-
-	return waitForGitSection(sections, m.fetchGeneration)
-}
-
-func (m Model) myPRsFetchCmd() tea.Cmd {
-	cfg, known, generation, ctx := m.cfg, m.knownMyPRs, m.fetchGeneration, m.sessionCtx
-	return func() tea.Msg {
-		result := sourcecontrol.NewEngine(cfg).FetchMyPRs(ctx, known)
-		return gitMyPRsMsg{generation: generation, prs: result.PRs, closed: result.Closed, failedHosts: result.FailedHosts, err: result.Err}
-	}
-}
-
-func (m *Model) cancelGitSync() {
-	if m.gitCancel != nil {
-		m.gitCancel()
-	}
-	m.fetchGeneration++
-	if m.commitsCancel != nil {
-		m.commitsCancel()
-	}
-	m.commitsGeneration++
-}
-
-func (m *Model) scheduleDaySync() tea.Cmd {
-	m.cancelGitSync()
-	m.loadingGit = true
-	m.loadingCommits = m.cfg.DailyCommitsEnabled()
-	m.daySyncGeneration++
-	generation := m.daySyncGeneration
-	return tea.Batch(tea.Tick(daySyncDelay, func(time.Time) tea.Msg { return daySyncDueMsg{generation: generation} }), m.ensureSyncPulse())
-}
-
-func (m *Model) startLoadGitStatsCmd(triggerWave bool) tea.Cmd {
-	m.daySyncGeneration++
-	m.beginGitFetch(triggerWave)
-	cmds := []tea.Cmd{m.gitFetchCmd(), m.refreshCommitsCmd(), m.ensureSyncPulse()}
-	if triggerWave {
-		cmds = append(cmds, m.restartHeaderWave())
-	}
-	return tea.Batch(cmds...)
+	m.postMessage(title, messageError, strings.Join(lines, "\n"))
 }
 
 func navItemKey(item NavItem) string {
@@ -1466,6 +654,8 @@ func navItemKey(item NavItem) string {
 		return "review:" + item.ReviewRun.Meta.Ref.URL
 	case item.Kind == KindBragRun && item.BragRun != nil:
 		return "brag:" + item.BragRun.Meta.ID
+	case item.Kind == KindAutomationRun && item.AutomationRun != nil:
+		return automationNavKeyPrefix + item.AutomationRun.Meta.NoteID
 	case item.MyPR != nil:
 		return "mine:" + item.MyPR.Ref.URL
 	case item.PendingGitPR != nil:
@@ -1493,9 +683,14 @@ func (m Model) selectedNavKey() (string, int) {
 	return key, occurrence
 }
 
+var launchKinds = map[string][]NavItemKind{
+	config.SelectionNotesToday:     {KindTodayNote, KindCarriedNote},
+	config.SelectionNotesYesterday: {KindYesterdayDone},
+}
+
 func (m *Model) selectLaunchItem() {
 	items := m.allNavItems()
-	for _, preferredKind := range []NavItemKind{KindTodayNote, KindCarriedNote} {
+	for _, preferredKind := range launchKinds[m.cfg.SelectionDefault] {
 		if index := slices.IndexFunc(items, func(item NavItem) bool { return item.Kind == preferredKind }); index >= 0 {
 			m.selected = index
 			return
@@ -1503,8 +698,6 @@ func (m *Model) selectLaunchItem() {
 	}
 	m.selected = 0
 }
-
-const pendingNewNote = "\x00new"
 
 func (m *Model) selectNoteByID(noteID string) {
 	items := m.allNavItems()
@@ -1533,203 +726,13 @@ func (m *Model) restoreSelection(key string, occurrence int) {
 	}
 }
 
-const (
-	sectionReviewedToday     = "Reviewed today"
-	sectionReviewedYesterday = "Reviewed yesterday"
-	sectionPending           = "Pending"
-	sectionMyPRs             = "My PRs"
-)
-
-func (m *Model) finishGitSection() {
-	if m.gitSectionsPending > 0 {
-		m.gitSectionsPending--
-	}
-	m.loadingGit = m.gitSectionsPending > 0
-}
-
-func (m *Model) recordSectionError(section string, err error) {
-	if err == nil {
-		delete(m.syncErrors, section)
-		return
-	}
-	if m.syncErrors == nil {
-		m.syncErrors = make(map[string]string)
-	}
-	m.syncErrors[section] = err.Error()
-}
-
-func (m *Model) applyGitDay(msg gitDaySectionMsg) {
-	if msg.generation != m.fetchGeneration {
-		return
-	}
-	m.finishGitSection()
-	selectedKey, selectedOccurrence := m.selectedNavKey()
-
-	section, reviewed := sectionReviewedToday, &m.ghReviewedToday
-	if msg.day == gitDayYesterday {
-		section, reviewed = sectionReviewedYesterday, &m.ghReviewedYesterday
-	}
-	if m.gitSectionDates == nil {
-		m.gitSectionDates = make(map[string]string)
-	}
-	m.recordSectionError(section, msg.err)
-	m.mergePRDetails(msg.details)
-	if msg.err == nil || len(msg.reviewed) > 0 || m.gitSectionDates[section] != msg.date {
-		var previous []GitPRItem
-		if m.gitSectionDates[section] == msg.date {
-			previous = *reviewed
-		}
-		*reviewed = keepFailedHostItems(previous, msg.reviewed, msg.failedHosts)
-		sourcecontrol.SortItems(*reviewed, sourcecontrol.Sort{})
-		m.gitSectionDates[section] = msg.date
-	}
-
-	m.refreshReviewRuns()
-	m.rebuildGitRepoStats()
-	m.restoreSelection(selectedKey, selectedOccurrence)
-	m.updateScrollOffset()
-}
-
-func (m *Model) applyGitPending(msg gitPendingMsg) {
-	if msg.generation != m.fetchGeneration {
-		return
-	}
-	m.finishGitSection()
-	selectedKey, selectedOccurrence := m.selectedNavKey()
-
-	m.recordSectionError(sectionPending, msg.err)
-	m.mergePRDetails(msg.details)
-	if msg.err == nil || len(msg.pending) > 0 {
-		m.ghPendingPRs = keepFailedHostItems(m.ghPendingPRs, msg.pending, msg.failedHosts)
-	}
-
-	m.refreshReviewRuns()
-	m.rebuildGitRepoStats()
-	m.restoreSelection(selectedKey, selectedOccurrence)
-	m.updateScrollOffset()
-}
-
-func (m *Model) applyMyPRs(msg gitMyPRsMsg) {
-	if msg.partOfSync {
-		if msg.generation != m.fetchGeneration {
-			return
-		}
-		m.finishGitSection()
-	}
-	m.loadingMyPRs = false
-	selectedKey, selectedOccurrence := m.selectedNavKey()
-	m.recordSectionError(sectionMyPRs, msg.err)
-	if msg.err == nil || len(msg.prs) > 0 {
-		m.myPRs = keepFailedHostPRs(m.myPRs, msg.prs, msg.failedHosts)
-		sortMyPRs(m.myPRs)
-	}
-	m.restoreSelection(selectedKey, selectedOccurrence)
-	m.updateScrollOffset()
-}
-
-func keepFailedHostPRs(previous, fresh []review.QueuedPR, failedHosts []string) []review.QueuedPR {
-	kept := append([]review.QueuedPR(nil), fresh...)
-	for _, pr := range previous {
-		if slices.Contains(failedHosts, pr.Ref.Host) && !slices.ContainsFunc(fresh, func(candidate review.QueuedPR) bool { return candidate.Ref.URL == pr.Ref.URL }) {
-			kept = append(kept, pr)
-		}
-	}
-	return kept
-}
-
-func sortMyPRs(prs []review.QueuedPR) {
-	slices.SortStableFunc(prs, func(a, b review.QueuedPR) int {
-		if byRepo := strings.Compare(a.Ref.Repo, b.Ref.Repo); byRepo != 0 {
-			return byRepo
-		}
-		return b.Ref.Number - a.Ref.Number
-	})
-}
-
-func keepFailedHostItems(previous, fresh []GitPRItem, failedHosts []string) []GitPRItem {
-	if len(failedHosts) == 0 {
-		return fresh
-	}
-	failed := make(map[string]bool, len(failedHosts))
-	for _, host := range failedHosts {
-		failed[host] = true
-	}
-	freshURLs := make(map[string]bool, len(fresh))
-	for _, item := range fresh {
-		freshURLs[item.URL] = true
-	}
-	kept := append([]GitPRItem(nil), fresh...)
-	for _, item := range previous {
-		parsed, err := url.Parse(item.URL)
-		if err != nil || !failed[parsed.Host] || freshURLs[item.URL] {
-			continue
-		}
-		kept = append(kept, item)
-	}
-	return kept
-}
-
-func (m *Model) rebuildGitRepoStats() {
-	buildStats := func(reviewed []GitPRItem, commitMap map[string][]GitPRItem) []*GitRepoStat {
-		repoMap := make(map[string]*GitRepoStat)
-
-		getOrCreate := func(name string) *GitRepoStat {
-			stat, ok := repoMap[name]
-			if !ok {
-				stat = &GitRepoStat{Name: name}
-				repoMap[name] = stat
-			}
-			return stat
-		}
-
-		for _, item := range reviewed {
-			rName := item.Repository
-			if rName == "" {
-				rName = "general"
-			}
-			st := getOrCreate(rName)
-			st.Items = append(st.Items, item)
-			st.Reviewed++
-		}
-
-		for rName, cItems := range commitMap {
-			st := getOrCreate(rName)
-			st.Items = append(st.Items, cItems...)
-			st.Commits += len(cItems)
-		}
-
-		var stats []*GitRepoStat
-		for _, stat := range repoMap {
-			stats = append(stats, stat)
-		}
-		sort.SliceStable(stats, func(i, j int) bool {
-			return stats[i].Name < stats[j].Name
-		})
-		return stats
-	}
-
-	commitsToday, commitsYesterday := m.localCommitsToday, m.localCommitsYesterday
-	if !m.cfg.DailyCommitsEnabled() {
-		commitsToday, commitsYesterday = nil, nil
-	}
-	m.todayGitRepos = buildStats(m.ghReviewedToday, commitsToday)
-	m.yesterdayGitRepo = buildStats(m.ghReviewedYesterday, commitsYesterday)
-	sourcecontrol.SortItems(m.ghPendingPRs, m.pendingSort)
-	m.pendingGitAction = m.ghPendingPRs
-	if m.pendingMeOnly {
-		m.pendingGitAction = slices.DeleteFunc(slices.Clone(m.ghPendingPRs), func(item GitPRItem) bool {
-			return item.PR == nil || !item.PR.DirectRequest
-		})
-	}
-}
-
 func (m Model) getJobDrafts() []*JobDraft {
-	if m.cfg == nil || len(m.cfg.Jobs) == 0 {
+	if m.cfg == nil || len(m.cfg.JobList()) == 0 {
 		return nil
 	}
 
 	var drafts []*JobDraft
-	for _, j := range m.cfg.Jobs {
+	for _, j := range m.cfg.JobList() {
 		exitCode := 1
 		hasRun := false
 		if m.jobDryRunHasRun != nil && m.jobDryRunHasRun[j.Name] {
@@ -1805,10 +808,6 @@ func (m Model) groupNotes() noteGroups {
 	return groups
 }
 
-func (m Model) previousDayTitle() string {
-	return m.previousDayTitleFor(m.previousNoteDay())
-}
-
 func (m Model) previousDayTitleFor(previousDay time.Time) string {
 	if isSameDay(previousDay, m.currentDate.AddDate(0, 0, -1)) {
 		return m.dayTitleText(previousDay, "Y E S T E R D A Y")
@@ -1818,10 +817,6 @@ func (m Model) previousDayTitleFor(previousDay time.Time) string {
 
 func letterSpaced(word string) string {
 	return strings.Join(strings.Split(word, ""), " ")
-}
-
-func (m Model) getYesterdayDoneNotes() []*model.Note {
-	return m.groupNotes().previousDone
 }
 
 func (m Model) getArchivedNotes() []*model.Note {
@@ -1838,6 +833,9 @@ func (m Model) getArchivedNotes() []*model.Note {
 }
 
 func (m Model) getPendingGitGroups() []PendingRepoGroup {
+	if !m.cfg.GitEnabled() {
+		return nil
+	}
 	var groups []PendingRepoGroup
 	groupMap := make(map[string]int)
 
@@ -1859,23 +857,33 @@ func (m Model) getPendingGitGroups() []PendingRepoGroup {
 }
 
 func (m Model) allNavItems() []NavItem {
-	var items []NavItem
 	groups := m.groupNotes()
+	pendingGroups := m.getPendingGitGroups()
+	drafts := m.getJobDrafts()
+	automationRuns := m.runningAutomations()
+	capacity := len(groups.previousDone) + len(groups.carried) + len(groups.today) + len(groups.todayDone) + len(drafts) + len(m.reviewRuns) + len(m.bragRuns) + len(automationRuns)
+	if m.cfg.GitEnabled() {
+		capacity += len(m.yesterdayGitRepo) + len(m.todayGitRepos) + len(m.myPRs)
+	}
+	for _, group := range pendingGroups {
+		capacity += len(group.Items)
+	}
+	items := make([]NavItem, 0, capacity)
 
 	for _, n := range groups.previousDone {
 		items = append(items, NavItem{Kind: KindYesterdayDone, Note: n})
 	}
 
-	for _, repo := range m.yesterdayGitRepo {
-		items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
-	}
-
-	for _, repo := range m.todayGitRepos {
-		items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
-	}
-
-	for index := range m.myPRs {
-		items = append(items, NavItem{Kind: KindMyPR, MyPR: &m.myPRs[index]})
+	if m.cfg.GitEnabled() {
+		for _, repo := range m.yesterdayGitRepo {
+			items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
+		}
+		for _, repo := range m.todayGitRepos {
+			items = append(items, NavItem{Kind: KindGitRepo, GitRepo: repo})
+		}
+		for index := range m.myPRs {
+			items = append(items, NavItem{Kind: KindMyPR, MyPR: &m.myPRs[index]})
+		}
 	}
 
 	for _, n := range groups.carried {
@@ -1890,13 +898,13 @@ func (m Model) allNavItems() []NavItem {
 		items = append(items, NavItem{Kind: KindTodayDone, Note: n})
 	}
 
-	for _, g := range m.getPendingGitGroups() {
+	for _, g := range pendingGroups {
 		for i := range g.Items {
 			items = append(items, NavItem{Kind: KindPendingGit, PendingGitPR: &g.Items[i]})
 		}
 	}
 
-	for _, d := range m.getJobDrafts() {
+	for _, d := range drafts {
 		items = append(items, NavItem{Kind: KindJobDraft, Draft: d})
 	}
 
@@ -1906,6 +914,10 @@ func (m Model) allNavItems() []NavItem {
 
 	for i := range m.bragRuns {
 		items = append(items, NavItem{Kind: KindBragRun, BragRun: &m.bragRuns[i]})
+	}
+
+	for i := range automationRuns {
+		items = append(items, NavItem{Kind: KindAutomationRun, AutomationRun: &automationRuns[i]})
 	}
 
 	return items
@@ -1948,23 +960,23 @@ func (m Model) gitNavStart() int {
 	return len(m.groupNotes().previousDone)
 }
 
-func (m Model) renderGitStrip(width int, active bool) (lines []string, selectedRow int) {
+func (m Model) renderGitStrip(width int, active bool, groups noteGroups) (lines []string, selectedRow int) {
 	separator := mutedStyle.Render(" │")
 	leftWidth := max((width-lipgloss.Width(separator))/2, 16)
 	rightWidth := max(width-lipgloss.Width(separator)-leftWidth, 16)
 	columnWidths := [2]int{leftWidth, rightWidth}
-	header := " " + m.renderWaveTitle("G I T", active) + "  " + m.renderSyncDot(m.loadingCommits)
+	header := " " + renderSectionTitle("G I T", active)
 	repoColumns := [2][]*GitRepoStat{m.yesterdayGitRepo, m.todayGitRepos}
 	columnTitles := [2]string{
-		m.previousDayTitle(),
+		m.previousDayTitleFor(groups.previousDay),
 		m.dayTitleText(m.currentDate, "T O D A Y"),
 	}
-	navStart := m.gitNavStart()
+	navStart := len(groups.previousDone)
 	columnStarts := [2]int{navStart, navStart + len(m.yesterdayGitRepo)}
 	var captionCells [2]string
 	for side, repos := range repoColumns {
 		columnActive := m.selected >= columnStarts[side] && m.selected < columnStarts[side]+len(repos)
-		caption := " " + m.renderWaveTitle(columnTitles[side], columnActive)
+		caption := " " + renderSectionTitle(columnTitles[side], columnActive)
 		if m.cfg.DailyCommitsEnabled() {
 			commits := 0
 			for _, repo := range repos {
@@ -2001,7 +1013,7 @@ func (m Model) renderGitStrip(width int, active bool) (lines []string, selectedR
 	}
 	myPRsStart := columnStarts[1] + len(m.todayGitRepos)
 	myPRsActive := m.selected >= myPRsStart && m.selected < myPRsStart+len(m.myPRs)
-	lines = append(lines, "", ansi.Truncate(" "+m.renderWaveTitle("M Y   P R ( S )", myPRsActive)+mutedStyle.Render(fmt.Sprintf("  %d open", len(m.myPRs))), width, "…"))
+	lines = append(lines, "", ansi.Truncate(" "+renderSectionTitle("M Y   P R ( S )", myPRsActive)+mutedStyle.Render(fmt.Sprintf("  %d open", len(m.myPRs))), width, "…"))
 	for _, line := range m.renderMyPRBlock(myPRsStart, width) {
 		if line.navIndex >= 0 && line.navIndex == m.selected {
 			selectedRow = len(lines)
@@ -2035,79 +1047,6 @@ func (m Model) gitStripColumnSwitch(towardsRight bool) (target int, ok bool) {
 		}
 	}
 	return 0, false
-}
-
-func (m *Model) updateScrollOffset() {
-	m.scrollPending = true
-}
-
-type dashboardFrame struct {
-	updateSeq    int
-	width        int
-	height       int
-	selected     int
-	mode         ViewMode
-	header       string
-	footer       string
-	content      string
-	selectedLine int
-}
-
-func (m Model) buildDashboardFrame() *dashboardFrame {
-	frame := &dashboardFrame{updateSeq: m.updateSeq, width: m.width, height: m.height, selected: m.selected, mode: m.mode, header: m.renderHeader(), footer: m.renderFooter()}
-	frame.content, frame.selectedLine = m.dashboardContent()
-	return frame
-}
-
-func (m Model) currentDashboardFrame() *dashboardFrame {
-	if frame := m.settledFrame; frame != nil && frame.updateSeq == m.updateSeq && frame.width == m.width && frame.height == m.height && frame.selected == m.selected && frame.mode == m.mode {
-		return frame
-	}
-	return m.buildDashboardFrame()
-}
-
-func (frame *dashboardFrame) bodyHeight() int {
-	return max(frame.height-lipgloss.Height(frame.header)-lipgloss.Height(frame.footer), 10)
-}
-
-func (m *Model) settleScroll() {
-	m.scrollPending = false
-	if m.selected == 0 {
-		m.scrollOffset = 0
-		return
-	}
-	frame := m.buildDashboardFrame()
-	m.settledFrame = frame
-	bodyHeight := frame.bodyHeight()
-	selectedLineIdx := frame.selectedLine
-	totalLines := strings.Count(frame.content, "\n") + 1
-
-	lookaheadTop := selectedLineIdx - 2
-	if lookaheadTop < 0 {
-		lookaheadTop = 0
-	}
-
-	if lookaheadTop < m.scrollOffset {
-		m.scrollOffset = lookaheadTop
-	} else if selectedLineIdx >= m.scrollOffset+bodyHeight {
-		m.scrollOffset = selectedLineIdx - bodyHeight + 1
-	}
-
-	if m.scrollOffset < 0 {
-		m.scrollOffset = 0
-	}
-	if m.scrollOffset > totalLines-bodyHeight && totalLines > bodyHeight {
-		m.scrollOffset = totalLines - bodyHeight
-	}
-}
-
-func previewModalSize(width, height int) (int, int, int) {
-	modalWidth := modalWidthFor(width)
-	innerHeight := height - 14
-	if innerHeight < 4 {
-		innerHeight = 4
-	}
-	return modalWidth, modalWidth - 6, innerHeight
 }
 
 func (m *Model) updatePreviewViewport() {
@@ -2153,8 +1092,12 @@ func (m *Model) updatePreviewViewport() {
 		mdContent = renderMarkdown(reviewRunPreview(m.reviewRoot(), *item.ReviewRun), innerWidth)
 	} else if item.Kind == KindBragRun && item.BragRun != nil {
 		mdContent = renderMarkdown(bragRunPreview(m.bragRoot(), *item.BragRun), innerWidth)
+	} else if item.Kind == KindAutomationRun && item.AutomationRun != nil {
+		mdContent = renderMarkdown(m.automationRunPreview(*item.AutomationRun), innerWidth)
 	} else if item.Kind == KindMyPR && item.MyPR != nil {
 		mdContent = renderMarkdown(myPRDetailsMarkdown(*item.MyPR), innerWidth)
+	} else if item.Note != nil && m.onDraftTab() {
+		mdContent = renderMarkdown(m.draftTabMarkdown(item.Note), innerWidth)
 	} else if item.Note != nil {
 		fullText := fmt.Sprintf("# %s", item.Note.Summary)
 		if strings.TrimSpace(item.Note.Body) != "" {
@@ -2165,76 +1108,63 @@ func (m *Model) updatePreviewViewport() {
 
 	m.previewViewport = viewport.New(innerWidth, innerHeight)
 	m.previewViewport.SetContent(mdContent)
-	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun {
+	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun || item.Kind == KindAutomationRun {
 		m.previewViewport.GotoBottom()
 	}
 }
 
-func (m Model) renderArchivedContent(width int, selectedIdx int) string {
+func (m Model) renderArchivedContent(width int, selectedIndex int) string {
 	archived := m.getArchivedNotes()
 	if len(archived) == 0 {
 		return mutedStyle.Render("(No archived notes)")
 	}
 
-	var b strings.Builder
+	var listing strings.Builder
 	currentGroupDate := ""
 
-	for i, n := range archived {
-		dateStr := n.Updated.Local().Format("Monday 02 Jan 2006")
-		if dateStr != currentGroupDate {
+	for index, note := range archived {
+		dateLabel := note.Updated.Local().Format("Monday 02 Jan 2006")
+		if dateLabel != currentGroupDate {
 			if currentGroupDate != "" {
-				b.WriteString("\n")
+				listing.WriteString("\n")
 			}
-			b.WriteString(subSectionStyle.Render(dateStr) + "\n")
-			currentGroupDate = dateStr
+			listing.WriteString(subSectionStyle.Render(dateLabel) + "\n")
+			currentGroupDate = dateLabel
 		}
 
 		prefix := "  "
-		if m.archivedSelectedMap != nil && m.archivedSelectedMap[i] {
+		if m.archivedSelectedMap != nil && m.archivedSelectedMap[index] {
 			prefix = amberDiamond.Render() + " "
 		}
 
 		box := checkDone.Render()
-		if n.Status != model.StatusDone {
+		if note.Status != model.StatusDone {
 			box = checkPending.Render()
 		}
 
-		age := n.Updated.Local().Format("15:04")
-		src := string(n.Source)
-		if src == "" {
-			src = "manual"
-		}
-		if !strings.HasPrefix(src, "#") {
-			src = "#" + src
-		}
+		age := note.Updated.Local().Format("15:04")
+		sourceText := noteSourceText(note)
+		summaryWidth := max(width-ansi.StringWidth(prefix)-2-ansi.StringWidth(sourceText)-len(age)-6, 10)
+		summary := ansi.Truncate(note.Summary, summaryWidth, "…")
+		gap := summaryWidth - ansi.StringWidth(summary)
 
-		summaryWidth := width - len(prefix) - 2 - len(src) - len(age) - 6
-		if summaryWidth < 10 {
-			summaryWidth = 10
-		}
-
-		summary := n.Summary
-		if len(summary) > summaryWidth {
-			summary = summary[:summaryWidth-3] + "..."
-		}
-
-		gap := summaryWidth - len(summary)
-
-		selected := i == selectedIdx
+		selected := index == selectedIndex
 		if selected {
 			summary = selectedTitle(summary)
 		} else {
 			summary = itemStyle.Render(summary)
 		}
-		rightBlock := fmt.Sprintf("%s   %s", dimBlueText.Render(src), mutedStyle.Render(age))
-		b.WriteString(fmt.Sprintf("%s%s %s%s%s\n", prefix, box, summary, safeRepeat(" ", gap), underlinedWhen(selected, rightBlock)))
+		rightBlock := fmt.Sprintf("%s   %s", dimBlueText.Render(sourceText), mutedStyle.Render(age))
+		listing.WriteString(fmt.Sprintf("%s%s %s%s%s\n", prefix, box, summary, safeRepeat(" ", gap), underlinedWhen(selected, rightBlock)))
 	}
 
-	return b.String()
+	return listing.String()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	m.updateSeq++
+	if !isAnimationTick(msg) {
+		m.contentVersion++
+	}
 	next, cmd := m.handleMsg(msg)
 	updated, isModel := next.(Model)
 	if !isModel {
@@ -2243,20 +1173,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if updated.scrollPending {
 		updated.settleScroll()
 	}
+	if updated.prAlertsDue {
+		updated.prAlertsDue = false
+		cmd = tea.Batch(cmd, updated.prAlertsCmd())
+	}
+	if !updated.messageExpiryPending {
+		if expiry := updated.messageExpiryCmd(); expiry != nil {
+			updated.messageExpiryPending = true
+			cmd = tea.Batch(cmd, expiry)
+		}
+	}
 	return updated, cmd
+}
+
+func isAnimationTick(msg tea.Msg) bool {
+	switch msg.(type) {
+	case bannerWaveTickMsg, syncPulseTickMsg:
+		return true
+	}
+	return false
 }
 
 func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case headerWaveTickMsg:
-		if m.waveActive {
-			m.waveFrame++
-			if m.waveFrame <= 30 {
-				return m, tickHeaderWaveCmd()
-			}
+	case messageExpiryMsg:
+		m.messageExpiryPending = false
+		return m, nil
+
+	case prAlertsMsg:
+		if msg.err != nil {
+			m.showError("PR ALERTS", msg.err)
 		}
-		m.waveActive = false
-		m.headerWaveRunning = false
 		return m, nil
 
 	case bannerWaveTickMsg:
@@ -2282,10 +1229,10 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleJobLogTick()
 
 	case runStatePollTickMsg:
-		wasBusy := m.isAnyDryRunInFlight() || m.isAnyJobRunning()
+		previousJobState := m.previewedJobState()
 		m.refreshDryRunResults()
 		stillBusy := m.isAnyDryRunInFlight() || m.isAnyJobRunning()
-		if m.mode == ViewPreview && (wasBusy || stillBusy) && !m.jobLogRunning {
+		if m.mode == ViewPreview && !m.jobLogRunning && m.previewedJobState() != previousJobState {
 			m.updatePreviewViewport()
 		}
 		if stillBusy {
@@ -2311,17 +1258,16 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.errs) > 0 {
 			m.showError("STORE ERROR", msg.errs...)
 		}
-		if m.selectAfterReload == pendingNewNote && len(msg.savedIDs) == 1 {
+		if m.awaitingNewNoteSave && len(msg.savedIDs) == 1 {
 			m.selectAfterReload = msg.savedIDs[0]
-		} else if m.selectAfterReload == pendingNewNote {
-			m.selectAfterReload = ""
 		}
+		m.awaitingNewNoteSave = false
 		return m, m.loadNotesCmd
 
 	case autoSyncTickMsg:
-		if m.cfg != nil && m.cfg.GitAutoSyncInterval > 0 {
+		if m.cfg.GitEnabled() && m.cfg.GitAutoSyncInterval > 0 {
 			return m, tea.Batch(
-				m.startLoadGitStatsCmd(false),
+				m.startLoadGitStatsCmd(),
 				autoSyncTickCmd(m.cfg.GitAutoSyncInterval),
 			)
 		}
@@ -2355,7 +1301,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.initialSelectionPending = false
 			m.selectLaunchItem()
 		}
-		if m.selectAfterReload != "" && m.selectAfterReload != pendingNewNote {
+		if m.selectAfterReload != "" {
 			m.selectNoteByID(m.selectAfterReload)
 			m.selectAfterReload = ""
 		}
@@ -2363,7 +1309,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !isSameDay(m.previousNoteDay(), m.fetchedPreviousDay) {
 			m.ghReviewedYesterday, m.localCommitsYesterday = nil, nil
 			m.rebuildGitRepoStats()
-			refetchPreviousDay = m.startLoadGitStatsCmd(false)
+			refetchPreviousDay = m.startLoadGitStatsCmd()
 		}
 		m.updateScrollOffset()
 		if m.mode == ViewSearchPreview {
@@ -2374,8 +1320,23 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.showError("STORE ERROR", msg.err)
+			return m, refetchPreviousDay
 		}
-		return m, refetchPreviousDay
+		return m, tea.Batch(refetchPreviousDay, refreshNotifyCmd(m.cfg.Root(), m.notes))
+
+	case notifyEntriesMsg:
+		if msg.err != nil {
+			m.showError("NOTIFY ERROR", msg.err)
+			return m, nil
+		}
+		m.notifyEntries = msg.entries
+		return m, nil
+
+	case actionUsageSavedMsg:
+		if msg.err != nil {
+			m.showError("ACTION USAGE ERROR", msg.err)
+		}
+		return m, nil
 
 	case commitsLoadedMsg:
 		wasSyncing := m.loadingGit || m.loadingCommits
@@ -2433,7 +1394,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitPendingMsg:
 		var cmds []tea.Cmd
 		if msg.generation == m.fetchGeneration && msg.err == nil {
-			cmds = append(cmds, reopenApprovedNotesCmd(m.store, msg.pending, msg.startedAt))
+			cmds = append(cmds, reopenApprovedNotesCmd(m.store, slices.Clone(msg.pending), msg.startedAt))
 		}
 		if msg.sections != nil {
 			cmds = append(cmds, waitForGitSection(msg.sections, msg.generation))
@@ -2446,13 +1407,13 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.afterGitSection(cmds)
 
 	case approvalSyncMsg:
-		return m, m.startLoadGitStatsCmd(false)
+		return m, m.startLoadGitStatsCmd()
 
 	case daySyncDueMsg:
 		if msg.generation != m.daySyncGeneration {
 			return m, nil
 		}
-		return m, m.startLoadGitStatsCmd(true)
+		return m, m.startLoadGitStatsCmd()
 
 	case changesSinceReviewMsg:
 		return m.handleChangesSinceReview(msg)
@@ -2464,7 +1425,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case reviewPollTickMsg:
-		return m.handleReviewPoll()
+		return m.handleReviewPoll(msg.snapshot)
 
 	case reviewSubmittedMsg:
 		return m.handleReviewSubmitted(msg)
@@ -2473,7 +1434,16 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleCloneReady(msg)
 
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		next, cmd := m.handleKey(msg)
+		updated, isModel := next.(Model)
+		if !isModel {
+			return next, cmd
+		}
+		return updated, tea.Batch(cmd, updated.restartHintTimer())
+
+	case hintIdleMsg:
+		m.hintVisible = msg.generation == m.hintGeneration && m.mode == ViewDashboard && m.keyHintPill() != ""
+		return m, nil
 	}
 
 	return m, nil
@@ -2485,153 +1455,8 @@ func isSameDay(t1, t2 time.Time) bool {
 	return y1 == y2 && m1 == m2 && d1 == d2
 }
 
-var (
-	markdownRenderersMu sync.Mutex
-	markdownRenderers   = map[int]*glamour.TermRenderer{}
-)
-
-func markdownStyle() glamouransi.StyleConfig {
-	style := styles.DarkStyleConfig
-	style.Document.StylePrimitive.BackgroundColor = nil
-	style.Paragraph.StylePrimitive.BackgroundColor = nil
-	style.Heading.StylePrimitive.BackgroundColor = nil
-	style.H1.StylePrimitive.BackgroundColor = nil
-	style.H2.StylePrimitive.BackgroundColor = nil
-	style.H3.StylePrimitive.BackgroundColor = nil
-	style.H4.StylePrimitive.BackgroundColor = nil
-	style.H5.StylePrimitive.BackgroundColor = nil
-	style.H6.StylePrimitive.BackgroundColor = nil
-	style.BlockQuote.StylePrimitive.BackgroundColor = nil
-	style.Code.StylePrimitive.BackgroundColor = nil
-	style.CodeBlock.StylePrimitive.BackgroundColor = nil
-	if style.CodeBlock.Chroma != nil {
-		chroma := *style.CodeBlock.Chroma
-		chroma.Background.BackgroundColor = nil
-		style.CodeBlock.Chroma = &chroma
-	}
-	return style
-}
-
-func markdownRendererFor(width int) *glamour.TermRenderer {
-	markdownRenderersMu.Lock()
-	defer markdownRenderersMu.Unlock()
-	if renderer, cached := markdownRenderers[width]; cached {
-		return renderer
-	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStyles(markdownStyle()), glamour.WithWordWrap(width))
-	if err != nil {
-		return nil
-	}
-	markdownRenderers[width] = renderer
-	return renderer
-}
-
-var markdownRenderMu sync.Mutex
-
-func renderMarkdown(body string, width int) string {
-	if strings.TrimSpace(body) == "" {
-		return mutedStyle.Render("(No note body text)")
-	}
-	renderer := markdownRendererFor(width)
-	if renderer == nil {
-		return body
-	}
-	markdownRenderMu.Lock()
-	out, err := renderer.Render(body)
-	markdownRenderMu.Unlock()
-	if err != nil {
-		return body
-	}
-	return strings.TrimSpace(out)
-}
-
-func (m Model) renderWaveTitle(title string, isActive bool) string {
-	baseStyle := sectionTitleStyle.Copy()
-	if isActive {
-		baseStyle = baseStyle.Underline(true)
-	}
-
-	if !m.waveActive {
-		return baseStyle.Render(title)
-	}
-	return renderWave(title, m.waveFrame, baseStyle)
-}
-
-func renderWave(text string, frame int, baseStyle lipgloss.Style) string {
-	var sb strings.Builder
-	runes := []rune(text)
-
-	dimStyle := baseStyle.Copy().Foreground(lipgloss.Color("#585B70"))
-	centerStyle := baseStyle.Copy().Foreground(lipgloss.Color("#00FFFF")).Bold(true)
-	innerGlowStyle := baseStyle.Copy().Foreground(lipgloss.Color("#89B4FA")).Bold(true)
-	outerGlowStyle := baseStyle.Copy().Foreground(lipgloss.Color("#74C7EC"))
-
-	for i, r := range runes {
-		diff := i - frame
-		if diff < 0 {
-			diff = -diff
-		}
-
-		switch diff {
-		case 0:
-			sb.WriteString(centerStyle.Render(string(r)))
-		case 1:
-			sb.WriteString(innerGlowStyle.Render(string(r)))
-		case 2:
-			sb.WriteString(outerGlowStyle.Render(string(r)))
-		default:
-			sb.WriteString(dimStyle.Render(string(r)))
-		}
-	}
-	return sb.String()
-}
-
-func (m Model) renderLiveSyncDot() string {
-	return m.renderSyncDot(m.loadingGit)
-}
-
-func (m Model) renderSyncDot(syncing bool) string {
-	if !syncing {
-		return dotSynced.Render()
-	}
-
-	pulseColors := []string{
-		"#45475A", "#585B70", "#6C7086", "#74C7EC",
-		"#89B4FA", "#B4BEFE", "#C6A0F6", "#F5C2E7",
-		"#F9E2AF", "#F5C2E7", "#B4BEFE", "#74C7EC",
-	}
-
-	idx := m.syncPulseFrame % len(pulseColors)
-	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A6ADC8"))
-
-	return fmt.Sprintf("%s %s", dotStyle.Render("●"), textStyle.Render("syncing..."))
-}
-
-func (m Model) renderDryRunIndicator() string {
-	pulseColors := []string{
-		"#F9E2AF", "#EED49F", "#F5BDE6", "#C6A0F6",
-		"#89B4FA", "#74C7EC", "#8BD5CA", "#A6E3A1",
-	}
-	idx := m.syncPulseFrame % len(pulseColors)
-	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).Bold(true)
-	return fmt.Sprintf("%s %s", dotStyle.Render("●"), textStyle.Render("dry run..."))
-}
-
-func (m Model) renderJobRunningIndicator() string {
-	pulseColors := []string{
-		"#F9E2AF", "#EED49F", "#F5BDE6", "#C6A0F6",
-		"#89B4FA", "#74C7EC", "#8BD5CA", "#A6E3A1",
-	}
-	idx := m.syncPulseFrame % len(pulseColors)
-	dotStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).Bold(true)
-	return fmt.Sprintf("%s %s", dotStyle.Render("●"), textStyle.Render("running..."))
-}
-
 func (m Model) renderSubSection(title string, count int, showCount bool, isActive bool) string {
-	baseStyle := subSectionStyle.Copy()
+	baseStyle := subSectionStyle
 	if isActive {
 		baseStyle = baseStyle.Underline(true)
 	}
@@ -2640,364 +1465,6 @@ func (m Model) renderSubSection(title string, count int, showCount bool, isActiv
 		return fmt.Sprintf("%s %s", baseStyle.Render("/ "+title), countStr)
 	}
 	return baseStyle.Render("/ " + title)
-}
-
-func (m Model) renderErrorModal(modalWidth int) string {
-	title := m.errorTitle
-	if title == "" {
-		title = "ERROR"
-	}
-	titleText := deleteTitleStyle.Render(" " + title + " ")
-	errorText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#F38BA8")).
-		Width(modalWidth - 6).
-		Render(strings.Join(m.errorLines, "\n"))
-
-	footerText := renderModalFooter(footerItemsFrom(errorBindings()), modalWidth-6)
-
-	popupContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleText,
-		"",
-		errorText,
-		"",
-		footerText,
-	)
-
-	modal := modalStyle.Width(modalWidth).Render(popupContent)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-}
-
-var composeDashboard = func(m Model) string {
-	frame := m.currentDashboardFrame()
-	return lipgloss.JoinVertical(lipgloss.Left, frame.header, m.renderFrameBody(frame), frame.footer)
-}
-
-func (m Model) View() string {
-	if m.width < 40 {
-		return "Terminal window is too small."
-	}
-	if m.scrollPending {
-		m.settleScroll()
-	}
-
-	modalWidth := modalWidthFor(m.width)
-	innerWidth := modalWidth - 6
-
-	switch m.mode {
-
-	case ViewGitDetails:
-		if m.gitPopupRepo == nil {
-			return composeDashboard(m)
-		}
-
-		titleText := modalTitleStyle.Render(fmt.Sprintf(" GIT DETAILS: %s ", m.gitPopupRepo.Name))
-
-		tabNames := []string{"All", "Reviewed", "Assigned", "Commits"}
-		var renderedTabs []string
-		for i, name := range tabNames {
-			if i == m.gitPopupTab {
-				renderedTabs = append(renderedTabs, tabActiveStyle.Render(name))
-			} else {
-				renderedTabs = append(renderedTabs, tabInactiveStyle.Render(name))
-			}
-		}
-		tabsRow := strings.Join(renderedTabs, " ")
-
-		footerText := renderModalFooter(footerItemsFrom(gitDetailsBindings()), modalWidth-6)
-		fixedHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, titleText, "\n"+tabsRow, "", "", footerText))
-		listRows := max(1, previewContentHeight(m.height)-fixedHeight)
-
-		var listLines []string
-		items := m.filteredGitItems()
-
-		if len(items) == 0 {
-			listLines = append(listLines, "  "+mutedStyle.Render("(no items in this tab)"))
-		} else {
-			firstRow, lastRow := visibleGitRows(m.gitPopupSelected, len(items), listRows)
-			for i := firstRow; i < lastRow; i++ {
-				item := items[i]
-				prefix := "  "
-				kindTag := fmt.Sprintf("[%s]", item.Kind)
-
-				titleWidth := innerWidth - len(kindTag) - 6
-				title := item.Title
-				if len(title) > titleWidth && titleWidth > 5 {
-					title = title[:titleWidth-3] + "..."
-				}
-
-				gap := titleWidth - len(title)
-				if gap < 1 {
-					gap = 1
-				}
-
-				if i == m.gitPopupSelected {
-					renderedTitle := selectedTitle(title)
-					listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, renderedTitle, safeRepeat(" ", gap), underlined(mutedStyle.Render(kindTag))))
-				} else {
-					listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, itemStyle.Render(title), safeRepeat(" ", gap), mutedStyle.Render(kindTag)))
-				}
-			}
-		}
-		for len(listLines) < listRows {
-			listLines = append(listLines, "")
-		}
-
-		popupContent := lipgloss.JoinVertical(
-			lipgloss.Left,
-			titleText,
-			"\n"+tabsRow,
-			"",
-			strings.Join(listLines, "\n"),
-			"",
-			footerText,
-		)
-
-		modal := modalStyle.Width(modalWidth).Render(popupContent)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-
-	case ViewDeleteConfirm:
-		var titleText string
-		var prompt string
-
-		if m.jobToAbort != "" {
-			titleText = deleteTitleStyle.Render(" ABORT JOB ")
-			prompt = fmt.Sprintf("Are you sure you want to abort running job '%s'?", m.jobToAbort)
-		} else if m.jobToExecute != "" {
-			titleText = modalTitleStyle.Render(" EXECUTE JOB ")
-			prompt = fmt.Sprintf("Are you sure you want to run '%s'?", m.jobToExecute)
-		} else {
-			titleText = deleteTitleStyle.Render(" DELETE CONFIRMATION ")
-			if len(m.deleteTargetNotes) > 1 {
-				prompt = fmt.Sprintf("Are you sure you want to permanently delete these %d selected notes?", len(m.deleteTargetNotes))
-			} else if len(m.deleteTargetNotes) == 1 {
-				if m.deleteReturnMode == ViewArchived {
-					prompt = fmt.Sprintf("Are you sure you want to permanently delete this note?\n\n\"%s\"", m.deleteTargetNotes[0].Summary)
-				} else {
-					prompt = fmt.Sprintf("Are you sure you want to archive this note?\n\n\"%s\"", m.deleteTargetNotes[0].Summary)
-				}
-			} else {
-				prompt = "No notes selected for deletion."
-			}
-		}
-
-		footerText := renderModalFooter(footerItemsFrom(deleteConfirmBindings()), modalWidth-6)
-
-		popupContent := lipgloss.JoinVertical(
-			lipgloss.Left,
-			titleText,
-			"",
-			prompt,
-			"",
-			footerText,
-		)
-
-		modal := modalStyle.Width(modalWidth).Render(popupContent)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-
-	case ViewError:
-		return m.renderErrorModal(modalWidth)
-
-	case ViewReviewConfirm:
-		return m.renderReviewConfirm(modalWidth)
-
-	case ViewReviewRunConfirm:
-		return m.renderReviewRunConfirm(modalWidth)
-
-	case ViewRejectComment:
-		return m.renderRejectComment(modalWidth)
-
-	case ViewArchived:
-		titleText := modalTitleStyle.Render(" ARCHIVED NOTES ")
-
-		innerHeight := m.height - 10 - footerLineCount(archiveFooterItems)
-		if innerHeight < 4 {
-			innerHeight = 4
-		}
-		m.archivedViewport.Height = innerHeight
-
-		footerText := renderModalFooter(archiveFooterItems, modalWidth-6)
-
-		popupContent := lipgloss.JoinVertical(
-			lipgloss.Left,
-			titleText,
-			"",
-			m.archivedViewport.View(),
-			"",
-			footerText,
-		)
-
-		modal := modalStyle.Width(modalWidth).Render(popupContent)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-
-	case ViewPreview:
-		navItems := m.allNavItems()
-		headerTitle := " PREVIEW "
-		statusBadge := badgeActive.Render("IDLE")
-		tagBadge := tagStyle.Render("#general")
-
-		if len(navItems) > 0 && m.selected < len(navItems) {
-			item := navItems[m.selected]
-			switch item.Kind {
-			case KindGitRepo:
-				headerTitle = fmt.Sprintf(" GIT REPO: %s ", item.GitRepo.Name)
-				statusBadge = badgeActive.Render("SYNCED")
-				tagBadge = tagStyle.Render("#git")
-			case KindPendingGit:
-				if item.PendingGitPR != nil {
-					headerTitle = fmt.Sprintf(" PENDING PR REVIEW: %s ", item.PendingGitPR.Repository)
-					if item.PendingGitPR.Kind == sourcecontrol.ReReviewKind {
-						headerTitle = fmt.Sprintf(" RE-REVIEW: %s ", item.PendingGitPR.Repository)
-					}
-					statusBadge = m.prStateBadge(item.PendingGitPR)
-					if pid, running := m.reviewPIDFor(item.PendingGitPR); running {
-						statusBadge = badgeActive.Render(fmt.Sprintf("RUNNING · PID %d", pid))
-					}
-					tagBadge = tagStyle.Render("#github")
-				}
-			case KindMyPR:
-				if item.MyPR != nil {
-					headerTitle = fmt.Sprintf(" MY PR: %s #%d ", item.MyPR.Ref.Repo, item.MyPR.Ref.Number)
-					statusBadge = badgeActive.Render(strings.ToUpper(myPRCIText(item.MyPR.CIState)))
-					tagBadge = tagStyle.Render("#my-pr")
-				}
-			case KindReviewRun:
-				headerTitle = fmt.Sprintf(" REVIEW JOB: %s ", reviewRunLabel(*item.ReviewRun))
-				statusBadge = stateStyle(review.StateFailed).Render("FAILED")
-				if state := m.localReviews[review.StateDir(m.reviewRoot(), item.ReviewRun.Meta.Ref)]; state.pid > 0 {
-					statusBadge = badgeActive.Render(fmt.Sprintf("RUNNING · PID %d", state.pid))
-				}
-				tagBadge = tagStyle.Render("#github")
-			case KindBragRun:
-				headerTitle = fmt.Sprintf(" BRAG JOB: %s ", item.BragRun.Meta.ID)
-				statusBadge = stateStyle(review.StateFailed).Render("FAILED")
-				if item.BragRun.Status == brag.RunRunning {
-					statusBadge = badgeActive.Render("RUNNING")
-				}
-				tagBadge = tagStyle.Render("#brag")
-			case KindJobDraft:
-				headerTitle = fmt.Sprintf(" JOB: %s ", item.Draft.Name)
-				if pid := m.runningJobPIDs[item.Draft.Name]; pid > 0 {
-					statusBadge = badgeActive.Render(fmt.Sprintf("RUNNING · PID %d", pid))
-				} else if item.Draft.DryRunInFlight {
-					statusBadge = badgeActive.Render("DRY RUNNING")
-				} else if m.previewJobLogFinished {
-					statusBadge = badgeDone.Render("FINISHED")
-				} else if item.Draft.HasRunDryRun {
-					if item.Draft.ExitCode == 0 {
-						statusBadge = badgeDone.Render("SUCCESS")
-					} else {
-						statusBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true).Render("NEED ACT")
-					}
-				} else {
-					statusBadge = badgeActive.Render("IDLE")
-				}
-				tagBadge = tagStyle.Render("#job")
-			default:
-				if item.Note != nil {
-					headerTitle = " PREVIEW NOTE "
-					if item.Note.Status == model.StatusDone {
-						statusBadge = badgeDone.Render("DONE")
-					}
-					if item.Note.Subject != "" {
-						tagBadge = tagStyle.Render("#" + item.Note.Subject)
-					}
-				}
-			}
-		}
-
-		headerLeft := modalTitleStyle.Render(headerTitle)
-		rightCol := lipgloss.JoinVertical(lipgloss.Right, statusBadge, tagBadge)
-		gap := innerWidth - lipgloss.Width(headerLeft) - lipgloss.Width(rightCol)
-
-		topLine := lipgloss.JoinHorizontal(lipgloss.Top, headerLeft, safeRepeat(" ", gap), rightCol)
-
-		prItem := m.currentPRItem()
-		items := footerItemsFrom(m.previewBindings())
-
-		footerText := renderModalFooter(items, modalWidth-6)
-
-		partsAbove := []string{topLine, ""}
-		if prItem != nil {
-			partsAbove = append(partsAbove, m.renderPreviewTabs(), "")
-		}
-		partsBelow := []string{""}
-		if prItem != nil && m.reviewNotice != "" {
-			partsBelow = append(partsBelow, yellowBadgeStyle.Render(m.reviewNotice), "")
-		}
-		partsBelow = append(partsBelow, footerText)
-		fixedHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, partsAbove...)) + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, partsBelow...))
-		m.previewViewport.Height = max(3, previewContentHeight(m.height)-fixedHeight)
-		previewParts := append(append(partsAbove, m.previewViewport.View()), partsBelow...)
-		popupContent := lipgloss.JoinVertical(lipgloss.Left, previewParts...)
-
-		modal := modalStyle.Width(modalWidth).Render(popupContent)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-
-	case ViewEdit:
-		titleText := modalTitleStyle.Render(" ADD / EDIT NOTE ")
-
-		footerText := renderModalFooter(footerItemsFrom(editBindings()), modalWidth-6)
-
-		popupContent := lipgloss.JoinVertical(
-			lipgloss.Left,
-			titleText,
-			"",
-			m.editor.View(),
-			"",
-			footerText,
-		)
-
-		modal := modalStyle.Width(modalWidth).Render(popupContent)
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modal, m.width, m.height))
-
-	case ViewSearch:
-		return m.renderSearchModal(modalWidth)
-
-	case ViewSearchPreview:
-		return m.renderSearchPreview(modalWidth)
-
-	case ViewHelp:
-		return m.renderHelp(modalWidth)
-
-	case ViewBragList:
-		return m.renderBragList()
-
-	case ViewBragView:
-		return m.renderBragView()
-
-	case ViewBragConfirm:
-		return m.renderBragConfirm(modalWidth)
-
-	case ViewBragEdit:
-		return m.renderBragEdit()
-	}
-
-	dashboardView := composeDashboard(m)
-	if toast := m.renderSyncErrorToast(); toast != "" {
-		return overlayTopRight(dashboardView, toast, m.width)
-	}
-	return dashboardView
-}
-
-func scrollViewport(view *viewport.Model, key string) bool {
-	switch key {
-	case "j", "down":
-		view.ScrollDown(1)
-	case "k", "up":
-		view.ScrollUp(1)
-	case "pgdown":
-		view.PageDown()
-	case "pgup":
-		view.PageUp()
-	case "ctrl+d":
-		view.HalfPageDown()
-	case "ctrl+u":
-		view.HalfPageUp()
-	default:
-		return false
-	}
-	return true
 }
 
 func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
@@ -3025,71 +1492,16 @@ func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) renderSyncErrorToast() string {
-	if len(m.syncErrors) == 0 {
-		return ""
+func (m Model) progressText() string {
+	facts := habit.Gather(m.notes, time.Now(), m.cfg.IsWorkDay)
+	var parts []string
+	if facts.Streak > 0 {
+		parts = append(parts, yellowBadgeStyle.Render(fmt.Sprintf("🔥 %d-day streak", facts.Streak)))
 	}
-	sections := make([]string, 0, len(m.syncErrors))
-	for section := range m.syncErrors {
-		sections = append(sections, section)
+	if facts.ClosedThisWeek > 0 {
+		parts = append(parts, mutedStyle.Render(fmt.Sprintf("%d closed this week", facts.ClosedThisWeek)))
 	}
-	sort.Strings(sections)
-	toastWidth := min(max(m.width/3, 36)*11/10, m.width-2)
-	lines := []string{staleStyle.Render("GIT SYNC FAILED")}
-	for _, section := range sections {
-		lines = append(lines, ansi.Truncate(section+": "+m.syncErrors[section], toastWidth-4, "…"))
-	}
-	lines = append(lines, mutedStyle.Render("esc dismiss"))
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#F38BA8")).
-		Padding(0, 1).
-		Width(toastWidth).
-		Render(strings.Join(lines, "\n"))
-}
-
-func overlayTopRight(base, box string, width int) string {
-	baseLines := strings.Split(base, "\n")
-	boxLines := strings.Split(box, "\n")
-	boxWidth := lipgloss.Width(box)
-	leftWidth := width - boxWidth - 1
-	if leftWidth < 0 {
-		leftWidth = 0
-	}
-	for index, boxLine := range boxLines {
-		row := index + 1
-		if row >= len(baseLines) {
-			break
-		}
-		left := ansi.Truncate(baseLines[row], leftWidth, "")
-		if gap := leftWidth - lipgloss.Width(left); gap > 0 {
-			left += strings.Repeat(" ", gap)
-		}
-		baseLines[row] = left + "\x1b[0m" + boxLine
-	}
-	return strings.Join(baseLines, "\n")
-}
-
-var (
-	appVersion   = "dev"
-	versionStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#6C7086"))
-)
-
-const (
-	bannerTopRow    = "█▀▄ █ █▀▀ █▀▀ █▀▀ ▀█▀"
-	bannerMiddleRow = "█ █ █ █ ▄ █▀  ▀▀█  █ "
-	bannerBottomRow = "█▄▀ █ █▄█ █▄▄ ▄▄█  █ "
-)
-
-func bannerWaveLastFrame() int {
-	return len([]rune(bannerTopRow)) + 2
-}
-
-func (m Model) renderBannerLine(line string) string {
-	if !m.bannerWaveActive {
-		return headerTitleStyle.Render(line)
-	}
-	return renderWave(line, m.bannerWaveFrame, headerTitleStyle)
+	return strings.Join(parts, mutedStyle.Render(" · "))
 }
 
 func (m Model) renderHeader() string {
@@ -3104,8 +1516,18 @@ func (m Model) renderHeader() string {
 		}
 	}
 
+	bottomLine := m.renderBannerLine(bannerBottomRow)
+	if progress := m.progressText(); progress != "" && m.width-4-lipgloss.Width(bottomLine)-lipgloss.Width(progress) > 2 {
+		bottomLine += safeRepeat(" ", m.width-4-lipgloss.Width(bottomLine)-lipgloss.Width(progress)) + progress
+	}
+
+	topLine := m.renderBannerLine(bannerTopRow)
+	if message := m.renderActiveMessage(m.width - 4 - lipgloss.Width(topLine) - 4); message != "" {
+		topLine += safeRepeat(" ", m.width-4-lipgloss.Width(topLine)-lipgloss.Width(message)) + message
+	}
+
 	headerLines := []string{borderStyle.Render("┌" + safeRepeat("─", m.width-2) + "┐")}
-	for _, content := range []string{m.renderBannerLine(bannerTopRow), middleLine, m.renderBannerLine(bannerBottomRow)} {
+	for _, content := range []string{topLine, middleLine, bottomLine} {
 		headerLines = append(headerLines, fmt.Sprintf("│ %s%s │", content, safeRepeat(" ", m.width-lipgloss.Width(content)-4)))
 	}
 	headerLines = append(headerLines, borderStyle.Render("├"+safeRepeat("─", m.width-2)+"┤"))
@@ -3121,216 +1543,144 @@ func (m Model) dashboardContent() (content string, selectedLine int) {
 }
 
 func (m Model) buildDashboardContent() (content string, selectedLine int) {
-	var b strings.Builder
+	var board strings.Builder
+	if m.frames != nil {
+		board.Grow(m.frames.lastContentLength + 1024)
+	}
 	innerWidth := m.width - 4
 	rowWidth := innerWidth + 1
 
-	// Calculate counts to determine globalIdx ranges
-	yGitCount := len(m.yesterdayGitRepo)
 	groups := m.groupNotes()
-	yNotes := groups.previousDone
-	yNotesCount := len(yNotes)
-	todayNotes, olderNotes := groups.today, groups.carried
-	carriedCount := len(olderNotes)
-	addedCount := len(todayNotes)
-	todayDoneNotes := groups.todayDone
-	closedCount := len(todayDoneNotes)
-
 	pendingGroups := m.getPendingGitGroups()
-	m.tagSlots = m.dashboardTagSlots(groups, pendingGroups)
-	pendingGitCount := 0
-	for _, g := range pendingGroups {
-		pendingGitCount += len(g.Items)
+	m.tagCells = &rowTagCellCache{prs: map[*GitPRItem][3]string{}}
+	pendingCount := 0
+	for _, group := range pendingGroups {
+		pendingCount += len(group.Items)
 	}
-
-	gitUpdatesCount := len(m.todayGitRepos) + len(m.myPRs)
 	drafts := m.getJobDrafts()
-	draftsCount := len(drafts) + len(m.reviewRuns) + len(m.bragRuns)
+	automationRuns := m.runningAutomations()
+	jobsCount := len(drafts) + len(m.reviewRuns) + len(m.bragRuns) + len(automationRuns)
 
-	yNotesStart := 0
-	yNotesEnd := yNotesStart + yNotesCount
+	previousNotesEnd := len(groups.previousDone)
+	gitEnd := previousNotesEnd
+	if m.cfg.GitEnabled() {
+		gitEnd += len(m.yesterdayGitRepo) + len(m.todayGitRepos) + len(m.myPRs)
+	}
+	carriedEnd := gitEnd + len(groups.carried)
+	addedEnd := carriedEnd + len(groups.today)
+	closedEnd := addedEnd + len(groups.todayDone)
+	pendingEnd := closedEnd + pendingCount
+	jobsEnd := pendingEnd + jobsCount
+	selectedWithin := func(start, end int) bool { return m.selected >= start && m.selected < end }
 
-	yGitStart := yNotesEnd
-	yGitEnd := yGitStart + yGitCount
-
-	gitUpdatesStart := yGitEnd
-	gitUpdatesEnd := gitUpdatesStart + gitUpdatesCount
-
-	carriedStart := gitUpdatesEnd
-	carriedEnd := carriedStart + carriedCount
-
-	addedStart := carriedEnd
-	addedEnd := addedStart + addedCount
-
-	closedStart := addedEnd
-	closedEnd := closedStart + closedCount
-
-	pendingGitStart := closedEnd
-	pendingGitEnd := pendingGitStart + pendingGitCount
-
-	draftsStart := pendingGitEnd
-
-	// Evaluate active header flags
-	isGitStripActive := m.selected >= yGitStart && m.selected < gitUpdatesEnd
-	isYesterdayActive := m.selected >= yNotesStart && m.selected < yNotesEnd
-
-	isCarriedActive := m.selected >= carriedStart && m.selected < carriedEnd
-	isAddedActive := m.selected >= addedStart && m.selected < addedEnd
-	isClosedActive := m.selected >= closedStart && m.selected < closedEnd
-	isPendingGitActive := m.selected >= pendingGitStart && m.selected < pendingGitEnd
-	isDraftsActive := m.selected >= draftsStart && m.selected < draftsStart+draftsCount
-	isTodayActive := m.selected >= carriedStart && m.selected < draftsStart+draftsCount
-
-	globalIdx := 0
-	markSelection := func() {
-		if globalIdx == m.selected {
-			selectedLine = strings.Count(b.String(), "\n")
+	navIndex := 0
+	emitRow := func(render func(selected bool) string) {
+		selected := navIndex == m.selected
+		if selected {
+			selectedLine = strings.Count(board.String(), "\n")
+		}
+		board.WriteString(render(selected))
+		navIndex++
+	}
+	emitNotes := func(notes []*model.Note, emptyHint string) {
+		if len(notes) == 0 && emptyHint != "" {
+			board.WriteString(mutedStyle.Render(emptyHint + "\n"))
+		}
+		for _, note := range notes {
+			emitRow(func(selected bool) string { return m.renderRow(note, selected, rowWidth) })
 		}
 	}
 
-	yTitleText := m.previousDayTitleFor(groups.previousDay)
-	b.WriteString("\n " + m.renderWaveTitle(yTitleText, isYesterdayActive) + "\n")
-	if len(yNotes) > 0 {
-		b.WriteString("\n")
+	board.WriteString("\n " + renderSectionTitle(m.previousDayTitleFor(groups.previousDay), selectedWithin(0, previousNotesEnd)) + "\n")
+	if len(groups.previousDone) > 0 {
+		board.WriteString("\n")
 	}
-	for _, n := range yNotes {
-		markSelection()
-		isSel := (globalIdx == m.selected)
-		b.WriteString(m.renderRow(n, isSel, rowWidth))
-		globalIdx++
+	emitNotes(groups.previousDone, "")
+
+	if m.cfg.GitEnabled() {
+		stripLines, stripSelectedRow := m.renderGitStrip(rowWidth, selectedWithin(previousNotesEnd, gitEnd), groups)
+		board.WriteString(sectionGap)
+		if stripSelectedRow >= 0 {
+			selectedLine = strings.Count(board.String(), "\n") + stripSelectedRow
+		}
+		board.WriteString(strings.Join(stripLines, "\n") + "\n")
+		navIndex = gitEnd
 	}
 
-	stripLines, stripSelectedRow := m.renderGitStrip(rowWidth, isGitStripActive)
-	b.WriteString(sectionGap)
-	if stripSelectedRow >= 0 {
-		selectedLine = strings.Count(b.String(), "\n") + stripSelectedRow
-	}
-	b.WriteString(strings.Join(stripLines, "\n") + "\n")
-	globalIdx = gitUpdatesEnd
-
-	// --- TODAY SECTION ---
-	b.WriteString(sectionGap)
+	board.WriteString(sectionGap)
 	jobBadge := fmt.Sprintf("%d jobs %s", len(drafts), amberDiamond.Render())
+	todayTitle := renderSectionTitle(m.dayTitleText(m.currentDate, "T O D A Y"), selectedWithin(gitEnd, jobsEnd))
+	todayGap := innerWidth - lipgloss.Width(todayTitle) - lipgloss.Width(jobBadge)
+	board.WriteString(fmt.Sprintf(" %s%s%s\n\n", todayTitle, safeRepeat(" ", todayGap), jobBadge))
 
-	todayTitleText := m.dayTitleText(m.currentDate, "T O D A Y")
+	board.WriteString("  " + m.renderSubSection("Pending, Carried Over", len(groups.carried), true, selectedWithin(gitEnd, carriedEnd)) + "\n")
+	emitNotes(groups.carried, "   (no carried over notes)")
+	board.WriteString(sectionGap + "  " + m.renderSubSection("Added Today", len(groups.today), true, selectedWithin(carriedEnd, addedEnd)) + "\n")
+	emitNotes(groups.today, "   (no notes added today)")
+	board.WriteString(sectionGap + "  " + m.renderSubSection("Closed Today", len(groups.todayDone), true, selectedWithin(addedEnd, closedEnd)) + "\n")
+	emitNotes(groups.todayDone, "   (no notes closed today)")
 
-	renderedTodayTitle := m.renderWaveTitle(todayTitleText, isTodayActive)
-	todayGap := innerWidth - lipgloss.Width(renderedTodayTitle) - lipgloss.Width(jobBadge)
-	b.WriteString(fmt.Sprintf(" %s%s%s\n\n", renderedTodayTitle, safeRepeat(" ", todayGap), jobBadge))
-
-	// 1. TODAY: Pending, Carried Over
-	b.WriteString("  " + m.renderSubSection("Pending, Carried Over", carriedCount, true, isCarriedActive) + "\n")
-	if len(olderNotes) == 0 {
-		b.WriteString(mutedStyle.Render("   (no carried over notes)\n"))
-	} else {
-		for _, n := range olderNotes {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderRow(n, isSel, rowWidth))
-			globalIdx++
-		}
-	}
-
-	// 2. TODAY: Added Today
-	b.WriteString(sectionGap + "  " + m.renderSubSection("Added Today", addedCount, true, isAddedActive) + "\n")
-	if len(todayNotes) == 0 {
-		b.WriteString(mutedStyle.Render("   (no notes added today)\n"))
-	} else {
-		for _, n := range todayNotes {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderRow(n, isSel, rowWidth))
-			globalIdx++
-		}
-	}
-
-	// 3. TODAY: Closed Today
-	b.WriteString(sectionGap + "  " + m.renderSubSection("Closed Today", closedCount, true, isClosedActive) + "\n")
-	if len(todayDoneNotes) == 0 {
-		b.WriteString(mutedStyle.Render("   (no notes closed today)\n"))
-	} else {
-		for _, n := range todayDoneNotes {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderRow(n, isSel, rowWidth))
-			globalIdx++
-		}
-	}
-
-	// 4. TODAY: Pending Git Actions
-	pendingGitHeader := m.renderSubSection("Pending Git Actions", 0, false, isPendingGitActive)
-	pendingStatus := m.renderLiveSyncDot()
-	b.WriteString(fmt.Sprintf("%s  %s  %s  %s\n", sectionGap, pendingGitHeader, m.renderPendingSortHint(), pendingStatus))
-
-	if len(pendingGroups) == 0 {
-		if m.loadingGit {
-			b.WriteString(mutedStyle.Render("   (checking pending PR reviews...)\n"))
-		} else if m.pendingMeOnly {
-			b.WriteString(mutedStyle.Render("   (no PRs asking you by name)\n"))
-		} else {
-			b.WriteString(mutedStyle.Render("   (no PRs requiring review)\n"))
-		}
-	} else {
-		for groupIndex, g := range pendingGroups {
-			if groupIndex > 0 {
-				b.WriteString("\n")
+	if m.cfg.GitEnabled() {
+		pendingHeader := m.renderSubSection("Pending Git Actions", 0, false, selectedWithin(closedEnd, pendingEnd))
+		board.WriteString(fmt.Sprintf("%s  %s  %s\n", sectionGap, pendingHeader, m.renderPendingSortHint()))
+		switch {
+		case len(pendingGroups) > 0:
+			for groupIndex, group := range pendingGroups {
+				if groupIndex > 0 {
+					board.WriteString("\n")
+				}
+				board.WriteString("    " + dimBlueText.Bold(true).Render(group.Name) + "\n")
+				for itemIndex := range group.Items {
+					item := &group.Items[itemIndex]
+					emitRow(func(selected bool) string { return m.renderPendingGitRow(item, selected, rowWidth) })
+				}
 			}
-			b.WriteString("    " + dimBlueText.Bold(true).Render(g.Name) + "\n")
-			for i := range g.Items {
-				markSelection()
-				isSel := (globalIdx == m.selected)
-				b.WriteString(m.renderPendingGitRow(&g.Items[i], isSel, rowWidth))
-				globalIdx++
-			}
+		case m.loadingGit:
+			board.WriteString(mutedStyle.Render("   (checking pending PR reviews...)\n"))
+		case m.pendingMeOnly:
+			board.WriteString(mutedStyle.Render("   (no PRs asking you by name)\n"))
+		default:
+			board.WriteString(mutedStyle.Render("   (no PRs requiring review)\n"))
 		}
 	}
 
-	// 5. TODAY: Jobs
-	b.WriteString(sectionGap + "  " + m.renderSubSection("Jobs", 0, false, isDraftsActive) + "\n")
-	if draftsCount == 0 {
-		b.WriteString(mutedStyle.Render("   (no jobs configured)\n"))
-	} else {
-		for _, d := range drafts {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderDraftRow(d, isSel, innerWidth))
-			globalIdx++
-		}
-		for i := range m.reviewRuns {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderReviewRunRow(m.reviewRuns[i], isSel, innerWidth))
-			globalIdx++
-		}
-		for i := range m.bragRuns {
-			markSelection()
-			isSel := (globalIdx == m.selected)
-			b.WriteString(m.renderBragRunRow(m.bragRuns[i], isSel, innerWidth))
-			globalIdx++
-		}
+	board.WriteString(sectionGap + "  " + m.renderSubSection("Jobs", 0, false, selectedWithin(pendingEnd, jobsEnd)) + "\n")
+	if jobsCount == 0 {
+		board.WriteString(mutedStyle.Render("   (no jobs configured)\n"))
+	}
+	for _, draft := range drafts {
+		emitRow(func(selected bool) string { return m.renderDraftRow(draft, selected, innerWidth) })
+	}
+	for _, run := range m.reviewRuns {
+		emitRow(func(selected bool) string { return m.renderReviewRunRow(run, selected, innerWidth) })
+	}
+	for _, run := range m.bragRuns {
+		emitRow(func(selected bool) string { return m.renderBragRunRow(run, selected, innerWidth) })
+	}
+	for _, run := range automationRuns {
+		emitRow(func(selected bool) string { return m.renderAutomationRunRow(run, selected, innerWidth) })
 	}
 
-	return b.String(), selectedLine
+	if m.frames != nil {
+		m.frames.lastContentLength = board.Len()
+	}
+	return board.String(), selectedLine
 }
 
-func (m Model) renderDashboardBody() string {
-	if m.scrollPending {
-		m.settleScroll()
+func (m Model) visibleScrollOffset(frame *dashboardFrame) int {
+	bodyHeight := m.frameBodyHeight(frame)
+	lineCount := strings.Count(frame.content, "\n") + 1
+	scrollOffset := max(m.scrollOffset, 0)
+	if scrollOffset > lineCount-bodyHeight && lineCount > bodyHeight {
+		scrollOffset = lineCount - bodyHeight
 	}
-	return m.renderFrameBody(m.currentDashboardFrame())
+	return scrollOffset
 }
 
 func (m Model) renderFrameBody(frame *dashboardFrame) string {
-	bodyHeight := frame.bodyHeight()
+	bodyHeight := m.frameBodyHeight(frame)
 	lines := strings.Split(frame.content, "\n")
-
-	scrollOffset := m.scrollOffset
-	if scrollOffset < 0 {
-		scrollOffset = 0
-	}
-	if scrollOffset > len(lines)-bodyHeight && len(lines) > bodyHeight {
-		scrollOffset = len(lines) - bodyHeight
-	}
+	scrollOffset := m.visibleScrollOffset(frame)
 
 	endIdx := scrollOffset + bodyHeight
 	if endIdx > len(lines) {
@@ -3351,317 +1701,13 @@ func (m Model) renderFrameBody(frame *dashboardFrame) string {
 	return strings.Join(framed, "\n")
 }
 
-func (m Model) renderGitRepoRow(repo *GitRepoStat, selected bool, width int) string {
-	var statParts []string
-	if repo.Assigned > 0 {
-		statParts = append(statParts, fmt.Sprintf("%d assigned", repo.Assigned))
+func Run(cfg *config.Config, startupErr error, configPath string, startInSetup bool) error {
+	model := NewModel(cfg, startupErr)
+	model.configPath = configPath
+	if startInSetup {
+		model = model.startSetup(configPath)
 	}
-	if repo.Reviewed > 0 {
-		statParts = append(statParts, fmt.Sprintf("%d reviewed", repo.Reviewed))
-	}
-	if m.cfg.DailyCommitsEnabled() {
-		statParts = append(statParts, fmt.Sprintf("%d commits", repo.Commits))
-	}
-	stats := strings.Join(statParts, " · ")
-	if room := width - 10; lipgloss.Width(stats) > room {
-		stats = "…" + string([]rune(stats)[len([]rune(stats))-max(room-1, 1):])
-	}
-
-	nameStyle := subSectionStyle
-	return alignRightSelected("     "+underlinedWhen(selected, nameStyle.Render(repo.Name)), []string{mutedStyle.Render(stats)}, width, selected) + "\n"
-}
-
-const tagGap = "  "
-
-type rowTagSlots struct {
-	noteAge, noteSource, prSize, prAge, prState int
-}
-
-func slotted(cell string, slotWidth int) string {
-	return safeRepeat(" ", slotWidth-lipgloss.Width(cell)) + cell
-}
-
-func alignRight(left string, tags []string, width int) string {
-	return alignRightSelected(left, tags, width, false)
-}
-
-func alignRightSelected(left string, tags []string, width int, selected bool) string {
-	tagBlock := joinTags(tags)
-	room := width - lipgloss.Width(tagBlock) - 1
-	if lipgloss.Width(left) > room {
-		left = ansi.Truncate(left, max(room, 0), "…")
-	}
-	return left + safeRepeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tagBlock)) + underlinedWhen(selected, tagBlock)
-}
-
-func joinTags(tags []string) string {
-	var shown []string
-	for _, tag := range tags {
-		if tag != "" {
-			shown = append(shown, tag)
-		}
-	}
-	return strings.Join(shown, tagGap)
-}
-
-func (m Model) prTagCells(item *GitPRItem) (size, age, state string) {
-	if item.PR == nil {
-		return "", "", mutedStyle.Render(fmt.Sprintf("[%s]", item.Kind))
-	}
-	now := time.Now()
-	prState := m.prState(item)
-	state = stateStyle(prState).Render(string(prState))
-	if prState == review.StateReviewing {
-		state = m.renderReviewRunningIndicator()
-	}
-	ageText := shortAge(now.Sub(item.PR.RequestedAt))
-	age = mutedStyle.Render(ageText)
-	if item.PR.IsStale(now) {
-		age = staleStyle.Render(ageText)
-	}
-	return mutedStyle.Render(fmt.Sprintf("±%d", item.PR.Size())), age, state
-}
-
-const (
-	reReviewIcon     = "\U000F02DA"
-	teamReviewIcon   = "\U000F0849"
-	directReviewIcon = "\U000F0004"
-)
-
-func reviewRequestIcon(item *GitPRItem) string {
-	var icons []string
-	if item.Kind == sourcecontrol.ReReviewKind {
-		icons = append(icons, reReviewIcon)
-	}
-	if item.PR.DirectRequest {
-		icons = append(icons, directReviewIcon)
-	}
-	if item.PR.CodeOwner {
-		icons = append(icons, teamReviewIcon)
-	}
-	if len(icons) == 0 {
-		return ""
-	}
-	return dimBlueText.Render(strings.Join(icons, " "))
-}
-
-func (m Model) prTags(item *GitPRItem) []string {
-	size, age, state := m.prTagCells(item)
-	if item.PR == nil {
-		return []string{slotted(state, m.tagSlots.prState)}
-	}
-	return []string{reviewRequestIcon(item), slotted(size, m.tagSlots.prSize), slotted(age, m.tagSlots.prAge), slotted(state, m.tagSlots.prState)}
-}
-
-func (m Model) dashboardTagSlots(groups noteGroups, pendingGroups []PendingRepoGroup) rowTagSlots {
-	return m.computeTagSlots(slices.Concat(groups.previousDone, groups.carried, groups.today, groups.todayDone), pendingGroups)
-}
-
-func (m Model) computeTagSlots(notes []*model.Note, pendingGroups []PendingRepoGroup) rowTagSlots {
-	var slots rowTagSlots
-	for _, n := range notes {
-		age, source := m.noteTagCells(n)
-		slots.noteAge = max(slots.noteAge, lipgloss.Width(age))
-		slots.noteSource = max(slots.noteSource, lipgloss.Width(source))
-	}
-	for _, group := range pendingGroups {
-		for i := range group.Items {
-			size, age, state := m.prTagCells(&group.Items[i])
-			slots.prSize = max(slots.prSize, lipgloss.Width(size))
-			slots.prAge = max(slots.prAge, lipgloss.Width(age))
-			slots.prState = max(slots.prState, lipgloss.Width(state))
-		}
-	}
-	return slots
-}
-
-func (m Model) renderPendingGitRow(item *GitPRItem, selected bool, width int) string {
-	titleStyle := itemStyle
-	if selected {
-		titleStyle = selectedSummaryStyle
-	}
-	leftBlock := fmt.Sprintf("      %s %s", pendingPRIcon.Render(), underlinedWhen(selected, titleStyle.Render(item.Title)))
-	return alignRightSelected(leftBlock, m.prTags(item), width, selected) + "\n"
-}
-
-func (m Model) renderDraftRow(draft *JobDraft, selected bool, width int) string {
-	rightColWidth := 26
-	if width < 60 {
-		rightColWidth = 20
-	}
-	leftWidth := width - rightColWidth
-	if leftWidth < 15 {
-		leftWidth = 15
-	}
-
-	prefix := "   "
-
-	var icon string
-	if draft.HasRunDryRun && draft.ExitCode == 0 {
-		icon = checkDone.Render()
-	} else {
-		icon = amberDiamond.Render()
-	}
-
-	label := draft.Name
-	maxLabelWidth := leftWidth - len(prefix) - 2
-	if maxLabelWidth < 5 {
-		maxLabelWidth = 5
-	}
-
-	if lipgloss.Width(label) > maxLabelWidth {
-		label = label[:maxLabelWidth-3] + "..."
-	}
-
-	var leftBlock string
-	if selected {
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, icon, selectedTitle(label))
-	} else {
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, icon, itemStyle.Render(label))
-	}
-
-	leftPadding := leftWidth - lipgloss.Width(leftBlock)
-	if leftPadding < 0 {
-		leftPadding = 0
-	}
-
-	var rightBlock string
-	if m.jobRunning(draft.Name) {
-		runningIndicator := m.renderJobRunningIndicator()
-		rightBlock = fmt.Sprintf("%s   %s", jobActiveTagStyle.Render("#job"), runningIndicator)
-	} else if draft.DryRunInFlight {
-		rightBlock = fmt.Sprintf("%s   %s", jobActiveTagStyle.Render("#job"), m.renderDryRunIndicator())
-	} else {
-		statusText := "need to act"
-		if draft.HasRunDryRun && draft.ExitCode == 0 {
-			statusText = "success"
-		}
-
-		rightBlock = fmt.Sprintf("%s   %s", dimBlueText.Render("#job"), mutedStyle.Render(statusText))
-	}
-
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
-}
-
-func (m Model) noteTagCells(n *model.Note) (age, source string) {
-	sourceText := string(n.Source)
-	if sourceText == "" {
-		sourceText = "manual"
-	}
-	if !strings.HasPrefix(sourceText, "#") {
-		sourceText = "#" + sourceText
-	}
-	source = dimBlueText.Render(sourceText)
-
-	ageText := "08:40"
-	carriedOver := false
-	switch {
-	case n.Created.IsZero():
-	case n.Status != model.StatusDone && !isSameDay(n.Created, m.currentDate) && n.Created.Before(m.currentDate):
-		carriedOver = true
-		ageText = fmt.Sprintf("%dd ago", daysAgo(n.Created, m.currentDate))
-	case !isSameDay(n.Created, m.currentDate):
-		ageText = n.Created.Format("Mon")
-	default:
-		ageText = n.Created.Format("15:04")
-	}
-	age = mutedStyle.Render(ageText)
-	if carriedOver {
-		age = yellowBadgeStyle.Render(ageText)
-	}
-	return age, source
-}
-
-func (m Model) inlineEditWidth(n *model.Note) int {
-	m.tagSlots = m.dashboardTagSlots(m.groupNotes(), m.getPendingGitGroups())
-	age, source := m.noteTagCells(n)
-	tags := []string{slotted(age, m.tagSlots.noteAge), slotted(source, m.tagSlots.noteSource)}
-	rowWidth := m.width - 3
-	return max(rowWidth-lipgloss.Width(strings.Join(tags, tagGap))-3-4, 5)
-}
-
-func (m Model) renderRow(n *model.Note, selected bool, width int) string {
-	age, source := m.noteTagCells(n)
-	tags := []string{slotted(age, m.tagSlots.noteAge), slotted(source, m.tagSlots.noteSource)}
-	prefix := "   "
-
-	boxChar := "☐"
-	if n.Status == model.StatusDone {
-		boxChar = "✔"
-	}
-	isTodayDone := n.Status == model.StatusDone && isSameDay(n.Updated, m.currentDate)
-
-	var leftBlock string
-	switch {
-	case selected && m.mode == ViewInlineEdit:
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, checkPending.Render(), m.inlineInput.View())
-	case selected:
-		boxStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#CDD6F4"))
-		if n.Status == model.StatusDone {
-			boxStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A6E3A1"))
-		}
-		summaryStyle := selectedSummaryStyle.Copy()
-		if isTodayDone {
-			summaryStyle = summaryStyle.Strikethrough(true)
-		}
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, boxStyle.Render(boxChar), underlined(summaryStyle.Render(n.Summary)))
-	default:
-		box := checkPending.Render()
-		if n.Status == model.StatusDone {
-			box = checkDone.Render()
-		}
-		summary := itemStyle.Render(n.Summary)
-		if isTodayDone {
-			summary = itemStyle.Copy().Strikethrough(true).Render(n.Summary)
-		}
-		leftBlock = fmt.Sprintf("%s%s %s", prefix, box, summary)
-	}
-	return alignRightSelected(leftBlock, tags, width, selected) + "\n"
-}
-
-var archiveFooterItems = footerItemsFrom(archivedBindings())
-
-func (m Model) dashboardBodyHeight() int {
-	return m.height - lipgloss.Height(m.renderHeader()) - lipgloss.Height(m.renderFooter())
-}
-
-func (m Model) footerLines() []string {
-	var lines []string
-	if m.ctrlCCount > 0 {
-		var warnings []footerItem
-		for _, binding := range m.dashboardBindings() {
-			if binding.action == actionQuit {
-				warnings = footerItemsFrom([]keyBinding{binding})
-			}
-		}
-		keysLine, firstActionLine, secondActionLine := renderFooterLines(warnings)
-		lines = append(lines, keysLine, firstActionLine)
-		if footerLineCount(warnings) == 3 {
-			lines = append(lines, secondActionLine)
-		}
-	}
-	return lines
-}
-
-func (m Model) renderFooter() string {
-	lines := m.footerLines()
-	bottomBorder := borderStyle.Render("└" + safeRepeat("─", m.width-2) + "┘")
-	if len(lines) == 0 {
-		return bottomBorder
-	}
-	topBorder := borderStyle.Render("├" + safeRepeat("─", m.width-2) + "┤")
-
-	rows := []string{topBorder}
-	for _, line := range lines {
-		padded := " " + line + " "
-		rows = append(rows, "│"+padded+safeRepeat(" ", m.width-lipgloss.Width(padded)-2)+"│")
-	}
-	rows = append(rows, bottomBorder)
-	return strings.Join(rows, "\n")
-}
-
-func Run(cfg *config.Config, startupErr error) error {
-	p := tea.NewProgram(NewModel(cfg, startupErr), tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
@@ -3673,6 +1719,10 @@ func prReviewNoteURL(note *model.Note) string {
 	if note == nil || note.Source != model.SourcePRReview {
 		return ""
 	}
+	return notePullRequestURL(note)
+}
+
+func notePullRequestURL(note *model.Note) string {
 	links := noteLinkPattern.FindAllString(note.Body, -1)
 	for i := len(links) - 1; i >= 0; i-- {
 		if pullRequestPathPattern.MatchString(links[i]) {
@@ -3680,101 +1730,4 @@ func prReviewNoteURL(note *model.Note) string {
 		}
 	}
 	return ""
-}
-
-func previewModalHeight(terminalHeight int) int {
-	return max(12, terminalHeight-4)
-}
-
-func previewContentHeight(terminalHeight int) int {
-	return previewModalHeight(terminalHeight) - modalStyle.GetVerticalFrameSize()
-}
-
-func visibleGitRows(selected, total, rowsAvailable int) (first, last int) {
-	if rowsAvailable < 1 {
-		rowsAvailable = 1
-	}
-	if total <= rowsAvailable {
-		return 0, total
-	}
-	first = max(0, selected-rowsAvailable+1)
-	return first, first + rowsAvailable
-}
-
-func modalWidthFor(digestWidth int) int {
-	return min(digestWidth*90/100, digestWidth-modalStyle.GetHorizontalBorderSize())
-}
-
-func fitPopup(popup string, terminalWidth, terminalHeight int) string {
-	lines := strings.Split(popup, "\n")
-	if len(lines) > terminalHeight {
-		keptBottom := terminalHeight / 2
-		lines = append(lines[:terminalHeight-keptBottom], lines[len(lines)-keptBottom:]...)
-	}
-	for index, line := range lines {
-		if lipgloss.Width(line) > terminalWidth {
-			lines[index] = ansi.Truncate(line, terminalWidth, "")
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func footerColumnWidth(item footerItem) int {
-	firstWord, secondWord := splitFooterAction(item.action)
-	return max(lipgloss.Width(item.key), lipgloss.Width(firstWord), lipgloss.Width(secondWord))
-}
-
-func splitFooterRows(items []footerItem, maxWidth int) [][]footerItem {
-	var rows [][]footerItem
-	var currentRow []footerItem
-	rowWidth := 0
-	for _, item := range items {
-		columnWidth := footerColumnWidth(item)
-		if len(currentRow) > 0 && rowWidth+3+columnWidth > maxWidth {
-			rows = append(rows, currentRow)
-			currentRow, rowWidth = nil, 0
-		}
-		if len(currentRow) > 0 {
-			rowWidth += 3
-		}
-		currentRow = append(currentRow, item)
-		rowWidth += columnWidth
-	}
-	if len(currentRow) > 0 {
-		rows = append(rows, currentRow)
-	}
-	return rows
-}
-
-func (m *Model) applyPendingSort() {
-	m.pendingSortChosen = true
-	selectedKey, selectedOccurrence := m.selectedNavKey()
-	m.rebuildGitRepoStats()
-	m.restoreSelection(selectedKey, selectedOccurrence)
-	m.updateScrollOffset()
-}
-
-func (m *Model) changePendingSort(toggle func(*sourcecontrol.Sort)) tea.Cmd {
-	toggle(&m.pendingSort)
-	m.applyPendingSort()
-	save := pendingSortSaveCmd(m.pendingSort)
-	if !m.loadingGit {
-		return save
-	}
-	return tea.Batch(save, m.startLoadGitStatsCmd(false))
-}
-
-func (m Model) renderPendingSortHint() string {
-	field, direction := "Updated", "↓ Desc"
-	if m.pendingSort.ByCreated {
-		field = "Created"
-	}
-	if m.pendingSort.Ascending {
-		direction = "↑ Asc"
-	}
-	scope := directReviewIcon + " " + teamReviewIcon
-	if m.pendingMeOnly {
-		scope = directReviewIcon
-	}
-	return fmt.Sprintf("%s %s  %s %s  %s %s", keyStyle.Render("s"), mutedStyle.Render(field), keyStyle.Render("w"), mutedStyle.Render(direction), keyStyle.Render("m"), dimBlueText.Render(scope))
 }

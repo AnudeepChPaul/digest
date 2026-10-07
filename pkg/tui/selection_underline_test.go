@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"app/pkg/config"
 	"app/pkg/model"
 
 	"github.com/charmbracelet/lipgloss"
@@ -66,9 +67,8 @@ func TestSelectedRowsUnderlineTheWholeRightBlock(t *testing.T) {
 	withTrueColor(t)
 	m := myPRStripModel(t)
 	note := &model.Note{Summary: "Fix the picker", Created: m.currentDate.Add(8 * time.Hour), Source: model.SourceManual}
-	m.tagSlots = m.computeTagSlots([]*model.Note{note}, nil)
 	age, source := m.noteTagCells(note)
-	assertUnderlinedRightBlock(t, "note", m.renderRow(note, true, 80), m.renderRow(note, false, 80), stripANSI(age)+tagGap+stripANSI(source))
+	assertUnderlinedRightBlock(t, "note", m.renderRow(note, true, 80), m.renderNoteRowWithTags(note, false, 80, m.noteRowTags(note)), stripANSI(age)+tagGap+stripANSI(source))
 
 	selectedNote := m.renderRow(note, true, 80)
 	titleAt := strings.Index(selectedNote, "Fix the picker")
@@ -77,7 +77,10 @@ func TestSelectedRowsUnderlineTheWholeRightBlock(t *testing.T) {
 	}
 
 	pending := pendingItem(5)
-	assertUnderlinedRightBlock(t, "pending", m.renderPendingGitRow(&pending, true, 100), m.renderPendingGitRow(&pending, false, 100), stripANSI(joinTags(m.prTags(&pending))))
+	previousShowTags := m.cfg.ShowTags
+	m.cfg.ShowTags = config.ShowTagsAlways
+	assertUnderlinedRightBlock(t, "pending", m.renderPendingGitRow(&pending, true, 100), m.renderPendingGitRow(&pending, false, 100), stripANSI(joinTags(m.prTags(&pending, true))))
+	m.cfg.ShowTags = previousShowTags
 
 	repo := &GitRepoStat{Name: "console", Reviewed: 2, Assigned: 1}
 	wantStats := "1 assigned · 2 reviewed"

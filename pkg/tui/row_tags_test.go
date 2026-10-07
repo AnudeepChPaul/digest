@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"app/pkg/config"
 	"app/pkg/model"
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
@@ -52,18 +53,18 @@ func TestRowsEndAtTheSameRightColumn(t *testing.T) {
 
 func TestRowTagOrder(t *testing.T) {
 	m := syncTestModel(t)
-	note := plainRow(m.renderRow(&model.Note{Summary: "Fix login", Created: m.currentDate.AddDate(0, 0, -3), Source: model.SourceManual}, false, 100))
+	note := plainRow(m.renderRow(&model.Note{Summary: "Fix login", Created: m.currentDate.AddDate(0, 0, -3), Source: model.SourceManual}, true, 100))
 	if !strings.HasSuffix(note, "#manual") {
 		t.Errorf("note should end with #source: %q", note)
 	}
 	assertOrder(t, note, "Fix login", "3d ago", "#manual")
 
 	item := tagTestPR()
-	pr := plainRow(m.renderPendingGitRow(item, false, 100))
-	if state := string(m.prState(item)); !strings.HasSuffix(pr, state) {
-		t.Errorf("PR row should end with state %q: %q", state, pr)
+	pr := plainRow(m.renderPendingGitRow(item, true, 100))
+	if !strings.HasSuffix(pr, teamReviewIcon) {
+		t.Errorf("PR row should end with the request icons: %q", pr)
 	}
-	assertOrder(t, pr, "Add trial state", teamReviewIcon, "±120", "2d", string(m.prState(item)))
+	assertOrder(t, pr, "Add trial state", "±120", "2d", string(m.prState(item)), teamReviewIcon)
 
 	repo := plainRow(m.renderGitRepoRow(&GitRepoStat{Name: "digest", Commits: 5, Reviewed: 1, Assigned: 2}, false, 70))
 	if !strings.HasSuffix(repo, "5 commits") {
@@ -74,30 +75,10 @@ func TestRowTagOrder(t *testing.T) {
 
 func TestLongSummaryTruncatesInsteadOfPushingTags(t *testing.T) {
 	m := syncTestModel(t)
-	row := m.renderRow(&model.Note{Summary: strings.Repeat("very long summary ", 20), Created: m.currentDate, Source: model.SourcePRReview}, false, 80)
+	row := m.renderRow(&model.Note{Summary: strings.Repeat("very long summary ", 20), Created: m.currentDate, Source: model.SourcePRReview}, true, 80)
 	plain := plainRow(row)
 	if lipgloss.Width(strings.TrimSuffix(row, "\n")) != 80 || !strings.HasSuffix(plain, "#pr-review") || !strings.Contains(plain, "…") {
 		t.Errorf("summary should be cut short with tags intact: %q", plain)
-	}
-}
-
-func TestNoteAgesLineUpAcrossSources(t *testing.T) {
-	m := syncTestModel(t)
-	m.notes = []*model.Note{
-		{Summary: "carried-note", Created: m.currentDate.AddDate(0, 0, -12), Source: model.SourceManual},
-		{Summary: "review-note", Created: m.currentDate.AddDate(0, 0, -2), Source: model.SourcePRReview},
-	}
-	content, _ := m.dashboardContent()
-	ageEnds := map[int]bool{}
-	for _, line := range strings.Split(stripANSI(content), "\n") {
-		for _, age := range []string{"12d ago", "2d ago"} {
-			if strings.Contains(line, "-note") && strings.Contains(line, age) {
-				ageEnds[strings.Index(line, age)+len(age)] = true
-			}
-		}
-	}
-	if len(ageEnds) != 1 {
-		t.Errorf("ages should end in one column, got %v:\n%s", ageEnds, stripANSI(content))
 	}
 }
 
@@ -127,8 +108,8 @@ func TestPRRowShowsWhoReviewWasRequestedFrom(t *testing.T) {
 	for _, c := range cases {
 		item := tagTestPR()
 		item.PR.CodeOwner, item.PR.DirectRequest = c.codeOwner, c.directRequest
-		row := plainRow(m.renderPendingGitRow(item, false, 100))
-		assertOrder(t, row, append(append([]string{"Add trial state"}, c.icons...), "±120")...)
+		row := plainRow(m.renderPendingGitRow(item, true, 100))
+		assertOrder(t, row, append([]string{"Add trial state", "±120", string(m.prState(item))}, c.icons...)...)
 		for _, icon := range c.absent {
 			if strings.Contains(row, icon) {
 				t.Errorf("%s: unexpected %q in %q", c.name, icon, row)
@@ -141,7 +122,7 @@ func TestReReviewIconComesFirst(t *testing.T) {
 	m := syncTestModel(t)
 	item := tagTestPR()
 	item.Kind, item.PR.DirectRequest = sourcecontrol.ReReviewKind, true
-	assertOrder(t, plainRow(m.renderPendingGitRow(item, false, 100)), "Add trial state", reReviewIcon, directReviewIcon, teamReviewIcon, "±120")
+	assertOrder(t, plainRow(m.renderPendingGitRow(item, true, 100)), "Add trial state", "±120", string(m.prState(item)), reReviewIcon, directReviewIcon, teamReviewIcon)
 
 	item.Kind = sourcecontrol.PendingReviewKind
 	if row := plainRow(m.renderPendingGitRow(item, false, 100)); strings.Contains(row, reReviewIcon) {
@@ -155,5 +136,67 @@ func TestHeaderDateStaysOnTodayWhileBrowsing(t *testing.T) {
 	middle := plainLines(m.renderHeader())[2]
 	if today := time.Now().Format("Monday 02 Jan"); !strings.Contains(middle, today) {
 		t.Errorf("header should show today %q: %q", today, middle)
+	}
+}
+
+func TestPRRowShowsSizeAndAgeOnlyWhenSelected(t *testing.T) {
+	m := syncTestModel(t)
+	item := tagTestPR()
+	state := string(m.prState(item))
+	resting := plainRow(m.renderPendingGitRow(item, false, 100))
+	assertOrder(t, resting, "Add trial state", state, teamReviewIcon)
+	if strings.Contains(resting, "±120") || strings.Contains(resting, "2d") {
+		t.Errorf("unselected PR row should hide size and age: %q", resting)
+	}
+	assertOrder(t, plainRow(m.renderPendingGitRow(item, true, 100)), "Add trial state", "±120", "2d", state, teamReviewIcon)
+	m.cfg.ShowTags = config.ShowTagsAlways
+	assertOrder(t, plainRow(m.renderPendingGitRow(item, false, 100)), "Add trial state", "±120", "2d", state, teamReviewIcon)
+}
+
+func TestPRTagsHugTheRightEdgeWithoutPadding(t *testing.T) {
+	m := selectionTestModel(t)
+	oneIcon, threeIcons, noIcons := pendingItem(1), pendingItem(2), pendingItem(3)
+	oneIcon.Title, threeIcons.Title, noIcons.Title = "One icon PR", "Three icons PR", "No icons PR"
+	oneIcon.PR.CodeOwner = true
+	threeIcons.Kind, threeIcons.PR.DirectRequest, threeIcons.PR.CodeOwner = sourcecontrol.ReReviewKind, true, true
+	m.ghPendingPRs = []GitPRItem{oneIcon, threeIcons, noIcons}
+	m.rebuildGitRepoStats()
+	selectNavItem(t, &m, "pr:"+threeIcons.URL)
+	lines := plainLines(m.View())
+	for _, title := range []string{"One icon PR", "Three icons PR", "No icons PR"} {
+		row := slicesIndex(lines, title)
+		if row < 0 {
+			t.Fatalf("%s missing:\n%s", title, strings.Join(lines, "\n"))
+		}
+		content := strings.TrimSuffix(strings.TrimSuffix(lines[row], "│"), " ")
+		if strings.HasSuffix(content, " ") {
+			t.Errorf("%s: tags should end at the right edge without padding: %q", title, lines[row])
+		}
+	}
+	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+"  "+firstReviewIcon) {
+		t.Errorf("a row with no audience should end with status then the first-review marker: %q", row)
+	}
+}
+
+func TestReviewRequestIconsPairPassWithAudience(t *testing.T) {
+	cases := []struct {
+		name              string
+		kind              string
+		direct, codeOwner bool
+		want              string
+	}{
+		{"first review for me", sourcecontrol.PendingReviewKind, true, false, "\U000F0CA1\U000F0065"},
+		{"first review for my team", sourcecontrol.PendingReviewKind, false, true, "\U000F0CA1\U000F0849"},
+		{"first review for both", sourcecontrol.PendingReviewKind, true, true, "\U000F0CA1\U000F0065\U000F0849"},
+		{"re-review for me", sourcecontrol.ReReviewKind, true, false, "\U000F0458\U000F0065"},
+		{"re-review for my team", sourcecontrol.ReReviewKind, false, true, "\U000F0458\U000F0849"},
+		{"re-review with no audience", sourcecontrol.ReReviewKind, false, false, "\U000F0458"},
+	}
+	for _, c := range cases {
+		item := tagTestPR()
+		item.Kind, item.PR.DirectRequest, item.PR.CodeOwner = c.kind, c.direct, c.codeOwner
+		if got := stripANSI(reviewRequestIcon(item)); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
 	}
 }

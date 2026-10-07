@@ -17,7 +17,7 @@ func TestDefaultCommitsCommandListsTodaysCommits(t *testing.T) {
 	repoPath := makeRepoWithCommit(t, filepath.Join(t.TempDir(), "service"), "Add date picker")
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	commits := fetchRepoCommits(context.Background(), config.DefaultConfig().GitCommitsCmd, repoPath, dayStart, dayStart.Add(24*time.Hour-time.Second))
+	commits := fetchRepoCommits(context.Background(), gitCommitsCommand, repoPath, dayStart, dayStart.Add(24*time.Hour-time.Second))
 	if len(commits) != 1 || !strings.HasSuffix(commits[0].Title, ": Add date picker") || commits[0].Repository != "service" {
 		t.Fatalf("commits = %+v", commits)
 	}
@@ -28,7 +28,7 @@ func TestDefaultCommitsCommandListsOnlyOwnCommits(t *testing.T) {
 	runGit(t, "-C", repoPath, "-c", "user.name=mate", "-c", "user.email=mate@example.com", "commit", "-q", "--allow-empty", "-m", "Teammate change")
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	commits := fetchRepoCommits(context.Background(), config.DefaultConfig().GitCommitsCmd, repoPath, dayStart, dayStart.Add(24*time.Hour-time.Second))
+	commits := fetchRepoCommits(context.Background(), gitCommitsCommand, repoPath, dayStart, dayStart.Add(24*time.Hour-time.Second))
 	if len(commits) != 1 || !strings.HasSuffix(commits[0].Title, ": My change") {
 		t.Fatalf("commits = %+v", commits)
 	}
@@ -40,7 +40,9 @@ func TestLocalCommitsComeOnlyFromConfiguredRoots(t *testing.T) {
 	makeRepoWithCommit(t, filepath.Join(configuredRoot, "inside"), "Inside change")
 	makeRepoWithCommit(t, filepath.Join(otherRoot, "outside"), "Outside change")
 	cfg := config.DefaultConfig()
-	cfg.GitCommitsCmd = `git log --since="{since}" --until="{until}" --pretty="format:%h|%s"`
+	previousCommand := gitCommitsCommand
+	gitCommitsCommand = `git log --since="{since}" --until="{until}" --pretty="format:%h|%s"`
+	t.Cleanup(func() { gitCommitsCommand = previousCommand })
 	cfg.GitRepositoryRoots = []string{configuredRoot}
 	now := time.Now()
 	commitsByRepo := FetchLocalCommitsBetween(context.Background(), cfg, now.Add(-time.Hour), now.Add(time.Hour))

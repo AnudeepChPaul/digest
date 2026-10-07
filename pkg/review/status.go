@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"app/pkg/notify"
+	"app/pkg/paths"
 )
 
 type PRState string
@@ -38,20 +40,8 @@ func StateOf(pr QueuedPR, root string) PRState {
 	}
 }
 
-func notificationArgs(title, message, openURL string) []string {
-	args := []string{"-title", "digest", "-subtitle", title, "-message", message}
-	if openURL != "" {
-		args = append(args, "-open", openURL)
-	}
-	return args
-}
-
 var sendNotification = func(title, message, openURL string) error {
-	return exec.Command("terminal-notifier", notificationArgs(title, message, openURL)...).Run()
-}
-
-func Notify(title, message, openURL string) error {
-	return sendNotification(title, message, openURL)
+	return notify.Send(notify.Notification{Title: title, Message: message, OpenURL: openURL})
 }
 
 func NotifyTransitions(prs []QueuedPR, root, statePath string) error {
@@ -60,7 +50,7 @@ func NotifyTransitions(prs []QueuedPR, root, statePath string) error {
 	firstRun := errors.Is(err, fs.ErrNotExist)
 	if err == nil {
 		if err := json.Unmarshal(data, &seen); err != nil {
-			seen = map[string]bool{}
+			seen, firstRun = map[string]bool{}, true
 		}
 	} else if !firstRun {
 		return err
@@ -81,15 +71,33 @@ func NotifyTransitions(prs []QueuedPR, root, statePath string) error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(statePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(statePath), paths.PrivateDirMode); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(seen)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(statePath, encoded, 0644); err != nil {
+	if err := writeFileAtomically(statePath, encoded); err != nil {
 		return err
 	}
 	return notifyErr
+}
+
+func writeFileAtomically(path string, data []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	_, writeErr := temporary.Write(data)
+	closeErr := temporary.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(temporary.Name())
+		return err
+	}
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		_ = os.Remove(temporary.Name())
+		return err
+	}
+	return nil
 }

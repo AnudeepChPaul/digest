@@ -58,12 +58,10 @@ func DiscoverRepos(roots []string) ([]string, error) {
 				return nil
 			}
 			if d.IsDir() {
-				// Skip hidden directories except the root itself
 				if path != expanded && strings.HasPrefix(d.Name(), ".") {
 					return filepath.SkipDir
 				}
 
-				// Check if current directory is a Git repository
 				gitDir := filepath.Join(path, ".git")
 				if _, err := os.Stat(gitDir); err == nil {
 					repos = append(repos, path)

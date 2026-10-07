@@ -192,15 +192,16 @@ func (e *Engine) loadPending(ctx context.Context, activeSort Sort) ([]PRItem, ma
 		queue = append(queue, pr)
 	}
 	root := reviewRoot(cfg)
+	localReviewOutdated := memoizeByURL(func(pr review.QueuedPR) bool { return review.LocalReviewOutdated(root, pr) })
 	reReviews := review.SelectReReviews(FilterQueuedPRs(outcome.prs[reReviewSearch], allowedRepos), queue, func(pr review.QueuedPR) bool {
-		return review.NeedsReReview(pr) || review.LocalReviewOutdated(root, pr)
+		return review.NeedsReReview(pr) || localReviewOutdated(pr)
 	})
 	_ = review.NotifyTransitions(append(append([]review.QueuedPR(nil), queue...), reReviews...), root, filepath.Join(root, ".state", "approved-seen.json"))
 
 	var items []PRItem
 	for _, pr := range review.VisibleRanked(queue, cfg.GreenOnly) {
 		kind := PendingReviewKind
-		if review.LocalReviewOutdated(root, pr) {
+		if localReviewOutdated(pr) {
 			kind = ReReviewKind
 		}
 		items = append(items, NewPRItem(pr, kind))
@@ -306,4 +307,15 @@ func sameLocalDay(first, second time.Time) bool {
 	firstYear, firstMonth, firstDay := first.Local().Date()
 	secondYear, secondMonth, secondDay := second.Local().Date()
 	return firstYear == secondYear && firstMonth == secondMonth && firstDay == secondDay
+}
+
+func memoizeByURL(check func(review.QueuedPR) bool) func(review.QueuedPR) bool {
+	answers := map[string]bool{}
+	return func(pr review.QueuedPR) bool {
+		if answer, known := answers[pr.Ref.URL]; known {
+			return answer
+		}
+		answers[pr.Ref.URL] = check(pr)
+		return answers[pr.Ref.URL]
+	}
 }

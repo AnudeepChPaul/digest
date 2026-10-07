@@ -2,9 +2,11 @@ package review
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/log"
 )
@@ -25,7 +27,8 @@ func TestRunWritesFindingsAndNotifies(t *testing.T) {
 	}
 	defer func() { prepareClone, sendNotification = originalPrepare, originalNotify }()
 
-	template := `test "$(pwd -P)" = "$(cd {clone} && pwd -P)" && printf '{"recommendation":"COMMENT","findings":[{"severity":"high","title":"t"}]}' > {findings} && echo {url}`
+	t.Setenv("GH_TOKEN", "secret-gh")
+	template := `test -z "$GH_TOKEN" && test "$(pwd -P)" = "$(cd {clone} && pwd -P)" && printf '{"recommendation":"COMMENT","findings":[{"severity":"high","title":"t"}]}' > {findings} && echo {url}`
 	if err := Run(context.Background(), ref, root, template, log.New(os.Stderr)); err != nil {
 		t.Fatal(err)
 	}
@@ -66,5 +69,41 @@ func TestRunFailsWithoutFindings(t *testing.T) {
 	}
 	if len(notified) != 1 || notified[0] != "PR review failed" {
 		t.Errorf("notified = %v", notified)
+	}
+}
+
+func TestReviewCommandStopsAtItsTimeout(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 6, URL: "u"}
+	originalPrepare, originalNotify, originalTimeout := prepareClone, sendNotification, reviewCommandTimeout
+	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger) (string, error) {
+		return root, nil
+	}
+	sendNotification = func(title, message, openURL string) error { return nil }
+	reviewCommandTimeout = 200 * time.Millisecond
+	defer func() {
+		prepareClone, sendNotification, reviewCommandTimeout = originalPrepare, originalNotify, originalTimeout
+	}()
+	started := time.Now()
+	err := Run(context.Background(), ref, root, "sleep 30", log.New(io.Discard))
+	if err == nil || time.Since(started) > 10*time.Second {
+		t.Errorf("err = %v after %v", err, time.Since(started))
+	}
+}
+
+func TestCancelledRunStopsTheReviewCommand(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 7, URL: "u"}
+	originalPrepare, originalNotify := prepareClone, sendNotification
+	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger) (string, error) {
+		return root, nil
+	}
+	sendNotification = func(title, message, openURL string) error { return nil }
+	defer func() { prepareClone, sendNotification = originalPrepare, originalNotify }()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	started := time.Now()
+	if err := Run(ctx, ref, root, "sleep 30", log.New(io.Discard)); err == nil || time.Since(started) > 10*time.Second {
+		t.Errorf("err = %v after %v", err, time.Since(started))
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"app/pkg/config"
-	"app/pkg/jobs"
 	"app/pkg/review"
 )
 
@@ -13,7 +12,7 @@ func ConfiguredRepoNames(cfg *config.Config) map[string]bool {
 	if cfg == nil || len(cfg.GitRepositoryRoots) == 0 {
 		return nil
 	}
-	repoPaths, _ := jobs.DiscoverRepos(cfg.GitRepositoryRoots)
+	repoPaths := discoverReposCached(cfg.GitRepositoryRoots)
 	names := make(map[string]bool, len(repoPaths))
 	for _, repoPath := range repoPaths {
 		names[filepath.Base(filepath.Clean(repoPath))] = true

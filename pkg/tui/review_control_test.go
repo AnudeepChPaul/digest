@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"app/pkg/review"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -167,5 +169,99 @@ func TestStoppingFromReviewRowPreviewReturnsToDashboard(t *testing.T) {
 		if navItemKey(item) == "review:"+running.URL {
 			t.Errorf("stopped review still listed")
 		}
+	}
+}
+
+func TestReviewPollRerendersPreviewOnlyWhenThisPRChanged(t *testing.T) {
+	m := reviewTestModel(t)
+	stateDir := review.StateDir(m.reviewRoot(), m.currentPRItem().PR.Ref)
+	baseline, _ := m.handleReviewPoll(reviewPollSnapshot{localReviews: map[string]localReviewState{stateDir: {status: review.RunRunning, pid: 7}}})
+	m = baseline.(Model)
+	m.previewViewport = viewport.New(80, 20)
+	m.previewViewport.SetContent("sentinel")
+	unchanged := map[string]localReviewState{stateDir: {status: review.RunRunning, pid: 7}, "other": {pid: 9}}
+	next, _ := m.handleReviewPoll(reviewPollSnapshot{localReviews: unchanged})
+	m = next.(Model)
+	if !strings.Contains(m.previewViewport.View(), "sentinel") {
+		t.Errorf("unchanged review state should keep the preview")
+	}
+	changed := map[string]localReviewState{stateDir: {status: review.RunDone, finished: true}}
+	next, _ = m.handleReviewPoll(reviewPollSnapshot{localReviews: changed})
+	m = next.(Model)
+	if strings.Contains(m.previewViewport.View(), "sentinel") {
+		t.Errorf("changed review state should re-render the preview")
+	}
+}
+
+func TestRunStatePollLeavesUnrelatedPreviewAlone(t *testing.T) {
+	m := reviewTestModel(t)
+	m.dryRunsInFlight = map[string]bool{"janitor": true}
+	m.previewViewport = viewport.New(80, 20)
+	m.previewViewport.SetContent("sentinel")
+	next, _ := m.Update(runStatePollTickMsg{})
+	m = next.(Model)
+	if !strings.Contains(m.previewViewport.View(), "sentinel") {
+		t.Errorf("a busy job should not rebuild a PR preview every poll")
+	}
+}
+
+func TestCloneReadyDoesNotRunTmuxOnTheUILoop(t *testing.T) {
+	m := reviewTestModel(t)
+	opened := 0
+	previous := openInNvim
+	openInNvim = func(string, review.PRRef) error {
+		opened++
+		return nil
+	}
+	t.Cleanup(func() { openInNvim = previous })
+	next, _ := m.handleCloneReady(reviewCloneReadyMsg{dir: t.TempDir(), ref: m.currentPRItem().PR.Ref})
+	if opened != 0 || next.(Model).reviewNotice != "Opened clone in a new tmux window" {
+		t.Errorf("opened %d notice %q", opened, next.(Model).reviewNotice)
+	}
+	next, _ = m.handleCloneReady(reviewCloneReadyMsg{dir: t.TempDir(), ref: m.currentPRItem().PR.Ref, openErr: errors.New("tmux new-window: no server")})
+	if next.(Model).reviewNotice != "tmux new-window: no server" {
+		t.Errorf("notice %q", next.(Model).reviewNotice)
+	}
+}
+
+func TestRunningReviewPreviewRefreshesWhenItsLogGrows(t *testing.T) {
+	m := reviewTestModel(t)
+	ref := m.currentPRItem().PR.Ref
+	markRunning(t, m, ref)
+	logPath := filepath.Join(review.StateDir(m.reviewRoot(), ref), review.LogFile)
+	if err := os.WriteFile(logPath, []byte("cloning\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshLocalReviews()
+	poll := func() {
+		next, _ := m.handleReviewPoll(m.loadReviewPollSnapshot())
+		m = next.(Model)
+	}
+	poll()
+	m.previewViewport = viewport.New(80, 20)
+	m.previewViewport.SetContent("sentinel")
+	poll()
+	if !strings.Contains(m.previewViewport.View(), "sentinel") {
+		t.Fatalf("an idle log should not rebuild the preview")
+	}
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile.WriteString("installing dependencies\n")
+	logFile.Close()
+	poll()
+	if strings.Contains(m.previewViewport.View(), "sentinel") {
+		t.Errorf("a growing review log should refresh the preview")
+	}
+}
+
+func TestReviewPollFillsInPRsListedSinceItStarted(t *testing.T) {
+	m := reviewTestModel(t)
+	stateDir := review.StateDir(m.reviewRoot(), m.currentPRItem().PR.Ref)
+	next, _ := m.handleReviewPoll(reviewPollSnapshot{localReviews: map[string]localReviewState{}})
+	m = next.(Model)
+	if _, cached := m.localReviews[stateDir]; !cached {
+		t.Errorf("a listed PR missing from the poll snapshot should be read again")
 	}
 }

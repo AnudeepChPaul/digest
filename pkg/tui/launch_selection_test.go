@@ -3,6 +3,7 @@ package tui
 import (
 	"testing"
 
+	"app/pkg/config"
 	"app/pkg/model"
 )
 
@@ -27,9 +28,36 @@ func selectedSummary(m Model) string {
 
 func launchedWith(t *testing.T, includeToday, includeCarried bool) Model {
 	t.Helper()
+	return launchedWithDefault(t, config.SelectionNotesToday, launchNotes(syncTestModel(t), includeToday, includeCarried))
+}
+
+func launchedWithDefault(t *testing.T, selectionDefault string, notes []*model.Note) Model {
+	t.Helper()
 	m := syncTestModel(t)
-	next, _ := m.Update(loadNotesMsg{notes: launchNotes(m, includeToday, includeCarried)})
+	m.cfg.SelectionDefault = selectionDefault
+	next, _ := m.Update(loadNotesMsg{notes: notes})
 	return next.(Model)
+}
+
+func TestLaunchSelectsYesterdayWhenConfigured(t *testing.T) {
+	m := syncTestModel(t)
+	notes := append(launchNotes(m, true, true), &model.Note{Summary: "yesterday-second", Created: m.currentDate.AddDate(0, 0, -1), Updated: m.currentDate.AddDate(0, 0, -1), Status: model.StatusDone})
+	if got := selectedSummary(launchedWithDefault(t, config.SelectionNotesYesterday, notes)); got != "yesterday-done" {
+		t.Errorf("notes_yesterday should select the first yesterday note, got %q", got)
+	}
+}
+
+func TestLaunchWithoutSelectionDefaultSelectsTheFirstItem(t *testing.T) {
+	m := syncTestModel(t)
+	notes := launchNotes(m, true, true)[1:]
+	for _, selectionDefault := range []string{"", "unknown"} {
+		if got := selectedSummary(launchedWithDefault(t, selectionDefault, notes)); got != "carried" {
+			t.Errorf("selection_default %q should select the first item, got %q", selectionDefault, got)
+		}
+	}
+	if got := selectedSummary(launchedWithDefault(t, config.SelectionNotesYesterday, notes)); got != "carried" {
+		t.Errorf("an empty yesterday section should fall back to the first item, got %q", got)
+	}
 }
 
 func TestLaunchSelectsFirstAddedTodayNote(t *testing.T) {

@@ -1,8 +1,7 @@
 package review
 
 import (
-	"fmt"
-	"strings"
+	"sort"
 	"testing"
 	"time"
 )
@@ -27,7 +26,7 @@ func TestVisibleRanked(t *testing.T) {
 		{Ref: PRRef{Number: 7}, CIState: "SUCCESS", CreatedAt: now.Add(-30 * time.Hour), Additions: 20},
 	}
 	got := VisibleRanked(prs, true)
-	SortPRs(got, false, false)
+	sortPRs(got, false, false)
 	want := []int{1, 5, 4, 7}
 	if len(got) != len(want) {
 		t.Fatalf("got %d prs, want %d", len(got), len(want))
@@ -37,7 +36,7 @@ func TestVisibleRanked(t *testing.T) {
 			t.Errorf("pos %d = #%d, want #%d", i, got[i].Ref.Number, n)
 		}
 	}
-	SortPRs(got, false, true)
+	sortPRs(got, false, true)
 	if got[0].Ref.Number != 4 || got[len(got)-1].Ref.Number != 1 {
 		t.Errorf("ascending order = %v", got)
 	}
@@ -90,15 +89,6 @@ func TestReReviewsExcludesPending(t *testing.T) {
 	}
 }
 
-func pageFixture(startNumber, count int, hasNext bool, cursor string) []byte {
-	var nodes []string
-	for offset := 0; offset < count; offset++ {
-		number := startNumber + offset
-		nodes = append(nodes, fmt.Sprintf(`{"number":%d,"title":"t","url":"https://github.com/o/r/pull/%d","repository":{"name":"r","nameWithOwner":"o/r"},"author":{"login":"a"}}`, number, number))
-	}
-	return []byte(fmt.Sprintf(`{"data":{"viewer":{"login":"me"},"search":{"pageInfo":{"hasNextPage":%t,"endCursor":%q},"nodes":[%s]}}}`, hasNext, cursor, strings.Join(nodes, ",")))
-}
-
 func TestApplyReviewsKeepsMyLatestState(t *testing.T) {
 	older := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
@@ -118,4 +108,14 @@ func TestApplyReviewsKeepsMyLatestState(t *testing.T) {
 	if other.MyLastReviewState != "" {
 		t.Errorf("someone else's review set %q", other.MyLastReviewState)
 	}
+}
+
+func sortPRs(prs []QueuedPR, byCreated bool, ascending bool) {
+	sort.SliceStable(prs, func(i, j int) bool {
+		left, right := prs[i].ActivityAt(byCreated), prs[j].ActivityAt(byCreated)
+		if ascending {
+			return left.Before(right)
+		}
+		return left.After(right)
+	})
 }

@@ -137,7 +137,7 @@ func TestGitStripColumnsStayAlignedWhenNarrow(t *testing.T) {
 	m.width = 80
 	m.yesterdayGitRepo = []*GitRepoStat{{Name: "digest", Commits: 5, Reviewed: 1, Assigned: 2}, {Name: "a-very-long-repository-name", Commits: 7}}
 	m.todayGitRepos = []*GitRepoStat{{Name: "web-console", Commits: 1}}
-	lines, _ := m.renderGitStrip(m.width-4, false)
+	lines, _ := m.renderGitStrip(m.width-4, false, m.groupNotes())
 	dividerColumn := -1
 	for _, line := range lines[2:] {
 		if strings.TrimSpace(stripANSI(line)) == "" {

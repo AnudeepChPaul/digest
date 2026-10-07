@@ -2,17 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"app/pkg/automation"
 	"app/pkg/brag"
 	"app/pkg/config"
+	"app/pkg/doctor"
+	"app/pkg/habit"
 	"app/pkg/jobs"
 	"app/pkg/model"
+	"app/pkg/notify"
 	"app/pkg/paths"
 	"app/pkg/review"
 	"app/pkg/store"
@@ -49,6 +57,28 @@ func exitForJob(jobName string, needsAction bool, err error) {
 	}
 }
 
+func runNotificationsCommand(cfg *config.Config, action string, args []string) error {
+	if len(args) != 1 || args[0] != "notifications" {
+		return fmt.Errorf("usage: digest %s notifications", action)
+	}
+	if action == "uninstall" {
+		if err := notify.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Println("Removed " + notify.LaunchAgentPath())
+		return nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := notify.Install(executable, filepath.Join(cfg.LogsDir(), "notify.log")); err != nil {
+		return err
+	}
+	fmt.Println("Installed " + notify.LaunchAgentPath())
+	return nil
+}
+
 func printUsage() {
 	fmt.Println("Usage: digest [flags] [command] [command flags]")
 	fmt.Println("\nCommands:")
@@ -58,6 +88,13 @@ func printUsage() {
 	fmt.Println("  branch-reaper  Scan and prune stale local git branches")
 	fmt.Println("  pr-review      Fresh-clone a pull request and run a Claude review (--url <pr url>)")
 	fmt.Println("  brag           Generate a brag (--week 2026-W40 | --month 2026-10 | --year 2026) [--regenerate]")
+	fmt.Println("  automation     Draft or create a note's ticket (--note <id> --name <automation> --phase draft|create)")
+	fmt.Println("  notify-due     Send due @notify reminders (run every minute by launchd)")
+	fmt.Println("  install notifications    Install the launchd agent that runs notify-due every minute")
+	fmt.Println("  uninstall notifications  Remove that launchd agent")
+	fmt.Println("  doctor         Check that every tool digest needs is installed")
+	fmt.Println("  setup          Walk through the friendly setup again (git, work days, summaries, hints, notifications)")
+	fmt.Println("  export config  Write the default config.yaml into the config directory (backs up an existing one)")
 	fmt.Println("\nCommand flags:")
 	fmt.Println("  --root <dir>   Root directory to scan; repeatable")
 	fmt.Println("                 (default: ~/Projects for repo-sync and branch-reaper, current directory for janitor)")
@@ -78,9 +115,13 @@ func main() {
 		os.Exit(0)
 	}
 
+	firstRun := !config.Exists(*configPath)
 	cfg, configErr := config.LoadOrCreate(*configPath)
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", configErr)
+	}
+	if err := cfg.TightenPermissions(*configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 
 	args := flag.Args()
@@ -93,7 +134,15 @@ func main() {
 
 	switch cmdName {
 	case "tui":
-		if err := tui.Run(cfg, configErr); err != nil {
+		startupErr := configErr
+		if !firstRun {
+			if rootsErr := jobs.CheckGitRoots(cfg.GitEnabled(), cfg.GitRepositoryRoots); rootsErr != nil {
+				gitOff := false
+				cfg.ShowGit = &gitOff
+				startupErr = errors.Join(configErr, rootsErr)
+			}
+		}
+		if err := tui.Run(cfg, startupErr, config.Path(*configPath), firstRun); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 			os.Exit(1)
 		}
@@ -115,7 +164,7 @@ func main() {
 		var roots rootFlags
 		fs.Var(&roots, "root", "Root directory to scan/clean (repeatable, default current directory)")
 		dryRun := fs.Bool("dry-run", false, "Perform a dry run without moving files")
-		reviewRoot := fs.String("review-root", cfg.ReviewRootDir(), "Review clone root; clones of merged or closed PRs are removed")
+		reviewRoot := fs.String("review-root", cfg.ReviewRootDir(), "Review clone root; clones of merged or closed PRs, or idle for 7 days, are removed")
 		_ = fs.Parse(subArgs)
 
 		currentDir, err := os.Getwd()
@@ -155,7 +204,9 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Reviewing %s in %s...\n", ref.URL, review.CloneDir(cfg.ReviewRootDir(), ref))
-		err = review.Run(context.Background(), ref, cfg.ReviewRootDir(), cfg.ReviewCommandTemplate(), log.New(os.Stderr))
+		signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		err = review.Run(signalCtx, ref, cfg.ReviewRootDir(), cfg.ReviewCommandTemplate(), log.New(os.Stderr))
+		stopSignals()
 		exitForJob("pr-review", false, err)
 
 	case "brag":
@@ -180,6 +231,67 @@ func main() {
 			fmt.Println("Done.")
 		}
 		exitForJob("brag", false, err)
+
+	case "automation":
+		fs := flag.NewFlagSet("automation", flag.ExitOnError)
+		noteID := fs.String("note", "", "Note id")
+		name := fs.String("name", "", "Automation name from the config")
+		phase := fs.String("phase", string(automation.PhaseDraft), "draft or create")
+		_ = fs.Parse(subArgs)
+
+		signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		err := automation.RunJob(signalCtx, cfg, *noteID, *name, automation.Phase(*phase))
+		stopSignals()
+		if errors.Is(err, automation.ErrNeedsReauth) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(automation.ExitNeedsReauth)
+		}
+		exitForJob("automation", false, err)
+
+	case "notify-due":
+		now := time.Now()
+		reminderErr := notify.RunDue(cfg.Root(), now)
+		notes, summaryErr := store.New(cfg.NotesDir()).List()
+		if summaryErr == nil {
+			schedule := notify.SummarySchedule{Morning: cfg.DigestNotifications.Morning, Evening: cfg.DigestNotifications.Evening, Terminal: cfg.TerminalApp, IsWorkDay: cfg.IsWorkDay}
+			summaryErr = notify.RunSummaries(cfg.Root(), schedule, habit.Gather(notes, now, cfg.IsWorkDay), now)
+		}
+		exitForJob("notify-due", false, errors.Join(reminderErr, summaryErr))
+
+	case "install", "uninstall":
+		exitForJob(cmdName+" notifications", false, runNotificationsCommand(cfg, cmdName, subArgs))
+
+	case "setup":
+		if err := tui.Run(cfg, configErr, config.Path(*configPath), true); err != nil {
+			fmt.Fprintf(os.Stderr, "Error running setup: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "export":
+		if len(subArgs) != 1 || subArgs[0] != "config" {
+			fmt.Fprintln(os.Stderr, "Usage: digest export config")
+			os.Exit(1)
+		}
+		written, backup, err := config.Export(*configPath)
+		if backup != "" {
+			fmt.Println("Backed up " + backup)
+		}
+		if err == nil {
+			fmt.Println("Wrote " + written)
+		}
+		exitForJob("export config", false, err)
+
+	case "doctor":
+		results := doctor.Check(cfg, exec.LookPath)
+		fmt.Println(doctor.Format(results))
+		if notify.Installed() {
+			fmt.Println("\n@notify launchd agent installed: " + notify.LaunchAgentPath())
+		} else {
+			fmt.Println("\n@notify launchd agent not installed; run: digest install notifications")
+		}
+		if doctor.Failed(results) {
+			os.Exit(1)
+		}
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmdName)

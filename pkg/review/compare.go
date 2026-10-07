@@ -15,7 +15,9 @@ var ErrReviewedCommitGone = errors.New("reviewed commit is no longer in the PR h
 const compareJQ = `{commits: [.commits[] | {sha, message: .commit.message, author: (.author.login // .commit.author.name), date: .commit.author.date}], files: [(.files // [])[] | {filename, status, additions, deletions}]}`
 
 var runGHAPI = func(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "gh", append([]string{"api"}, args...)...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "gh", append([]string{"api"}, args...)...)
+	cmd.WaitDelay = commandWaitDelay
+	return cmd.CombinedOutput()
 }
 
 type CompareCommit struct {

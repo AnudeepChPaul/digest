@@ -2,7 +2,6 @@ package review
 
 import (
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -122,16 +121,6 @@ func (p QueuedPR) ActivityAt(byCreated bool) time.Time {
 		return p.CreatedAt
 	}
 	return p.UpdatedAt
-}
-
-func SortPRs(prs []QueuedPR, byCreated bool, ascending bool) {
-	sort.SliceStable(prs, func(i, j int) bool {
-		left, right := prs[i].ActivityAt(byCreated), prs[j].ActivityAt(byCreated)
-		if ascending {
-			return left.Before(right)
-		}
-		return left.After(right)
-	})
 }
 
 func VisibleRanked(prs []QueuedPR, greenOnly bool) []QueuedPR {

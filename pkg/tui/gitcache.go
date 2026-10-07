@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"app/pkg/paths"
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
 
@@ -56,7 +57,7 @@ func fromCachedItems(cached []cachedGitItem) []GitPRItem {
 
 func saveGitCache(cache gitSyncCache) error {
 	cachePath := gitCachePath()
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cachePath), paths.PrivateDirMode); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(cache)

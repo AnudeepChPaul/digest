@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"app/pkg/paths"
 )
 
 const (
@@ -104,14 +106,14 @@ func LocalReviewFinishedAt(dir string) (time.Time, bool) {
 }
 
 func WriteMeta(dir string, meta Meta) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, metaFile), data, 0644)
+	return os.WriteFile(filepath.Join(dir, metaFile), data, paths.PrivateFileMode)
 }
 
 func LocalReviewOutdated(root string, pr QueuedPR) bool {
@@ -165,14 +167,6 @@ func terminateGroup(target int) error {
 	return nil
 }
 
-func ReadLog(dir string) string {
-	data, err := os.ReadFile(filepath.Join(dir, LogFile))
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
 var ErrReviewRunning = errors.New("a review is already running for this PR")
 
 func StartBackground(pr QueuedPR, root string) error {
@@ -180,7 +174,7 @@ func StartBackground(pr QueuedPR, root string) error {
 	if Status(dir) == RunRunning {
 		return ErrReviewRunning
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
 		return err
 	}
 	for _, stale := range []string{exitFile, FindingsFile, pidFile} {
@@ -193,7 +187,7 @@ func StartBackground(pr QueuedPR, root string) error {
 	if err != nil {
 		return fmt.Errorf("locate digest binary: %w", err)
 	}
-	logOutput, err := os.Create(filepath.Join(dir, LogFile))
+	logOutput, err := paths.CreatePrivate(filepath.Join(dir, LogFile))
 	if err != nil {
 		return err
 	}
@@ -208,7 +202,7 @@ func StartBackground(pr QueuedPR, root string) error {
 		logOutput.Close()
 		return err
 	}
-	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
+	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), paths.PrivateFileMode)
 	go func() {
 		_ = cmd.Wait()
 		_ = logOutput.Close()

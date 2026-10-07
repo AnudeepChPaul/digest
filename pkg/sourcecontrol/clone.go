@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"app/pkg/paths"
 	"app/pkg/review"
 
 	"github.com/charmbracelet/log"
@@ -26,10 +27,10 @@ func ClonePR(ctx context.Context, root string, pr review.QueuedPR) (string, erro
 	if review.Status(stateDir) == review.RunRunning {
 		return "", ErrCloneInProgress
 	}
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, paths.PrivateDirMode); err != nil {
 		return "", err
 	}
-	logOutput, err := os.Create(filepath.Join(stateDir, "clone.log"))
+	logOutput, err := paths.CreatePrivate(filepath.Join(stateDir, "clone.log"))
 	if err != nil {
 		return "", err
 	}

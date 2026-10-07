@@ -261,7 +261,7 @@ func TestOldJobLogArchivesArePruned(t *testing.T) {
 func TestSyncTrimsPRDetailsToListedPRs(t *testing.T) {
 	m := syncTestModel(t)
 	m.prDetails = map[string]json.RawMessage{"https://github.com/o/gone/pull/1": json.RawMessage(`{}`)}
-	m.startLoadGitStatsCmd(false)
+	m.startLoadGitStatsCmd()
 	generation := m.fetchGeneration
 	listed := pendingItem(1)
 	for _, msg := range []tea.Msg{
@@ -289,5 +289,19 @@ func TestStartupReusesTheNotesItAlreadyListed(t *testing.T) {
 	}
 	if loaded, ok := m.startupNotesCmd()().(loadNotesMsg); !ok || len(loaded.notes) != 1 {
 		t.Errorf("startup listed the notes store again: %d notes", len(loaded.notes))
+	}
+}
+
+func TestDryRunResultReadsOnlyItsTail(t *testing.T) {
+	jobPreviewModel(t)
+	if err := os.WriteFile(dryRunFilePath("janitor", "exit"), []byte("0"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dryRunFilePath("janitor", "log"), []byte(strings.Repeat("x", jobLogTailBytes*3)+"\nwould remove 2 clones\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, _, ok := loadDryRunResult("janitor")
+	if !ok || len(output) > jobLogTailBytes || !strings.HasSuffix(output, "would remove 2 clones\n") {
+		t.Errorf("ok %v, read %d bytes, want at most %d ending in the summary", ok, len(output), jobLogTailBytes)
 	}
 }

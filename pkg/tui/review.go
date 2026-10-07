@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"app/pkg/automation"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"app/pkg/brag"
 	"app/pkg/config"
 	"app/pkg/model"
 	"app/pkg/review"
@@ -26,19 +28,19 @@ import (
 const (
 	previewTabDetails = 0
 	previewTabReview  = 1
+	previewTabDraft   = 2
 )
 
-var (
-	staleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true)
-	criticalStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true)
-	highStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#FAB387")).Bold(true)
-	approvedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).Bold(true)
-	reviewingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).Bold(true)
-	reviewedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#89B4FA")).Bold(true)
-	cursorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F5E0DC")).Bold(true)
-)
+type reviewPollTickMsg struct {
+	snapshot reviewPollSnapshot
+}
 
-type reviewPollTickMsg struct{}
+type reviewPollSnapshot struct {
+	reviewRuns     []review.ReviewRun
+	localReviews   map[string]localReviewState
+	bragRuns       []brag.Run
+	automationRuns map[string]automation.Run
+}
 
 type reviewSubmittedMsg struct {
 	event   review.Event
@@ -48,15 +50,29 @@ type reviewSubmittedMsg struct {
 }
 
 type reviewCloneReadyMsg struct {
-	dir string
-	ref review.PRRef
-	err error
+	dir     string
+	ref     review.PRRef
+	err     error
+	openErr error
 }
 
-func tickReviewPollCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return reviewPollTickMsg{}
+var reviewPollInterval = 2 * time.Second
+
+func (m Model) tickReviewPollCmd() tea.Cmd {
+	reviewRoot, bragRoot, automationRoot, refs, previous := m.reviewRoot(), m.bragRoot(), m.automationRoot(), m.listedReviewRefs(), m.localReviews
+	return tea.Tick(reviewPollInterval, func(time.Time) tea.Msg {
+		snapshot := loadReviewPollSnapshot(reviewRoot, bragRoot, refs, previous)
+		snapshot.automationRuns = automation.ListRuns(automationRoot)
+		return reviewPollTickMsg{snapshot: snapshot}
 	})
+}
+
+func loadReviewPollSnapshot(reviewRoot, bragRoot string, refs []review.PRRef, previous map[string]localReviewState) reviewPollSnapshot {
+	runs := review.ListRuns(reviewRoot)
+	for _, run := range runs {
+		refs = append(refs, run.Meta.Ref)
+	}
+	return reviewPollSnapshot{reviewRuns: runs, localReviews: readLocalReviews(reviewRoot, refs, previous), bragRuns: brag.ListRuns(bragRoot)}
 }
 
 func (m *Model) ensureReviewPoll() tea.Cmd {
@@ -64,7 +80,7 @@ func (m *Model) ensureReviewPoll() tea.Cmd {
 		return nil
 	}
 	m.reviewPolling = true
-	return tickReviewPollCmd()
+	return m.tickReviewPollCmd()
 }
 
 func reviewRootFor(cfg *config.Config) string {
@@ -124,33 +140,93 @@ var readLocalReview = func(stateDir string) localReviewState {
 	return localReviewState{status: review.Status(stateDir), finishedAt: finishedAt, finished: finished, pid: pid}
 }
 
+var loadRecommendation = func(stateDir string) string {
+	if report, err := review.Load(stateDir); err == nil {
+		return report.Recommendation
+	}
+	return ""
+}
+
+func withRecommendation(stateDir string, state localReviewState, previous map[string]localReviewState) localReviewState {
+	if state.status != review.RunDone {
+		return state
+	}
+	if earlier, known := previous[stateDir]; known && earlier.status == review.RunDone && earlier.finishedAt.Equal(state.finishedAt) {
+		state.recommendation = earlier.recommendation
+		return state
+	}
+	state.recommendation = loadRecommendation(stateDir)
+	return state
+}
+
+func recommendationLabel(recommendation string) string {
+	words := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(recommendation), "_", " "))
+	if words == "" {
+		return ""
+	}
+	return "rec:" + strings.ToUpper(words[:1]) + words[1:]
+}
+
+func (m Model) prStateLabel(item *GitPRItem) (review.PRState, string) {
+	state := m.prState(item)
+	if state != review.StateReviewed {
+		return state, string(state)
+	}
+	queued, err := queuedFor(item)
+	if err != nil {
+		return state, string(state)
+	}
+	if label := recommendationLabel(m.localReviewFor(review.StateDir(m.reviewRoot(), queued.Ref)).recommendation); label != "" {
+		return state, label
+	}
+	return state, string(state)
+}
+
 func (m Model) localReviewFor(stateDir string) localReviewState {
 	if state, cached := m.localReviews[stateDir]; cached {
 		return state
 	}
-	return readLocalReview(stateDir)
+	return withRecommendation(stateDir, readLocalReview(stateDir), nil)
 }
 
-func (m *Model) refreshLocalReviews() {
-	root := m.reviewRoot()
-	states := make(map[string]localReviewState)
-	addState := func(ref review.PRRef) {
-		stateDir := review.StateDir(root, ref)
-		if _, seen := states[stateDir]; !seen {
-			states[stateDir] = readLocalReview(stateDir)
-		}
-	}
+func (m Model) listedReviewRefs() []review.PRRef {
+	var refs []review.PRRef
 	for _, items := range [][]GitPRItem{m.ghPendingPRs, m.ghReviewedToday, m.ghReviewedYesterday} {
 		for i := range items {
 			if queued, err := queuedFor(&items[i]); err == nil {
-				addState(queued.Ref)
+				refs = append(refs, queued.Ref)
 			}
 		}
 	}
-	for _, run := range m.reviewRuns {
-		addState(run.Meta.Ref)
+	return refs
+}
+
+func readLocalReviews(root string, refs []review.PRRef, previous map[string]localReviewState) map[string]localReviewState {
+	states := make(map[string]localReviewState)
+	for _, ref := range refs {
+		stateDir := review.StateDir(root, ref)
+		if _, seen := states[stateDir]; !seen {
+			states[stateDir] = withRecommendation(stateDir, readLocalReview(stateDir), previous)
+		}
 	}
-	m.localReviews = states
+	return states
+}
+
+func (m Model) missingListedReviews() bool {
+	for _, ref := range m.listedReviewRefs() {
+		if _, cached := m.localReviews[review.StateDir(m.reviewRoot(), ref)]; !cached {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) refreshLocalReviews() {
+	refs := m.listedReviewRefs()
+	for _, run := range m.reviewRuns {
+		refs = append(refs, run.Meta.Ref)
+	}
+	m.localReviews = readLocalReviews(m.reviewRoot(), refs, m.localReviews)
 }
 
 func (m Model) prState(item *GitPRItem) review.PRState {
@@ -194,8 +270,11 @@ func stateStyle(state review.PRState) lipgloss.Style {
 }
 
 func (m Model) prStateBadge(item *GitPRItem) string {
-	state := m.prState(item)
-	return stateStyle(state).Render(strings.ToUpper(string(state)))
+	state, label := m.prStateLabel(item)
+	if label == string(state) {
+		label = strings.ToUpper(label)
+	}
+	return stateStyle(state).Render(label)
 }
 
 func shortAge(d time.Duration) string {
@@ -208,25 +287,23 @@ func shortAge(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-func (m Model) renderPRTag(item *GitPRItem, selected bool) string {
-	return underlinedWhen(selected, joinTags(m.prTags(item)))
-}
-
 func (m Model) renderPreviewTabs() string {
-	names := []string{"Details", "Review"}
+	tabs := map[int]string{previewTabDetails: "Details", previewTabReview: "Review"}
+	order := []int{previewTabDetails, previewTabReview}
+	if m.currentPRItem() == nil {
+		tabs = map[int]string{previewTabDetails: "Details", previewTabDraft: "Draft"}
+		order = []int{previewTabDetails, previewTabDraft}
+	}
 	var rendered []string
-	for i, name := range names {
-		if i == m.previewTab {
+	for _, tab := range order {
+		name := tabs[tab]
+		if tab == m.previewTab {
 			rendered = append(rendered, tabActiveStyle.Render(name))
 		} else {
 			rendered = append(rendered, tabInactiveStyle.Render(name))
 		}
 	}
 	return strings.Join(rendered, " ")
-}
-
-func (m Model) reviewFooterItems(item *GitPRItem) []footerItem {
-	return footerItemsFrom(m.prPreviewBindings(item))
 }
 
 func (m Model) selectedCount() int {
@@ -332,7 +409,9 @@ var gitLogForFiles = func(dir string, files []string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	args := append([]string{"-C", dir, "log", "-n", "5", "--format=%h %s", "origin/HEAD", "--"}, files...)
-	out, err := exec.CommandContext(ctx, "git", args...).Output()
+	gitLog := exec.CommandContext(ctx, "git", args...)
+	gitLog.WaitDelay = time.Second
+	out, err := gitLog.Output()
 	if err != nil {
 		return ""
 	}
@@ -370,11 +449,27 @@ func (m Model) handleRelatedHistory(msg relatedHistoryMsg) (tea.Model, tea.Cmd) 
 	if m.contextCache == nil {
 		m.contextCache = make(map[string]string)
 	}
+	listed := m.listedPRURLs()
+	for url := range m.contextCache {
+		if !listed[url] {
+			delete(m.contextCache, url)
+		}
+	}
 	m.contextCache[msg.url] = msg.history
 	if item := m.currentPRItem(); m.mode == ViewPreview && item != nil && item.URL == msg.url {
 		m.updatePreviewViewport()
 	}
 	return m, nil
+}
+
+func (m Model) listedPRURLs() map[string]bool {
+	listed := map[string]bool{}
+	for _, item := range m.allNavItems() {
+		if item.PendingGitPR != nil {
+			listed[item.PendingGitPR.URL] = true
+		}
+	}
+	return listed
 }
 
 func (m Model) relatedHistory(pr review.QueuedPR) (string, bool) {
@@ -479,10 +574,10 @@ func (m Model) renderReviewContent(item *GitPRItem, width int) (string, int) {
 		b.WriteString(mutedStyle.Render("No Claude review yet. Press r to clone the PR, install dependencies and run review-toolkit.") + "\n")
 	case review.RunRunning:
 		b.WriteString(reviewingStyle.Render("Claude is reviewing this PR in the background…") + "\n\n")
-		b.WriteString(mutedStyle.Render(lastLines(review.ReadLog(dir), 12)) + "\n")
+		b.WriteString(mutedStyle.Render(lastLines(readFileTail(filepath.Join(dir, review.LogFile), logPeekBytes), 12)) + "\n")
 	case review.RunFailed:
 		b.WriteString(staleStyle.Render("Review failed. Press r to retry.") + "\n\n")
-		b.WriteString(mutedStyle.Render(lastLines(review.ReadLog(dir), 12)) + "\n")
+		b.WriteString(mutedStyle.Render(lastLines(readFileTail(filepath.Join(dir, review.LogFile), logPeekBytes), 12)) + "\n")
 	case review.RunDone:
 		done, _ := m.doneReview(dir)
 		if done.err != nil {
@@ -498,7 +593,7 @@ func (m Model) renderReviewContent(item *GitPRItem, width int) (string, int) {
 			b.WriteString("\n" + approvedStyle.Render("No actionable findings. Press a to approve.") + "\n")
 			break
 		}
-		bodyStyle := lipgloss.NewStyle().Width(width - 8).Foreground(lipgloss.Color("#A6ADC8"))
+		bodyStyle := lipgloss.NewStyle().Width(width - 8).Foreground(colourSubtext)
 		index := 0
 		for _, group := range review.GroupBySeverity(report.Findings) {
 			fmt.Fprintf(&b, "\n%s\n", severityStyle(group.Severity).Render(fmt.Sprintf("%s (%d)", strings.ToUpper(group.Severity), len(group.Findings))))
@@ -613,13 +708,20 @@ func (m Model) openClone(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 	m.reviewNotice = "Opening PR clone in nvim…"
 	return true, m.refreshPreview(), func() tea.Msg {
 		cloneDir, err := sourcecontrol.ClonePR(sessionCtx, root, queued)
-		return reviewCloneReadyMsg{dir: cloneDir, ref: queued.Ref, err: err}
+		if err != nil {
+			return reviewCloneReadyMsg{dir: cloneDir, ref: queued.Ref, err: err}
+		}
+		return reviewCloneReadyMsg{dir: cloneDir, ref: queued.Ref, openErr: openInNvim(cloneDir, queued.Ref)}
 	}
 }
 
-func openInNvim(dir string, ref review.PRRef) error {
+var openInNvim = func(dir string, ref review.PRRef) error {
 	windowName := fmt.Sprintf("%s#%d", ref.Repo, ref.Number)
-	out, err := exec.Command("tmux", "new-window", "-c", dir, "-n", windowName, "nvim", ".").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tmux := exec.CommandContext(ctx, "tmux", "new-window", "-c", dir, "-n", windowName, "nvim", ".")
+	tmux.WaitDelay = time.Second
+	out, err := tmux.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux new-window: %s", strings.TrimSpace(string(out)))
 	}
@@ -631,8 +733,8 @@ func (m Model) handleCloneReady(msg reviewCloneReadyMsg) (tea.Model, tea.Cmd) {
 		m.reviewNotice = "The running review is still cloning; try again shortly"
 	} else if msg.err != nil {
 		m.reviewNotice = "Clone failed: " + msg.err.Error()
-	} else if err := openInNvim(msg.dir, msg.ref); err != nil {
-		m.reviewNotice = err.Error()
+	} else if msg.openErr != nil {
+		m.reviewNotice = msg.openErr.Error()
 	} else {
 		m.reviewNotice = "Opened clone in a new tmux window"
 	}
@@ -681,7 +783,7 @@ func (m Model) handleReviewSubmitted(msg reviewSubmittedMsg) (tea.Model, tea.Cmd
 	if msg.event == review.EventApprove {
 		return m, tea.Batch(notesCmd, tea.Tick(approvalSyncDelay, func(time.Time) tea.Msg { return approvalSyncMsg{} }))
 	}
-	return m, tea.Batch(notesCmd, m.startLoadGitStatsCmd(false))
+	return m, tea.Batch(notesCmd, m.startLoadGitStatsCmd())
 }
 
 type approvalSyncMsg struct{}
@@ -722,23 +824,79 @@ func (m Model) anyReviewRunning() bool {
 	return false
 }
 
-func (m Model) handleReviewPoll() (tea.Model, tea.Cmd) {
+func (m Model) handleReviewPoll(snapshot reviewPollSnapshot) (tea.Model, tea.Cmd) {
 	selectedKey, selectedOccurrence := m.selectedNavKey()
-	m.refreshReviewRuns()
-	m.refreshBragRuns()
+	m.reviewRuns, m.localReviews = snapshot.reviewRuns, snapshot.localReviews
+	if m.missingListedReviews() {
+		m.refreshLocalReviews()
+	}
+	m.applyBragRuns(snapshot.bragRuns)
 	m.restoreSelection(selectedKey, selectedOccurrence)
-	inPRPreview := m.mode == ViewPreview && m.currentPRItem() != nil
-	if inPRPreview {
+	if currentStamp := m.previewStamp(); currentStamp != m.previewPollStamp {
+		m.previewPollStamp = currentStamp
 		m.updatePreviewViewport()
 	}
 	if m.mode == ViewBragView {
 		m.reloadBragViewIfChanged()
 	}
-	if m.anyReviewRunning() || m.anyBragRunning() {
-		return m, tickReviewPollCmd()
+	automationCmd := m.applyAutomationRuns(snapshot.automationRuns)
+	if m.anyReviewRunning() || m.anyBragRunning() || m.anyAutomationRunning() {
+		return m, tea.Batch(m.tickReviewPollCmd(), automationCmd)
 	}
 	m.reviewPolling = false
-	return m, nil
+	return m, automationCmd
+}
+
+type previewStamp struct {
+	review      localReviewState
+	reviewFound bool
+	runStatus   int
+	logSize     int64
+	logModified time.Time
+}
+
+func (m Model) previewStamp() previewStamp {
+	item, found := m.selectedNavItem()
+	if m.mode != ViewPreview || !found {
+		return previewStamp{}
+	}
+	var stamp previewStamp
+	var logPath string
+	switch {
+	case item.Kind == KindPendingGit && item.PendingGitPR != nil:
+		stamp.review, stamp.reviewFound = m.previewedLocalReview()
+		if queued, err := queuedFor(item.PendingGitPR); err == nil {
+			logPath = filepath.Join(review.StateDir(m.reviewRoot(), queued.Ref), review.LogFile)
+		}
+	case item.Kind == KindReviewRun && item.ReviewRun != nil:
+		stamp.runStatus = int(item.ReviewRun.Status)
+		logPath = filepath.Join(review.StateDir(m.reviewRoot(), item.ReviewRun.Meta.Ref), review.LogFile)
+	case item.Kind == KindBragRun && item.BragRun != nil:
+		stamp.runStatus = int(item.BragRun.Status)
+		logPath = filepath.Join(brag.StateDir(m.bragRoot(), item.BragRun.Meta.ID), brag.RunLogFile)
+	case item.Kind == KindAutomationRun && item.AutomationRun != nil:
+		stamp.runStatus = int(item.AutomationRun.Status)
+		logPath = automation.LogPath(m.automationRoot(), item.AutomationRun.Meta.NoteID)
+	default:
+		return previewStamp{}
+	}
+	if info, err := os.Stat(logPath); err == nil {
+		stamp.logSize, stamp.logModified = info.Size(), info.ModTime()
+	}
+	return stamp
+}
+
+func (m Model) previewedLocalReview() (localReviewState, bool) {
+	item := m.currentPRItem()
+	if m.mode != ViewPreview || item == nil {
+		return localReviewState{}, false
+	}
+	queued, err := queuedFor(item)
+	if err != nil {
+		return localReviewState{}, false
+	}
+	state, found := m.localReviews[review.StateDir(m.reviewRoot(), queued.Ref)]
+	return state, found
 }
 
 func (m Model) renderReviewConfirm(modalWidth int) string {
@@ -759,7 +917,7 @@ func (m Model) renderReviewConfirm(modalWidth int) string {
 	}
 	footer := renderModalFooter(footerItemsFrom(reviewConfirmBindings()), modalWidth-6)
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", strings.TrimRight(prompt.String(), "\n"), "", footer)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modalStyle.Width(modalWidth).Render(content), m.width, m.height))
+	return m.framedPopup(content, modalWidth)
 }
 
 func (m Model) renderRejectComment(modalWidth int) string {
@@ -773,7 +931,7 @@ func (m Model) renderRejectComment(modalWidth int) string {
 	}
 	parts = append(parts, renderModalFooter(footerItemsFrom(rejectCommentBindings()), modalWidth-6))
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modalStyle.Width(modalWidth).Render(content), m.width, m.height))
+	return m.framedPopup(content, modalWidth)
 }
 
 func (m *Model) refreshReviewRuns() {
@@ -790,38 +948,15 @@ func (m Model) renderReviewRunningIndicator() string {
 }
 
 func (m Model) renderPulseIndicator(label string) string {
-	return m.renderPulseDot() + " " + reviewingStyle.Render(label)
-}
-
-func (m Model) renderPulseDot() string {
-	pulseColors := []string{
-		"#F9E2AF", "#EED49F", "#F5BDE6", "#C6A0F6",
-		"#89B4FA", "#74C7EC", "#8BD5CA", "#A6E3A1",
-	}
-	idx := m.syncPulseFrame % len(pulseColors)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(pulseColors[idx])).Bold(true).Render("●")
+	return m.renderJobPulseDot() + " " + reviewingStyle.Render(label)
 }
 
 func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int) string {
-	rightColWidth := 26
-	if width < 60 {
-		rightColWidth = 20
-	}
-	leftWidth := max(width-rightColWidth, 15)
-	prefix := "   "
-	icon := amberDiamond.Render()
-	label := reviewRunLabel(run)
-	labelText := itemStyle.Render(label)
-	if selected {
-		labelText = selectedTitle(label)
-	}
-	leftBlock := fmt.Sprintf("%s%s %s", prefix, icon, labelText)
-	leftPadding := max(leftWidth-lipgloss.Width(leftBlock), 0)
 	rightBlock := stateStyle(review.StateFailed).Render("failed")
 	if run.Status == review.RunRunning {
 		rightBlock = m.renderReviewRunningIndicator()
 	}
-	return fmt.Sprintf("%s%s%s\n", leftBlock, safeRepeat(" ", leftPadding), underlinedWhen(selected, rightBlock))
+	return renderJobStyleRow(amberDiamond.Render(), reviewRunLabel(run), rightBlock, selected, width)
 }
 
 func reviewRunPreview(root string, run review.ReviewRun) string {
@@ -829,7 +964,7 @@ func reviewRunPreview(root string, run review.ReviewRun) string {
 	if run.Status == review.RunRunning {
 		status = "RUNNING"
 	}
-	logText := strings.TrimSpace(review.ReadLog(review.StateDir(root, run.Meta.Ref)))
+	logText := strings.TrimSpace(readFileTail(filepath.Join(review.StateDir(root, run.Meta.Ref), review.LogFile), jobLogTailBytes))
 	if logText == "" {
 		logText = "(no log output yet)"
 	}
@@ -1056,9 +1191,5 @@ func (m Model) renderReviewRunConfirm(modalWidth int) string {
 	}
 	footer := renderModalFooter(footerItemsFrom(reviewRunConfirmBindings()), modalWidth-6)
 	content := lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", footer)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, fitPopup(modalStyle.Width(modalWidth).Render(content), m.width, m.height))
-}
-
-func reviewRunFooterItems(running bool) []footerItem {
-	return footerItemsFrom(reviewRunPreviewBindings(running))
+	return m.framedPopup(content, modalWidth)
 }

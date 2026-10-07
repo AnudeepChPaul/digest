@@ -61,6 +61,9 @@ func TestLocalRepoPathsUsesOnlyRoots(t *testing.T) {
 	if len(paths) != 1 || filepath.Base(paths[0]) != "listed" {
 		t.Errorf("paths = %v", paths)
 	}
+	if fallback := localRepoPaths(&config.Config{DigestRoot: base}); len(fallback) != 0 {
+		t.Errorf("no roots should search nowhere, got %v", fallback)
+	}
 }
 
 func TestDayResultOutsideRootsIsFiltered(t *testing.T) {
@@ -72,5 +75,18 @@ func TestDayResultOutsideRootsIsFiltered(t *testing.T) {
 	}, ConfiguredRepoNames(cfg))
 	if len(result.Reviewed) != 1 || len(result.Reviews) != 1 || result.Reviews[0].Repository != "console" {
 		t.Errorf("filtered = %+v", result)
+	}
+}
+
+func TestLocalRepoPathsReusesTheRecentWalk(t *testing.T) {
+	root := t.TempDir()
+	makeRepo(t, filepath.Join(root, "first"))
+	cfg := &config.Config{GitRepositoryRoots: []string{root}}
+	if paths := localRepoPaths(cfg); len(paths) != 1 {
+		t.Fatalf("paths = %v", paths)
+	}
+	makeRepo(t, filepath.Join(root, "second"))
+	if paths := localRepoPaths(cfg); len(paths) != 1 {
+		t.Errorf("a refresh within the cache window should not walk the roots again: %v", paths)
 	}
 }

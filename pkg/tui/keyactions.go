@@ -52,6 +52,38 @@ func init() {
 
 		actionCloseHelp: Model.closeHelp,
 
+		actionAutomate:              Model.automateFromPreview,
+		actionRunAutomationDraft:    Model.runAutomationDraft,
+		actionConfirmAutomation:     Model.confirmAutomation,
+		actionCancelAutomation:      Model.cancelAutomation,
+		actionEditAutomation:        Model.editAutomationDraft,
+		actionDeleteAutomationDraft: Model.deleteAutomationDraft,
+		actionSaveAutomationEdit:    Model.saveAutomationEdit,
+		actionCancelAutomationEdit:  Model.cancelAutomationEdit,
+
+		actionOpenActions:        Model.openActionMenu,
+		actionChooseAction:       Model.chooseAction,
+		actionActionMenuDown:     Model.actionMenuDown,
+		actionActionMenuUp:       Model.actionMenuUp,
+		actionCloseActionMenu:    Model.closeActionMenu,
+		actionConfirmNotify:      Model.confirmNotify,
+		actionDashboardApprove:   Model.dashboardApprove,
+		actionSetupYes:           Model.setupAnswerYes,
+		actionSetupNo:            Model.setupAnswerNo,
+		actionSetupConfirm:       Model.setupConfirm,
+		actionSetupSkip:          Model.setupSkip,
+		actionSetupSwitchTime:    Model.setupSwitchTime,
+		actionSetupDayLeft:       Model.setupDayLeft,
+		actionSetupDayRight:      Model.setupDayRight,
+		actionSetupToggleDay:     Model.setupToggleDay,
+		actionSetupQuit:          Model.quitSetup,
+		actionOpenSetup:          Model.openSetup,
+		actionOpenMessages:       Model.openMessageLog,
+		actionEditorHalfPageUp:   Model.editorHalfPageUp,
+		actionEditorHalfPageDown: Model.editorHalfPageDown,
+		actionDashboardReject:    Model.dashboardReject,
+		actionCancelNotify:       Model.cancelNotify,
+
 		actionCloseBrag:      Model.closeBrag,
 		actionBragCursorDown: Model.bragCursorDown,
 		actionBragCursorUp:   Model.bragCursorUp,
@@ -194,17 +226,17 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		scrollViewport(&m.archivedViewport, msg.String())
 		return m, nil
 	case ViewInlineEdit:
-		m.inlineInput, cmd = m.inlineInput.Update(msg)
+		*m.inlineInput, cmd = m.inlineInput.Update(msg)
 		return m, cmd
-	case ViewEdit, ViewBragEdit:
-		m.editor, cmd = m.editor.Update(msg)
+	case ViewEdit, ViewBragEdit, ViewAutomationEdit:
+		*m.editor, cmd = m.editor.Update(msg)
 		return m, cmd
 	case ViewBragView:
 		scrollViewport(&m.previewViewport, msg.String())
 		return m, nil
 	case ViewSearch:
 		previousQuery := m.searchInput.Value()
-		m.searchInput, cmd = m.searchInput.Update(msg)
+		*m.searchInput, cmd = m.searchInput.Update(msg)
 		if m.searchInput.Value() != previousQuery {
 			m.searchSelected, m.searchScroll = 0, 0
 			m.searchNotice = ""
@@ -214,7 +246,18 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		scrollViewport(&m.previewViewport, msg.String())
 		return m, nil
 	case ViewRejectComment:
-		m.rejectInput, cmd = m.rejectInput.Update(msg)
+		*m.rejectInput, cmd = m.rejectInput.Update(msg)
+		return m, cmd
+	case ViewSetup:
+		*m.setupInput, cmd = m.setupInput.Update(msg)
+		m.setup.notice = ""
+		return m, cmd
+	case ViewNotifyInput:
+		if !notifyInputAccepts(m.notifyInput.Value(), msg) {
+			return m, nil
+		}
+		*m.notifyInput, cmd = m.notifyInput.Update(msg)
+		m.notifyNotice = ""
 		return m, cmd
 	}
 	return m, nil
@@ -241,14 +284,13 @@ func (m Model) quitFromDashboard(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) dismissSyncErrors(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if len(m.syncErrors) > 0 {
-		m.syncErrors = nil
-	}
+	m.syncErrors = nil
+	m.dismissErrorMessages()
 	return m, nil
 }
 
 func (m Model) syncFromKey(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return m, m.startLoadGitStatsCmd(false)
+	return m, m.startLoadGitStatsCmd()
 }
 
 func (m Model) toggleSortField(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -349,7 +391,7 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun {
+	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun || item.Kind == KindAutomationRun {
 		return m.openPreview(item)
 	}
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
@@ -388,6 +430,9 @@ func (m Model) deleteSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if item.Kind == KindBragRun && item.BragRun != nil {
 		return m.stopOrDismissBragRun(item.BragRun)
+	}
+	if item.Kind == KindAutomationRun && item.AutomationRun != nil {
+		return m.stopAutomationRun(item.AutomationRun)
 	}
 	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
 		m.jobToAbort = item.Draft.Name
@@ -583,7 +628,7 @@ func (m Model) cancelDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) confirmReview(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	item := m.currentPRItem()
-	m.mode = ViewPreview
+	m.mode = m.prActionReturnMode()
 	if item == nil {
 		return m, nil
 	}
@@ -602,7 +647,9 @@ func (m Model) confirmReview(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) cancelReview(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.mode = ViewPreview
+	if m.mode = m.prActionReturnMode(); m.mode == ViewDashboard {
+		return m, nil
+	}
 	return m.refreshPreview(), nil
 }
 
@@ -661,7 +708,9 @@ func (m Model) submitRejectComment(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) cancelRejectComment(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.rejectInput.Blur()
-	m.mode = ViewPreview
+	if m.mode = m.prActionReturnMode(); m.mode == ViewDashboard {
+		return m, nil
+	}
 	return m.refreshPreview(), nil
 }
 
@@ -697,7 +746,9 @@ func (m Model) copyPreviewItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	var textToCopy string
-	if item.Note != nil {
+	if m.onDraftTab() {
+		textToCopy = m.draftText()
+	} else if item.Note != nil {
 		textToCopy = fmt.Sprintf("%s\n\n%s", item.Note.Summary, item.Note.Body)
 	} else if item.Draft != nil {
 		if logText, _ := latestJobOutput(item.Draft.Name, m.jobDryRunOutputFor(item.Draft.Name)); logText != "" {
@@ -751,6 +802,9 @@ func (m Model) previewStop(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if item.Kind == KindBragRun && item.BragRun != nil {
 		return m.stopOrDismissBragRun(item.BragRun)
 	}
+	if item.Kind == KindAutomationRun && item.AutomationRun != nil {
+		return m.stopAutomationRun(item.AutomationRun)
+	}
 	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
 		m.jobToAbort = item.Draft.Name
 		m.deleteTargetNotes = nil
@@ -795,7 +849,14 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) switchPreviewTab(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.previewTab = (m.previewTab + 1) % 2
+	switch {
+	case m.currentPRItem() != nil:
+		m.previewTab = (m.previewTab + 1) % 2
+	case m.previewTab == previewTabDraft:
+		m.previewTab = previewTabDetails
+	default:
+		m.previewTab = previewTabDraft
+	}
 	m.previewViewport = viewport.New(0, 0)
 	return m.refreshPreview(), nil
 }
@@ -1009,7 +1070,7 @@ func (m Model) saveNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentNote.Summary = summary
 	m.currentNote.Body = body
 	if m.currentNote.ID == "" {
-		m.selectAfterReload = pendingNewNote
+		m.awaitingNewNoteSave = true
 	}
 
 	m.mode = m.returnFromEdit()
@@ -1119,6 +1180,7 @@ func (m Model) beginNoteEdit(note *model.Note, returnMode ViewMode) (tea.Model, 
 	m.mode = ViewEdit
 	m.editor.SetValue(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
 	m.editor.Focus()
+	startEditorAtTop(m.editor)
 	return m, textarea.Blink
 }
 

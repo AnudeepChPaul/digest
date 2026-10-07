@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"app/pkg/config"
+	"app/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )
@@ -273,7 +274,7 @@ func (b *Brag) Save(root string) error {
 		return err
 	}
 	path := b.Period.Path(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
 		return err
 	}
 	var content bytes.Buffer
@@ -281,5 +282,5 @@ func (b *Brag) Save(root string) error {
 	content.Write(meta)
 	content.WriteString("---\n")
 	content.WriteString(b.Body())
-	return os.WriteFile(path, content.Bytes(), 0644)
+	return os.WriteFile(path, content.Bytes(), paths.PrivateFileMode)
 }

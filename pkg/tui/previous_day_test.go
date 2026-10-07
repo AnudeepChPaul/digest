@@ -66,7 +66,7 @@ func TestPreviousDayTitles(t *testing.T) {
 	m.notes = []*model.Note{manualNote("old", dayBefore(m, 3))}
 	weekday := spacedTitle(dayBefore(m, 3).Format("Monday")) + "  ·  " + strings.ToUpper(dayBefore(m, 3).Format("02 Jan"))
 	content, _ := m.dashboardContent()
-	strip, _ := m.renderGitStrip(m.width-3, false)
+	strip, _ := m.renderGitStrip(m.width-3, false, m.groupNotes())
 	for place, text := range map[string]string{"notes section": stripANSI(content), "git strip": stripANSI(strings.Join(strip, "\n"))} {
 		if !strings.Contains(text, weekday) || strings.Contains(text, "Y E S T E R D A Y") {
 			t.Errorf("%s should title the previous day %q:\n%s", place, weekday, text)

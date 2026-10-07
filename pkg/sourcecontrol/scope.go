@@ -1,13 +1,14 @@
 package sourcecontrol
 
 import (
+	"context"
 	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"app/pkg/config"
-	"app/pkg/jobs"
 )
 
 var scpRemotePattern = regexp.MustCompile(`^[^@/\s]+@([^:/\s]+):([^\s]+)$`)
@@ -35,11 +36,25 @@ func RepoScopes(cfg *config.Config) map[string][]string {
 	if cfg == nil || len(cfg.GitRepositoryRoots) == 0 {
 		return nil
 	}
-	repoPaths, _ := jobs.DiscoverRepos(cfg.GitRepositoryRoots)
+	roots := cfg.GitRepositoryRoots
+	return repoScopes.get(rootsKey(roots), func() map[string][]string { return readRepoScopes(roots) })
+}
+
+var remoteLookupTimeout = 5 * time.Second
+
+func originRemote(repoPath string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteLookupTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", "origin")
+	cmd.WaitDelay = commandWaitDelay
+	return cmd.Output()
+}
+
+func readRepoScopes(roots []string) map[string][]string {
 	scopes := map[string][]string{}
 	seen := map[string]bool{}
-	for _, repoPath := range repoPaths {
-		remote, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+	for _, repoPath := range discoverReposCached(roots) {
+		remote, err := originRemote(repoPath)
 		if err != nil {
 			continue
 		}

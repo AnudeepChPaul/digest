@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"app/pkg/config"
+	"app/pkg/notify"
 	"app/pkg/review"
 	"app/pkg/sourcecontrol"
 	"app/pkg/store"
@@ -23,6 +24,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	gitCachePath = func() string { return filepath.Join(cacheDir, "git-sync.json") }
+	openURL = func(string) error { return nil }
+	openInNvim = func(string, review.PRRef) error { return nil }
+	copyToClipboard = func(string) error { return nil }
+	notify.Send = func(notify.Notification) error { return nil }
 	code := m.Run()
 	os.RemoveAll(cacheDir)
 	os.Exit(code)
@@ -84,28 +89,33 @@ func TestSectionsApplyIndependently(t *testing.T) {
 	}
 }
 
-func TestFailedSectionKeepsRowsAndShowsToast(t *testing.T) {
+func TestFailedSectionKeepsRowsAndShowsHeaderError(t *testing.T) {
 	m := syncTestModel(t)
 	generation := m.fetchGeneration
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, reviewed: []GitPRItem{reviewedItem("console", 2)}})
 	m.applyGitPending(gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}})
 
-	m.startLoadGitStatsCmd(false)
+	m.startLoadGitStatsCmd()
 	generation = m.fetchGeneration
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, err: errors.New("HTTP 502")})
 	m.applyGitPending(gitPendingMsg{generation: generation, err: errors.New("timeout")})
 	if len(m.ghReviewedToday) != 1 || len(m.ghPendingPRs) != 1 {
 		t.Fatalf("failed sync wiped rows: today=%d pending=%d", len(m.ghReviewedToday), len(m.ghPendingPRs))
 	}
-	view := m.View()
-	for _, want := range []string{"GIT SYNC FAILED", "HTTP 502", "timeout"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("view missing %q", want)
+	m.loadingCommits = false
+	m.gitSectionsPending = 1
+	m.finishGitSection()
+	if !strings.Contains(headerTopRow(m), "sync failed") {
+		t.Errorf("header should say the sync failed: %q", headerTopRow(m))
+	}
+	for _, want := range []string{"HTTP 502", "timeout"} {
+		if !strings.Contains(latestMessageText(m), want) {
+			t.Errorf("message missing %q: %q", want, latestMessageText(m))
 		}
 	}
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if strings.Contains(m.View(), "GIT SYNC FAILED") {
-		t.Errorf("esc did not dismiss the toast")
+	if strings.Contains(headerTopRow(m), "sync failed") {
+		t.Errorf("esc did not dismiss the error")
 	}
 	if m.mode != ViewDashboard {
 		t.Errorf("mode = %v", m.mode)
@@ -126,7 +136,7 @@ func TestDateChangeClearsFailedSection(t *testing.T) {
 	m := syncTestModel(t)
 	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), reviewed: []GitPRItem{reviewedItem("console", 2)}})
 	m.currentDate = m.currentDate.AddDate(0, 0, -3)
-	m.startLoadGitStatsCmd(false)
+	m.startLoadGitStatsCmd()
 	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), err: errors.New("HTTP 502")})
 	if len(m.ghReviewedToday) != 0 {
 		t.Errorf("rows from another day kept: %d", len(m.ghReviewedToday))

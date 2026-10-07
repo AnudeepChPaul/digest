@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"app/pkg/review"
 )
@@ -129,5 +131,61 @@ func TestReapReviewClonesSkipsRunningReviews(t *testing.T) {
 	reapReviewClones(root, false)
 	if _, err := os.Stat(review.CloneDir(root, ref)); err != nil {
 		t.Error("a clone in use by a running review should be kept")
+	}
+}
+
+func ageReviewClone(t *testing.T, root string, ref review.PRRef, age time.Duration) {
+	t.Helper()
+	stamp := time.Now().Add(-age)
+	stateDir := review.StateDir(root, ref)
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{stateDir, review.CloneDir(root, ref)}
+	for _, entry := range entries {
+		paths = append(paths, filepath.Join(stateDir, entry.Name()))
+	}
+	for _, path := range paths {
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestReapReviewClonesRemovesIdleClonesWhateverTheirState(t *testing.T) {
+	root := t.TempDir()
+	idle := review.PRRef{Repo: "console", Number: 4, URL: "u-idle"}
+	fresh := review.PRRef{Repo: "console", Number: 5, URL: "u-fresh"}
+	running := review.PRRef{Repo: "console", Number: 6, URL: "u-running"}
+	for _, ref := range []review.PRRef{idle, fresh, running} {
+		seedReviewClone(t, root, ref)
+	}
+	if err := os.WriteFile(filepath.Join(review.StateDir(root, running), "review.pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ageReviewClone(t, root, idle, 8*24*time.Hour)
+	ageReviewClone(t, root, running, 8*24*time.Hour)
+	original := lookupPRStates
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		return nil, errors.New("gh offline")
+	}
+	defer func() { lookupPRStates = original }()
+
+	actions, _ := reapReviewClones(root, true)
+	if len(actions) != 1 || !strings.Contains(actions[0], "idle") {
+		t.Fatalf("dry run should list only the idle clone: %v", actions)
+	}
+	reapReviewClones(root, false)
+	if _, err := os.Stat(review.CloneDir(root, idle)); err == nil {
+		t.Error("idle clone should be removed even when the gh lookup fails")
+	}
+	if _, err := os.Stat(review.StateDir(root, idle)); err == nil {
+		t.Error("idle clone state should be removed")
+	}
+	for _, ref := range []review.PRRef{fresh, running} {
+		if _, err := os.Stat(review.CloneDir(root, ref)); err != nil {
+			t.Errorf("%s clone should be kept", ref.DirName())
+		}
 	}
 }

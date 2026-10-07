@@ -17,6 +17,7 @@ import (
 
 	"app/pkg/config"
 	"app/pkg/model"
+	"app/pkg/paths"
 )
 
 const (
@@ -138,20 +139,12 @@ func Status(root, id string) RunStatus {
 	return RunDone
 }
 
-func ReadLog(root, id string) string {
-	data, err := os.ReadFile(filepath.Join(StateDir(root, id), RunLogFile))
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
 func writeMeta(dir string, meta RunMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runMetaFile), data, 0644)
+	return os.WriteFile(filepath.Join(dir, runMetaFile), data, paths.PrivateFileMode)
 }
 
 func StartBackground(root string, period Period, regenerate bool) error {
@@ -160,7 +153,7 @@ func StartBackground(root string, period Period, regenerate bool) error {
 		return ErrBragRunning
 	}
 	dir := StateDir(root, id)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
 		return err
 	}
 	for _, stale := range []string{runExitFile, runPIDFile} {
@@ -173,7 +166,7 @@ func StartBackground(root string, period Period, regenerate bool) error {
 	if err != nil {
 		return fmt.Errorf("locate digest binary: %w", err)
 	}
-	logOutput, err := os.Create(filepath.Join(dir, RunLogFile))
+	logOutput, err := paths.CreatePrivate(filepath.Join(dir, RunLogFile))
 	if err != nil {
 		return err
 	}
@@ -193,7 +186,7 @@ func StartBackground(root string, period Period, regenerate bool) error {
 		logOutput.Close()
 		return err
 	}
-	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
+	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), paths.PrivateFileMode)
 	go func() {
 		_ = cmd.Wait()
 		_ = logOutput.Close()
@@ -252,7 +245,7 @@ func Stop(root, id string) error {
 	if err := os.Remove(filepath.Join(dir, runPIDFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runExitFile), []byte("143"), 0644)
+	return os.WriteFile(filepath.Join(dir, runExitFile), []byte("143"), paths.PrivateFileMode)
 }
 
 func Dismiss(root, id string) error {
@@ -266,7 +259,7 @@ var parentPID = os.Getppid
 
 func claimRun(root, id string) (func(runErr error), error) {
 	dir := StateDir(root, id)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
 		return nil, err
 	}
 	pidPath := filepath.Join(dir, runPIDFile)
@@ -280,7 +273,7 @@ func claimRun(root, id string) (func(runErr error), error) {
 	if !wrapped {
 		_ = os.Remove(filepath.Join(dir, runExitFile))
 	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), paths.PrivateFileMode); err != nil {
 		return nil, err
 	}
 	return func(runErr error) {
@@ -291,7 +284,7 @@ func claimRun(root, id string) (func(runErr error), error) {
 		if runErr != nil {
 			exitCode = "1"
 		}
-		_ = os.WriteFile(filepath.Join(dir, runExitFile), []byte(exitCode), 0644)
+		_ = os.WriteFile(filepath.Join(dir, runExitFile), []byte(exitCode), paths.PrivateFileMode)
 		_ = os.Remove(pidPath)
 	}, nil
 }

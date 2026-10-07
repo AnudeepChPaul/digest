@@ -98,3 +98,15 @@ func TestInlineEditLeavesRoomForWiderTagSlots(t *testing.T) {
 		}
 	}
 }
+
+func TestTodaysClosedNotesHaveNoStrikethrough(t *testing.T) {
+	withTrueColor(t)
+	m := gitStripTestModel(t)
+	closed := &model.Note{Summary: "finished", Status: model.StatusDone, Created: m.currentDate, Updated: m.currentDate, Source: model.SourceManual}
+	for _, selected := range []bool{false, true} {
+		row := m.renderRow(closed, selected, 80)
+		if strings.Contains(row, "\x1b[9m") || strings.Contains(row, ";9m") || strings.Contains(row, ";9;") || strings.Contains(row, "[9;") {
+			t.Errorf("selected=%v row is struck through: %q", selected, row)
+		}
+	}
+}

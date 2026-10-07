@@ -55,7 +55,7 @@ func writeSearchCSV(dir string, notes []*model.Note, now time.Time) (string, err
 		return "", err
 	}
 	exportPath := filepath.Join(dir, now.Local().Format(searchExportFileFormat))
-	exportFile, err := os.Create(exportPath)
+	exportFile, err := paths.CreatePrivate(exportPath)
 	if err != nil {
 		return "", err
 	}

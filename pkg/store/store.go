@@ -92,11 +92,11 @@ func (s *NoteStore) Save(n *model.Note) error {
 		buf.WriteString("\n")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(targetPath), paths.PrivateDirMode); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	if err := os.WriteFile(targetPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(targetPath, buf.Bytes(), paths.PrivateFileMode); err != nil {
 		return fmt.Errorf("failed to write note file: %w", err)
 	}
 

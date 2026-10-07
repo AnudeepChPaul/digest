@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"app/pkg/aitool"
 	"app/pkg/paths"
 
 	"gopkg.in/yaml.v3"
@@ -46,24 +47,45 @@ func (j *JobSpec) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+type AutomationSpec struct {
+	Name         string   `yaml:"name"`
+	Plugins      []string `yaml:"plugins,omitempty"`
+	Match        []string `yaml:"match,omitempty"`
+	Prompt       Prompt   `yaml:"prompt,omitempty"`
+	DraftPrompt  Prompt   `yaml:"draft_prompt,omitempty"`
+	CreatePrompt Prompt   `yaml:"create_prompt,omitempty"`
+	ReauthHint   string   `yaml:"reauth_hint,omitempty"`
+	Command      string   `yaml:"-"`
+}
+
+const (
+	SelectionNotesToday     = "notes_today"
+	SelectionNotesYesterday = "notes_yesterday"
+)
+
 type Config struct {
-	DigestRoot          string    `yaml:"digest_root"`
-	GitRepositoryRoots  []string  `yaml:"git_repository_roots"`
-	GitLookbackDays     int       `yaml:"git_lookback_days"`
-	GitCommitsCmd       string    `yaml:"git_commits_cmd"`
-	GitAutoSyncInterval int       `yaml:"git_auto_sync_interval"`
-	JanitorPatterns     []string  `yaml:"janitor_patterns"`
-	Jobs                []JobSpec `yaml:"jobs"`
-	ReviewCommand       string    `yaml:"review_command"`
-	GreenOnly           bool      `yaml:"green_only"`
-	JiraBaseURL         string    `yaml:"jira_base_url"`
-	PRQuantityPerRepo   int       `yaml:"pr_quantity_per_repo"`
-	ShowDailyCommits    *bool     `yaml:"show_daily_commits"`
-	BragCommand         string    `yaml:"brag_command"`
-	BragPrompts         Prompt    `yaml:"brag_prompts"`
-	MonthBragPrompts    Prompt    `yaml:"month_brag_prompts"`
-	PerformancePrompts  Prompt    `yaml:"performance_review_prompts"`
-	RetentionDays       int       `yaml:"retention_days"`
+	DigestRoot          string              `yaml:"digest_root"`
+	AIToolType          string              `yaml:"ai_tool_type"`
+	SelectionDefault    string              `yaml:"selection_default"`
+	GitRepositoryRoots  []string            `yaml:"git_repository_roots"`
+	GitAutoSyncInterval int                 `yaml:"git_auto_sync_interval"`
+	JanitorPatterns     []string            `yaml:"janitor_patterns"`
+	Jobs                []JobSpec           `yaml:"jobs"`
+	GreenOnly           bool                `yaml:"green_only"`
+	JiraBaseURL         string              `yaml:"jira_base_url"`
+	PRQuantityPerRepo   int                 `yaml:"pr_quantity_per_repo"`
+	ShowDailyCommits    *bool               `yaml:"show_daily_commits"`
+	ShowGit             *bool               `yaml:"show_git"`
+	BragPrompts         Prompt              `yaml:"brag_prompts"`
+	MonthBragPrompts    Prompt              `yaml:"month_brag_prompts"`
+	PerformancePrompts  Prompt              `yaml:"performance_review_prompts"`
+	RetentionDays       int                 `yaml:"retention_days"`
+	DigestNotifications DigestNotifications `yaml:"digest_notifications"`
+	WorkDays            []string            `yaml:"work_days"`
+	ShowKeyHints        bool                `yaml:"show_key_hints"`
+	ShowTags            string              `yaml:"show_tags"`
+	TerminalApp         string              `yaml:"terminal_app"`
+	Automations         []AutomationSpec    `yaml:"automations,omitempty"`
 }
 
 type Prompt string
@@ -111,12 +133,57 @@ func (c *Config) BragDir() string       { return filepath.Join(c.Root(), "brag")
 func (c *Config) CacheDir() string      { return filepath.Join(c.Root(), "cache") }
 func (c *Config) LogsDir() string       { return filepath.Join(c.Root(), "logs") }
 func (c *Config) QuarantineDir() string { return filepath.Join(c.Root(), ".quarantine") }
+func (c *Config) AutomationDir() string { return filepath.Join(c.Root(), "automations") }
+
+func findAutomation(specs []AutomationSpec, name string) (AutomationSpec, bool) {
+	for _, spec := range specs {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return AutomationSpec{}, false
+}
+
+func withBuiltInDefaults(configured, builtIn AutomationSpec) AutomationSpec {
+	if len(configured.Plugins) == 0 {
+		configured.Plugins = builtIn.Plugins
+	}
+	if len(configured.Match) == 0 {
+		configured.Match = builtIn.Match
+	}
+	if configured.Prompt == "" {
+		configured.Prompt = builtIn.Prompt
+	}
+	if configured.DraftPrompt == "" {
+		configured.DraftPrompt = builtIn.DraftPrompt
+	}
+	if configured.CreatePrompt == "" {
+		configured.CreatePrompt = builtIn.CreatePrompt
+	}
+	return configured
+}
+
+func (c *Config) AutomationList() []AutomationSpec {
+	builtIns := builtInAutomations()
+	if c == nil || c.Automations == nil {
+		return builtIns
+	}
+	var specs []AutomationSpec
+	for _, configured := range c.Automations {
+		if builtIn, found := findAutomation(builtIns, configured.Name); found {
+			configured = withBuiltInDefaults(configured, builtIn)
+		}
+		specs = append(specs, configured)
+	}
+	if _, found := findAutomation(specs, AutomationPRReview); !found {
+		review, _ := findAutomation(builtIns, AutomationPRReview)
+		specs = append(specs, review)
+	}
+	return specs
+}
 
 func (c *Config) BragCommandTemplate() string {
-	if c == nil || c.BragCommand == "" {
-		return DefaultBragCommand
-	}
-	return c.BragCommand
+	return DefaultBragCommand
 }
 
 func (c *Config) BragPrompt(kind PromptKind) string {
@@ -131,10 +198,11 @@ func (c *Config) BragPrompt(kind PromptKind) string {
 }
 
 func (c *Config) ReviewCommandTemplate() string {
-	if c.ReviewCommand == "" {
-		return DefaultReviewCommand
+	review, _ := findAutomation(c.AutomationList(), AutomationPRReview)
+	if review.Command != "" {
+		return review.Command
 	}
-	return c.ReviewCommand
+	return aitool.ReviewCommand(string(review.Prompt), review.Plugins)
 }
 
 func (c *Config) PRsPerRepo() int {
@@ -151,55 +219,118 @@ func (c *Config) Retention() int {
 	return c.RetentionDays
 }
 
+func (c *Config) GitEnabled() bool {
+	return c == nil || c.ShowGit == nil || *c.ShowGit
+}
+
 func (c *Config) DailyCommitsEnabled() bool {
-	return c == nil || c.ShowDailyCommits == nil || *c.ShowDailyCommits
+	return c.GitEnabled() && (c == nil || c.ShowDailyCommits == nil || *c.ShowDailyCommits)
+}
+
+var gitJobCommands = []string{"digest branch-reaper", "digest repo-sync"}
+
+func (j JobSpec) usesGit() bool {
+	for _, gitCommand := range gitJobCommands {
+		if strings.Contains(j.Command, gitCommand) || strings.Contains(j.DryRunCommand, gitCommand) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Config) JobList() []JobSpec {
+	if c == nil {
+		return nil
+	}
+	if c.GitEnabled() {
+		return c.Jobs
+	}
+	var jobs []JobSpec
+	for _, job := range c.Jobs {
+		if !job.usesGit() {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs
 }
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		DigestRoot          string      `yaml:"digest_root"`
-		GitRepositoryRoots  []string    `yaml:"git_repository_roots"`
-		LegacyRepoRoots     []string    `yaml:"repo_roots"`
-		GitLookbackDays     int         `yaml:"git_lookback_days"`
-		GitCommitsCmd       string      `yaml:"git_commits_cmd"`
-		GitAutoSyncInterval interface{} `yaml:"git_auto_sync_interval"`
-		JanitorPatterns     []string    `yaml:"janitor_patterns"`
-		Jobs                []JobSpec   `yaml:"jobs"`
-		ReviewCommand       string      `yaml:"review_command"`
-		GreenOnly           *bool       `yaml:"green_only"`
-		JiraBaseURL         string      `yaml:"jira_base_url"`
-		PRQuantityPerRepo   int         `yaml:"pr_quantity_per_repo"`
-		ShowDailyCommits    *bool       `yaml:"show_daily_commits"`
-		BragCommand         string      `yaml:"brag_command"`
-		BragPrompts         Prompt      `yaml:"brag_prompts"`
-		MonthBragPrompts    Prompt      `yaml:"month_brag_prompts"`
-		PerformancePrompts  Prompt      `yaml:"performance_review_prompts"`
-		RetentionDays       int         `yaml:"retention_days"`
+		DigestRoot          string               `yaml:"digest_root"`
+		AIToolType          string               `yaml:"ai_tool_type"`
+		SelectionDefault    string               `yaml:"selection_default"`
+		GitRepositoryRoots  []string             `yaml:"git_repository_roots"`
+		LegacyRepoRoots     []string             `yaml:"repo_roots"`
+		GitAutoSyncInterval interface{}          `yaml:"git_auto_sync_interval"`
+		JanitorPatterns     []string             `yaml:"janitor_patterns"`
+		Jobs                []JobSpec            `yaml:"jobs"`
+		GreenOnly           *bool                `yaml:"green_only"`
+		JiraBaseURL         string               `yaml:"jira_base_url"`
+		PRQuantityPerRepo   int                  `yaml:"pr_quantity_per_repo"`
+		ShowDailyCommits    *bool                `yaml:"show_daily_commits"`
+		ShowGit             *bool                `yaml:"show_git"`
+		BragPrompts         Prompt               `yaml:"brag_prompts"`
+		MonthBragPrompts    Prompt               `yaml:"month_brag_prompts"`
+		PerformancePrompts  Prompt               `yaml:"performance_review_prompts"`
+		RetentionDays       int                  `yaml:"retention_days"`
+		DigestNotifications *DigestNotifications `yaml:"digest_notifications"`
+		WorkDays            []string             `yaml:"work_days"`
+		ShowKeyHints        bool                 `yaml:"show_key_hints"`
+		ShowTags            string               `yaml:"show_tags"`
+		TerminalApp         string               `yaml:"terminal_app"`
+		Automations         []AutomationSpec     `yaml:"automations"`
 	}
 
 	if err := value.Decode(&raw); err != nil {
 		return err
 	}
 
+	if raw.AIToolType != "" && raw.AIToolType != aitool.TypeClaude {
+		return fmt.Errorf("ai_tool_type %q is not supported; use %q", raw.AIToolType, aitool.TypeClaude)
+	}
 	c.DigestRoot = raw.DigestRoot
+	c.AIToolType = raw.AIToolType
+	c.SelectionDefault = raw.SelectionDefault
 	c.GitRepositoryRoots = raw.GitRepositoryRoots
 	if len(c.GitRepositoryRoots) == 0 {
 		c.GitRepositoryRoots = raw.LegacyRepoRoots
 	}
-	c.GitLookbackDays = raw.GitLookbackDays
-	c.GitCommitsCmd = raw.GitCommitsCmd
 	c.JanitorPatterns = raw.JanitorPatterns
 	c.Jobs = raw.Jobs
-	c.ReviewCommand = raw.ReviewCommand
+	if c.Jobs == nil {
+		c.Jobs = DefaultJobs()
+	}
 	c.GreenOnly = raw.GreenOnly == nil || *raw.GreenOnly
 	c.JiraBaseURL = raw.JiraBaseURL
 	c.PRQuantityPerRepo = raw.PRQuantityPerRepo
 	c.ShowDailyCommits = raw.ShowDailyCommits
-	c.BragCommand = raw.BragCommand
+	c.ShowGit = raw.ShowGit
 	c.BragPrompts = raw.BragPrompts
 	c.MonthBragPrompts = raw.MonthBragPrompts
 	c.PerformancePrompts = raw.PerformancePrompts
 	c.RetentionDays = raw.RetentionDays
+	if raw.DigestNotifications == nil {
+		raw.DigestNotifications = &DigestNotifications{Morning: DefaultMorning, Evening: DefaultEvening}
+	}
+	for _, clock := range []string{raw.DigestNotifications.Morning, raw.DigestNotifications.Evening} {
+		if _, err := ParseClock(clock); clock != "" && err != nil {
+			return err
+		}
+	}
+	for _, day := range raw.WorkDays {
+		if _, known := weekdayNames[strings.ToLower(day)]; !known {
+			return fmt.Errorf("work_days: %q is not a day; use mon, tue, wed, thu, fri, sat or sun", day)
+		}
+	}
+	c.DigestNotifications = *raw.DigestNotifications
+	c.WorkDays = raw.WorkDays
+	if raw.ShowTags != "" && raw.ShowTags != ShowTagsSelected && raw.ShowTags != ShowTagsAlways {
+		return fmt.Errorf("show_tags %q is not supported; use %q or %q", raw.ShowTags, ShowTagsSelected, ShowTagsAlways)
+	}
+	c.ShowKeyHints = raw.ShowKeyHints
+	c.ShowTags = raw.ShowTags
+	c.TerminalApp = raw.TerminalApp
+	c.Automations = raw.Automations
 
 	c.GitAutoSyncInterval = parseSyncInterval(raw.GitAutoSyncInterval)
 
@@ -208,7 +339,7 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 
 func parseSyncInterval(val interface{}) int {
 	if val == nil {
-		return 30
+		return DefaultGitAutoSyncInterval
 	}
 
 	switch v := val.(type) {
@@ -228,7 +359,7 @@ func parseSyncInterval(val interface{}) int {
 		}
 	}
 
-	return 30
+	return DefaultGitAutoSyncInterval
 }
 
 func xdgConfigHome() string {
@@ -286,19 +417,50 @@ func LoadOrCreate(path string) (*Config, error) {
 	}
 
 	defaultCfg := DefaultConfig()
-
-	if err := os.MkdirAll(filepath.Dir(resolved), 0755); err != nil {
-		return defaultCfg, fmt.Errorf("failed to create config directory for %s: %w", resolved, err)
+	if err := writeDefaultConfig(resolved); err != nil {
+		return defaultCfg, err
 	}
-
-	data, err := yaml.Marshal(defaultCfg)
-	if err != nil {
-		return defaultCfg, fmt.Errorf("failed to encode default config: %w", err)
-	}
-
-	if err := os.WriteFile(resolved, data, 0644); err != nil {
-		return defaultCfg, fmt.Errorf("failed to write default config %s: %w", resolved, err)
-	}
-
 	return defaultCfg, nil
+}
+
+func writeDefaultConfig(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
+		return fmt.Errorf("failed to create config directory for %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(DefaultConfigYAML), paths.PrivateFileMode); err != nil {
+		return fmt.Errorf("failed to write default config %s: %w", path, err)
+	}
+	return nil
+}
+
+func Export(path string) (written, backup string, err error) {
+	written = resolveConfigPath(path)
+	if _, statErr := os.Stat(written); statErr == nil {
+		backup = written + ".bak"
+		if err := os.Rename(written, backup); err != nil {
+			return written, "", fmt.Errorf("back up %s: %w", written, err)
+		}
+	}
+	return written, backup, writeDefaultConfig(written)
+}
+
+func (c *Config) TightenPermissions(configPath string) error {
+	resolved := resolveConfigPath(configPath)
+	targets := map[string]os.FileMode{resolved: paths.PrivateFileMode}
+	for _, ownedDir := range []string{c.NotesDir(), c.ReviewRootDir(), c.BragDir(), c.CacheDir(), c.LogsDir(), c.AutomationDir(), filepath.Join(c.Root(), "notify")} {
+		targets[ownedDir] = paths.PrivateDirMode
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(c.Root()) != filepath.Clean(home) && strings.Contains(strings.ToLower(filepath.Base(c.Root())), "digest") {
+		targets[c.Root()] = paths.PrivateDirMode
+	}
+	if configDir := filepath.Dir(resolved); filepath.Base(configDir) == "digest" {
+		targets[configDir] = paths.PrivateDirMode
+	}
+	var failures []error
+	for path, mode := range targets {
+		if err := os.Chmod(path, mode); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }

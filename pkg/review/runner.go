@@ -9,6 +9,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
+
+	"app/pkg/paths"
 
 	"github.com/charmbracelet/log"
 )
@@ -38,8 +42,10 @@ func Run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 
 var parentPID = os.Getppid
 
+var reviewCommandTimeout = 45 * time.Minute
+
 func claimRun(stateDir string) (func(runErr error), error) {
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, paths.PrivateDirMode); err != nil {
 		return nil, err
 	}
 	pidPath := filepath.Join(stateDir, pidFile)
@@ -55,7 +61,7 @@ func claimRun(stateDir string) (func(runErr error), error) {
 			_ = os.Remove(filepath.Join(stateDir, stale))
 		}
 	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), paths.PrivateFileMode); err != nil {
 		return nil, err
 	}
 	return func(runErr error) {
@@ -66,7 +72,7 @@ func claimRun(stateDir string) (func(runErr error), error) {
 		if runErr != nil {
 			exitCode = "1"
 		}
-		_ = os.WriteFile(filepath.Join(stateDir, exitFile), []byte(exitCode), 0644)
+		_ = os.WriteFile(filepath.Join(stateDir, exitFile), []byte(exitCode), paths.PrivateFileMode)
 		if pid, ok := readInt(pidPath); ok && pid == os.Getpid() {
 			_ = os.Remove(pidPath)
 		}
@@ -103,10 +109,14 @@ func run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 	}
 
 	logger.Info("Running Claude review", "command", command)
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	reviewCtx, cancelReview := context.WithTimeout(ctx, reviewCommandTimeout)
+	defer cancelReview()
+	cmd := exec.CommandContext(reviewCtx, "sh", "-c", command)
 	cmd.WaitDelay = commandWaitDelay
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Dir = cloneDir
-	cmd.Env = os.Environ()
+	cmd.Env = ReviewEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

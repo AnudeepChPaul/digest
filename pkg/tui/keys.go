@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 
 	"app/pkg/brag"
 	"app/pkg/review"
@@ -41,6 +42,38 @@ const (
 	actionSwitchGitColumn
 
 	actionCloseHelp
+
+	actionAutomate
+	actionRunAutomationDraft
+	actionConfirmAutomation
+	actionCancelAutomation
+	actionEditAutomation
+	actionDeleteAutomationDraft
+	actionSaveAutomationEdit
+	actionCancelAutomationEdit
+
+	actionOpenActions
+	actionChooseAction
+	actionActionMenuDown
+	actionActionMenuUp
+	actionCloseActionMenu
+	actionConfirmNotify
+	actionDashboardApprove
+	actionSetupYes
+	actionSetupNo
+	actionSetupConfirm
+	actionSetupSkip
+	actionSetupSwitchTime
+	actionSetupDayLeft
+	actionSetupDayRight
+	actionSetupToggleDay
+	actionSetupQuit
+	actionDashboardReject
+	actionCancelNotify
+	actionOpenSetup
+	actionOpenMessages
+	actionEditorHalfPageUp
+	actionEditorHalfPageDown
 
 	actionCloseBrag
 	actionBragCursorDown
@@ -206,6 +239,16 @@ func (m Model) activeBindings() []keyBinding {
 		return bragConfirmBindings()
 	case ViewBragEdit:
 		return bragEditBindings()
+	case ViewAutomationConfirm:
+		return automationConfirmBindings()
+	case ViewAutomationEdit:
+		return automationEditBindings()
+	case ViewActionMenu:
+		return actionMenuBindings()
+	case ViewNotifyInput:
+		return notifyInputBindings()
+	case ViewSetup:
+		return m.setupKeyBindings()
 	}
 	return nil
 }
@@ -219,11 +262,14 @@ func (m Model) dashboardBindings() []keyBinding {
 	if m.ctrlCCount > 0 {
 		quit = quit.warning()
 	}
-	return []keyBinding{
+	bindings := append(m.prRowBindings(),
 		newKeyBinding(actionOpenItem, []string{"enter"}, "↵", "open"),
 		newKeyBinding(actionToggleDone, []string{" ", "space"}, "space", "done"),
 		newKeyBinding(actionNewNote, []string{"a"}, "a", "new"),
 		newKeyBinding(actionInlineEdit, []string{"i"}, "i", "inline"),
+		hiddenKeyBinding(actionOpenActions, "@", "."),
+		hiddenKeyBinding(actionOpenSetup, ","),
+		hiddenKeyBinding(actionOpenMessages, "!"),
 		newKeyBinding(actionOpenPreview, []string{"tab"}, "tab", "preview"),
 		newKeyBinding(actionToday, []string{"t"}, "t", "today"),
 		newKeyBinding(actionPreviousDay, []string{"p"}, "p|n", "date"),
@@ -246,8 +292,14 @@ func (m Model) dashboardBindings() []keyBinding {
 		hiddenKeyBinding(actionToggleSortOrder, "w"),
 		hiddenKeyBinding(actionTogglePendingScope, "m"),
 		hiddenKeyBinding(actionDismissSyncErrors, "esc"),
+	)
+	if m.cfg.GitEnabled() {
+		return bindings
 	}
+	return slices.DeleteFunc(bindings, func(binding keyBinding) bool { return slices.Contains(gitActions, binding.action) })
 }
+
+var gitActions = []keyAction{actionSync, actionRefreshCommits, actionSwitchGitColumn, actionToggleSortField, actionToggleSortOrder, actionTogglePendingScope}
 
 func gitDetailsBindings() []keyBinding {
 	return []keyBinding{
@@ -281,22 +333,20 @@ func reviewRunConfirmBindings() []keyBinding {
 }
 
 func rejectCommentBindings() []keyBinding {
-	return []keyBinding{
+	return append([]keyBinding{
 		newKeyBinding(actionSubmitRejectComment, []string{"ctrl+s"}, "ctrl+s", "continue"),
 		newKeyBinding(actionCancelRejectComment, []string{"esc"}, "esc", "cancel"),
-	}
+	}, editorHalfPageBindings()...)
 }
 
 func (m Model) previewBindings() []keyBinding {
-	if prItem := m.currentPRItem(); prItem != nil {
-		return m.prPreviewBindings(prItem)
-	}
-	navItems := m.allNavItems()
-	if len(navItems) == 0 || m.selected >= len(navItems) {
+	item, found := m.selectedNavItem()
+	if !found {
 		return previewTailBindings()
 	}
-	item := navItems[m.selected]
 	switch {
+	case item.Kind == KindPendingGit && item.PendingGitPR != nil:
+		return m.prPreviewBindings(item.PendingGitPR)
 	case item.Kind == KindReviewRun && item.ReviewRun != nil:
 		return reviewRunPreviewBindings(item.ReviewRun.Status == review.RunRunning)
 	case item.Kind == KindBragRun && item.BragRun != nil:
@@ -306,6 +356,8 @@ func (m Model) previewBindings() []keyBinding {
 			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "dismiss").shownWhen(!running),
 			hiddenKeyBinding(actionPreviewEnter, "enter"),
 		}, previewTailBindings()...)
+	case item.Kind == KindAutomationRun && item.AutomationRun != nil:
+		return automationRunPreviewBindings()
 	case item.Kind == KindMyPR && item.MyPR != nil:
 		return append([]keyBinding{
 			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"),
@@ -317,11 +369,21 @@ func (m Model) previewBindings() []keyBinding {
 			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "run job").shownWhen(!running),
 		}, previewTailBindings()...)
 	}
-	return append([]keyBinding{
+	if m.onDraftTab() {
+		return m.noteDraftTabBindings()
+	}
+	var draftTab []keyBinding
+	tail := previewTailBindings()
+	if m.hasDraftTab() {
+		draftTab = []keyBinding{newKeyBinding(actionSwitchPreviewTab, []string{"tab"}, "tab", "tabs")}
+		tail[0] = newKeyBinding(actionClosePreview, []string{"esc"}, "esc", "close")
+	}
+	return append(append(draftTab,
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR").shownWhen(prReviewNoteURL(item.Note) != ""),
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "edit").shownWhen(item.Note != nil && prReviewNoteURL(item.Note) == ""),
 		newKeyBinding(actionPreviewStop, []string{"d"}, "d", "delete").warning().shownWhen(item.Note != nil && item.Note.FilePath != ""),
-	}, previewTailBindings()...)
+		newKeyBinding(actionAutomate, []string{"x"}, "x", "automate").shownWhen(m.canAutomate()),
+	), tail...)
 }
 
 func previewTailBindings() []keyBinding {
@@ -400,11 +462,11 @@ func inlineEditBindings() []keyBinding {
 }
 
 func editBindings() []keyBinding {
-	return []keyBinding{
+	return append([]keyBinding{
 		newKeyBinding(actionSaveNote, []string{"ctrl+o"}, "ctrl+o", "save"),
 		newKeyBinding(actionCopyEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelEdit, []string{"esc"}, "esc", "cancel"),
-	}
+	}, editorHalfPageBindings()...)
 }
 
 func searchBindings() []keyBinding {
@@ -464,15 +526,22 @@ func bragConfirmBindings() []keyBinding {
 }
 
 func bragEditBindings() []keyBinding {
-	return []keyBinding{
+	return append([]keyBinding{
 		newKeyBinding(actionSaveBragEdit, []string{"ctrl+o"}, "ctrl+o", "save"),
 		newKeyBinding(actionCopyBragEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelBragEdit, []string{"esc"}, "esc", "cancel"),
-	}
+	}, editorHalfPageBindings()...)
 }
 
 func errorBindings() []keyBinding {
 	return []keyBinding{
 		newKeyBinding(actionDismissError, []string{"esc"}, "esc", "dismiss"),
+	}
+}
+
+func editorHalfPageBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionEditorHalfPageDown, []string{"ctrl+d"}, "ctrl+d|u", "half page"),
+		hiddenKeyBinding(actionEditorHalfPageUp, "ctrl+u"),
 	}
 }

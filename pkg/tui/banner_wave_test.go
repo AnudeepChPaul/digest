@@ -40,7 +40,7 @@ func TestBannerWaveTickAdvancesThenStops(t *testing.T) {
 func TestBannerWaveIgnoresGitSyncWave(t *testing.T) {
 	m := bannerTestModel(t)
 	m.bannerWaveActive = false
-	m.beginGitFetch(true)
+	m.beginGitFetch()
 	if m.bannerWaveActive {
 		t.Errorf("git sync replayed the banner wave")
 	}

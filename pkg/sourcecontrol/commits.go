@@ -10,10 +10,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"app/pkg/config"
-	"app/pkg/jobs"
 )
 
 var maxConcurrentGitReads = max(runtime.NumCPU(), 2)
@@ -24,12 +24,16 @@ var runCommitsCommand = executeShellCommand
 
 var discoverRepoPaths = localRepoPaths
 
+var gitCommitsCommand = `git log -n 50 --author="$(git config user.email)" --since="{since}" --until="{until}" --pretty="format:%h|%s"`
+
 func executeShellCommand(ctx context.Context, dir string, cmdStr string) []byte {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd", "/c", cmdStr)
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	}
 	cmd.WaitDelay = commandWaitDelay
 	cmd.Env = os.Environ()
@@ -76,19 +80,7 @@ func fetchRepoCommits(ctx context.Context, cmdTemplate string, repoPath string, 
 }
 
 func localRepoPaths(cfg *config.Config) []string {
-	home, _ := os.UserHomeDir()
-	searchRoots := []string{
-		filepath.Join(home, "Projects"),
-		filepath.Join(home, "Developer"),
-		filepath.Join(home, "Code"),
-		".",
-	}
-	searchRoots = append([]string{cfg.NotesDir()}, searchRoots...)
-	if len(cfg.GitRepositoryRoots) > 0 {
-		searchRoots = cfg.GitRepositoryRoots
-	}
-
-	repoPaths, _ := jobs.DiscoverRepos(searchRoots)
+	repoPaths := discoverReposCached(cfg.GitRepositoryRoots)
 	uniquePaths := make(map[string]bool)
 	var cleanLocalRepos []string
 	for _, repoPath := range repoPaths {
@@ -108,10 +100,6 @@ type commitWindow struct {
 func dayWindow(date time.Time) commitWindow {
 	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	return commitWindow{since: dayStart, until: dayStart.Add(24*time.Hour - time.Second)}
-}
-
-func FetchLocalCommits(ctx context.Context, cfg *config.Config, date time.Time) map[string][]PRItem {
-	return FetchLocalCommitsForDays(ctx, cfg, date)[0]
 }
 
 func FetchLocalCommitsForDays(ctx context.Context, cfg *config.Config, dates ...time.Time) []map[string][]PRItem {
@@ -151,7 +139,7 @@ func fetchCommitWindows(ctx context.Context, cfg *config.Config, windows []commi
 				case <-fetchCtx.Done():
 					return
 				}
-				commits := fetchRepoCommits(fetchCtx, cfg.GitCommitsCmd, repoPath, window.since, window.until)
+				commits := fetchRepoCommits(fetchCtx, gitCommitsCommand, repoPath, window.since, window.until)
 				<-gitReadSlots
 				if len(commits) > 0 {
 					resultsMu.Lock()

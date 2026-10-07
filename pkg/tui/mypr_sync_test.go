@@ -14,7 +14,7 @@ func myOpenPR(repo string, number int, branch, ci string) review.QueuedPR {
 
 func TestMyPRsSectionListsPRsAndCreatesNotes(t *testing.T) {
 	m := syncTestModel(t)
-	m.beginGitFetch(false)
+	m.beginGitFetch()
 	next, cmd := m.Update(gitMyPRsMsg{generation: m.fetchGeneration, partOfSync: true, prs: []review.QueuedPR{myOpenPR("console", 4, "fix/a", "SUCCESS")}})
 	m = next.(Model)
 	if len(m.myPRs) != 1 || m.myPRs[0].Ref.Number != 4 {

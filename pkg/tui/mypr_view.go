@@ -12,15 +12,15 @@ import (
 )
 
 var (
-	ciPassingIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).Render("✓")
-	ciFailingIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Render("✗")
-	ciRunningIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#F9E2AF")).Render("◌")
+	ciPassingIcon = lipgloss.NewStyle().Foreground(colourGreen).Render("✓")
+	ciFailingIcon = lipgloss.NewStyle().Foreground(colourRed).Render("✗")
+	ciRunningIcon = lipgloss.NewStyle().Foreground(colourYellow).Render("◌")
 	ciUnknownIcon = mutedStyle.Render("·")
 )
 
 const myPRApprovedGlyph = "\U000F0A50"
 
-var myPRApprovedIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")).Render(myPRApprovedGlyph)
+var myPRApprovedIcon = lipgloss.NewStyle().Foreground(colourGreen).Render(myPRApprovedGlyph)
 
 func myPRApprovalCell(decision string) string {
 	if decision == "APPROVED" {

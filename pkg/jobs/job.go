@@ -31,7 +31,6 @@ func NeedsUserAction(res *JobResult, dryRun bool) bool {
 	return dryRun && res.Changed
 }
 
-// RunRepoSync executes the background repository synchronization runner.
 func RunRepoSync(roots []string, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &RepoSyncJob{Roots: roots, Logger: logger}
@@ -43,7 +42,6 @@ func RunRepoSync(roots []string, dryRun bool) (bool, error) {
 	return NeedsUserAction(res, dryRun), nil
 }
 
-// RunJanitor scans and cleans up quarantined or temporary files.
 func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, retentionDays int, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &JanitorJob{
@@ -62,7 +60,6 @@ func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, ret
 	return NeedsUserAction(res, dryRun), nil
 }
 
-// RunBranchReaper scans and prunes stale local git branches.
 func RunBranchReaper(roots []string, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &BranchReaperJob{

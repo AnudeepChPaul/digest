@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -75,13 +74,25 @@ func TestStateOfFailed(t *testing.T) {
 	}
 }
 
-func TestNotificationArgsGroupUnderDigest(t *testing.T) {
-	withURL := strings.Join(notificationArgs("PR reviewed", "console #1", "https://x/pull/1"), " ")
-	if withURL != "-title digest -subtitle PR reviewed -message console #1 -open https://x/pull/1" {
-		t.Errorf("with url = %q", withURL)
+func TestCorruptSeenFileReseedsSilently(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "seen.json")
+	writeFile(t, statePath, `{"u1": tr`)
+	var sent []string
+	original := sendNotification
+	sendNotification = func(title, message, openURL string) error {
+		sent = append(sent, openURL)
+		return nil
 	}
-	withoutURL := strings.Join(notificationArgs("PR reviewed", "console #1", ""), " ")
-	if withoutURL != "-title digest -subtitle PR reviewed -message console #1" {
-		t.Errorf("without url = %q", withoutURL)
+	defer func() { sendNotification = original }()
+	approved := []QueuedPR{{Ref: PRRef{Repo: "a", Number: 1, URL: "u1"}, Approved: true}}
+	if err := NotifyTransitions(approved, root, statePath); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Errorf("a corrupt seen file should reseed without alerts, sent %v", sent)
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 1 {
+		t.Errorf("only the seen file should remain, got %v", entries)
 	}
 }

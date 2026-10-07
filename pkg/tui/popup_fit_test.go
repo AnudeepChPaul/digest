@@ -115,18 +115,3 @@ func TestPopupsFitSmallTerminal(t *testing.T) {
 type errBoom struct{}
 
 func (errBoom) Error() string { return strings.Repeat("something failed badly ", 40) }
-
-func TestSyncFailedPopupWiderButFits(t *testing.T) {
-	for _, width := range []int{150, 45} {
-		m := syncTestModel(t)
-		m.width = width
-		m.recordSectionError(sectionPending, errBoom{})
-		toast := m.renderSyncErrorToast()
-		if widestLine(toast) > width {
-			t.Errorf("width %d: toast %d wide", width, widestLine(toast))
-		}
-		if want := min(max(width/3, 36)*11/10, width-2); widestLine(toast) > want+2 || (width == 150 && widestLine(toast) < 50) {
-			t.Errorf("width %d: toast %d wide", width, widestLine(toast))
-		}
-	}
-}

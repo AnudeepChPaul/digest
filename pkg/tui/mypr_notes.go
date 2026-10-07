@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"app/pkg/model"
+	"app/pkg/paths"
 	"app/pkg/review"
 	"app/pkg/store"
 
@@ -73,7 +74,7 @@ func loadMyPRsSeen(path string) (map[string]myPRSeen, error) {
 }
 
 func saveMyPRsSeen(path string, seen map[string]myPRSeen) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(seen)

@@ -93,7 +93,7 @@ func TestCommitRefreshTriggers(t *testing.T) {
 }
 
 func gitStripHeader(m Model) string {
-	lines, _ := m.renderGitStrip(m.width-4, false)
+	lines, _ := m.renderGitStrip(m.width-4, false, m.groupNotes())
 	return stripANSI(lines[0])
 }
 
@@ -104,19 +104,17 @@ func settledCommitsModel(t *testing.T) Model {
 	return next.(Model)
 }
 
-func TestCommitRefreshAnimatesGitStripUntilCommitsLand(t *testing.T) {
+func TestCommitRefreshShowsSyncingInTheHeaderUntilCommitsLand(t *testing.T) {
 	stubDayCommits(t)
 	m := settledCommitsModel(t)
-	if strings.Contains(gitStripHeader(m), "syncing") {
-		t.Fatalf("strip should start synced: %q", gitStripHeader(m))
-	}
+	m.loadingGit = false
 	m = press(t, m, runes("c"))
-	if !strings.Contains(gitStripHeader(m), "syncing") {
-		t.Errorf("c should show syncing on the strip: %q", gitStripHeader(m))
+	if !strings.Contains(headerTopRow(m), "syncing") || strings.Contains(gitStripHeader(m), "syncing") {
+		t.Errorf("c should show syncing in the header only: %q / %q", headerTopRow(m), gitStripHeader(m))
 	}
 	next, _ := m.Update(m.loadCommitsCmd()())
-	if header := gitStripHeader(next.(Model)); strings.Contains(header, "syncing") {
-		t.Errorf("strip should be synced once commits land: %q", header)
+	if row := headerTopRow(next.(Model)); !strings.Contains(row, "synced") {
+		t.Errorf("header should say synced once commits land: %q", row)
 	}
 }
 
@@ -125,17 +123,14 @@ func TestGitStripIgnoresGlobalGitSync(t *testing.T) {
 	m := settledCommitsModel(t)
 	m.loadingGit = true
 	m.yesterdayGitRepo, m.todayGitRepos = nil, nil
-	lines, _ := m.renderGitStrip(m.width-4, false)
+	lines, _ := m.renderGitStrip(m.width-4, false, m.groupNotes())
 	if strip := stripANSI(strings.Join(lines, "\n")); strings.Contains(strip, "syncing") || strings.Contains(strip, "checking") {
 		t.Errorf("global git sync must not affect the strip:\n%s", strip)
 	}
-	if !strings.Contains(stripANSI(m.renderLiveSyncDot()), "syncing") {
-		t.Errorf("pending PR dot should still follow global git sync")
-	}
 	m.loadingGit = false
 	m = press(t, m, runes("c"))
-	if strings.Contains(stripANSI(m.renderLiveSyncDot()), "syncing") {
-		t.Errorf("commit refresh must not animate the pending PR dot")
+	if body := stripANSI(m.renderDashboardBody()); strings.Contains(body, "syncing") {
+		t.Errorf("sync progress belongs in the header only:\n%s", body)
 	}
 }
 
@@ -159,5 +154,22 @@ func TestDateChangeDropsOldCommitsAndFetchesNewDates(t *testing.T) {
 	want := []string{m.currentDate.Format("2006-01-02"), m.currentDate.AddDate(0, 0, -1).Format("2006-01-02")}
 	if strings.Join(*days, ",") != strings.Join(want, ",") {
 		t.Errorf("fetched %v, want %v", *days, want)
+	}
+}
+
+func TestStartupCommitsLoadIsCancelledByGitSyncCancel(t *testing.T) {
+	stubDayCommits(t)
+	var loadCtx context.Context
+	stubbed := fetchDaysCommits
+	fetchDaysCommits = func(ctx context.Context, cfg *config.Config, dates ...time.Time) []map[string][]GitPRItem {
+		loadCtx = ctx
+		return stubbed(ctx, cfg, dates...)
+	}
+	m := syncTestModel(t)
+	load := m.loadCommitsCmd()
+	m.cancelGitSync()
+	load()
+	if loadCtx == nil || loadCtx.Err() == nil {
+		t.Errorf("startup commits load should see the cancellation")
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"app/pkg/paths"
+
 	"github.com/charmbracelet/log"
 )
 
@@ -19,7 +21,17 @@ var runStep = func(ctx context.Context, output io.Writer, dir string, name strin
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = commandWaitDelay
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "CI=true")
+	cmd.Env = stepEnv()
+	cmd.Stdout = output
+	cmd.Stderr = output
+	return cmd.Run()
+}
+
+var runInstall = func(ctx context.Context, output io.Writer, dir, script string) error {
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd.WaitDelay = commandWaitDelay
+	cmd.Dir = dir
+	cmd.Env = installEnv()
 	cmd.Stdout = output
 	cmd.Stderr = output
 	return cmd.Run()
@@ -48,7 +60,7 @@ func freshClone(ctx context.Context, ref PRRef, root, dir string, logger *log.Lo
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove previous clone: %w", err)
 	}
-	if err := os.MkdirAll(root, 0755); err != nil {
+	if err := os.MkdirAll(root, paths.PrivateDirMode); err != nil {
 		return err
 	}
 	logger.Info("Cloning repository", "repo", ref.CloneSpec(), "dir", dir)
@@ -81,9 +93,13 @@ func PrepareTo(ctx context.Context, ref PRRef, root string, logger *log.Logger, 
 }
 
 func installDependencies(ctx context.Context, dir string, logger *log.Logger, output io.Writer) error {
+	if reason := riskyInstallConfig(dir); reason != "" {
+		logger.Warn("Skipping dependency install", "reason", reason)
+		return nil
+	}
 	if script := installScript(dir); script != "" {
 		logger.Info("Installing dependencies", "command", script)
-		if err := runStep(ctx, output, dir, "bash", "-c", script); err != nil {
+		if err := runInstall(ctx, output, dir, script); err != nil {
 			logger.Warn("Dependency install failed, reviewing without dependencies", "err", err)
 		}
 	} else {

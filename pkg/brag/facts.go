@@ -137,6 +137,9 @@ func Gather(ctx context.Context, cfg *config.Config, week Week, notes []*model.N
 	if now.Before(until) {
 		until = now
 	}
+	if !cfg.GitEnabled() {
+		return Sources{Notes: notes}, nil
+	}
 	sources := Sources{Notes: notes, Commits: sourcecontrol.FetchLocalCommitsBetween(ctx, cfg, week.Start, until)}
 	var err error
 	sources.Opened, sources.Merged, err = sourcecontrol.NewEngine(cfg).AuthoredPRs(ctx, week.Start, week.End())
