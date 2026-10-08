@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 )
 
 const changesPRURL = "https://github.com/o/console/pull/7"

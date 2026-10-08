@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"app/pkg/brand"
+	"github.com/AnudeepChPaul/digest/pkg/brand"
 )
 
 const (

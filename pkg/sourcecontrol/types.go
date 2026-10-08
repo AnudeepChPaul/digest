@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 )
 
 const (

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

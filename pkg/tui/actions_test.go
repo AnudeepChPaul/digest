@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/model"
-	"app/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

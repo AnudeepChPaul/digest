@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"app/pkg/notify"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 )
 
 type PRState string

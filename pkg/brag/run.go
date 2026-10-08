@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/model"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 )
 
 const (

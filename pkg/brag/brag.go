@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )

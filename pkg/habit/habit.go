@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 )
 
 type Slot int

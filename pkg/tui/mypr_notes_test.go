@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 )
 
 func myPR(number int, mutate func(*review.QueuedPR)) review.QueuedPR {

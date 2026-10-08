@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/brag"
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/brag"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"

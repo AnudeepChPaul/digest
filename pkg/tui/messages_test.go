@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/config"
 )
 
 func latestMessageText(m Model) string {

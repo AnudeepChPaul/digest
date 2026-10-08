@@ -3,7 +3,7 @@ package tui
 import (
 	"context"
 
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

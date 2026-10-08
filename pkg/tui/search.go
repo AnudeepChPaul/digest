@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode"
 
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"

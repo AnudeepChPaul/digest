@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 )
 
 func seedReviewClone(t *testing.T, root string, ref review.PRRef) {

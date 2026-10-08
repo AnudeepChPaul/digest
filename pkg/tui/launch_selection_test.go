@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"app/pkg/config"
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 )
 
 func launchNotes(m Model, includeToday, includeCarried bool) []*model.Note {

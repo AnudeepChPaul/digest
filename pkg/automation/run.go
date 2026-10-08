@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 )
 
 const (

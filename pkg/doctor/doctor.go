@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"app/pkg/aitool"
-	"app/pkg/config"
-	"app/pkg/jobs"
+	"github.com/AnudeepChPaul/digest/pkg/aitool"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/jobs"
 )
 
 type Result struct {

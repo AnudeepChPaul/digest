@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/brand"
+	"github.com/AnudeepChPaul/digest/pkg/brand"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

@@ -4,10 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/paths"
 	"os"
 	"path/filepath"
+
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 )
 
 func TestAutomatedKindRoundTrips(t *testing.T) {

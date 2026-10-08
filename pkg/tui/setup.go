@@ -9,10 +9,10 @@ import (
 	"strings"
 	"unicode"
 
-	"app/pkg/config"
-	"app/pkg/doctor"
-	"app/pkg/notify"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/doctor"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"

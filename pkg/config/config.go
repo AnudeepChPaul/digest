@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/aitool"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/aitool"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )

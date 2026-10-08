@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"app/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/config"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"

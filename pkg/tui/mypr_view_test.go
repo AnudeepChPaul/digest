@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

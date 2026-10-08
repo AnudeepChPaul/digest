@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"app/pkg/jobs"
+	"github.com/AnudeepChPaul/digest/pkg/jobs"
 )
 
 var repoCacheTTL = time.Minute

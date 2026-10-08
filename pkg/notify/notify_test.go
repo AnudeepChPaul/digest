@@ -1,12 +1,13 @@
 package notify
 
 import (
-	"app/pkg/paths"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 )
 
 func TestParseInterval(t *testing.T) {

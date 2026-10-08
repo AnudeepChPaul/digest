@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/notify"
-	"app/pkg/paths"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 func alertPR(url, title, decision string) review.QueuedPR {

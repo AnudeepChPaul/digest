@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 func pendingOnHost(host string, number int) GitPRItem {

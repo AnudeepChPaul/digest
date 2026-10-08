@@ -1,9 +1,9 @@
 package tui
 
 import (
-	"app/pkg/brag"
-	"app/pkg/model"
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/brag"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

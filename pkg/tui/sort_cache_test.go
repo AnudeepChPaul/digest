@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 func pendingCreatedOn(number int, created time.Time) GitPRItem {

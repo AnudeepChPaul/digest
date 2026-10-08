@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

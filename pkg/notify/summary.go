@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/habit"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/habit"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )

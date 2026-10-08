@@ -1,4 +1,4 @@
-module app
+module github.com/AnudeepChPaul/digest
 
 go 1.24.5
 

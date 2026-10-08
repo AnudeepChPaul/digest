@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/config"
 )
 
 var scpRemotePattern = regexp.MustCompile(`^[^@/\s]+@([^:/\s]+):([^\s]+)$`)

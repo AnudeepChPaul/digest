@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 )
 
 func dayBefore(m Model, days int) time.Time {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/doctor"
+	"github.com/AnudeepChPaul/digest/pkg/doctor"
 )
 
 type fakeRun struct {

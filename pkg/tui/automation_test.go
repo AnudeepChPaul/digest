@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/automation"
-	"app/pkg/config"
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

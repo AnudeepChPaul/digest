@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/automation"
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"

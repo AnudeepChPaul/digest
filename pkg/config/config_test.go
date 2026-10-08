@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )

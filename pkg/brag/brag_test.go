@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 func localDate(year int, month time.Month, day int) time.Time {

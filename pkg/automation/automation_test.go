@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/aitool"
-	"app/pkg/config"
-	"app/pkg/model"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/aitool"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 )
 
 func fakeSpec(command string) config.AutomationSpec {

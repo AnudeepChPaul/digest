@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"

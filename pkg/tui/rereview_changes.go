@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

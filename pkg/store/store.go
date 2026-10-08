@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )

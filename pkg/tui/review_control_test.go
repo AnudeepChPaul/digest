@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"

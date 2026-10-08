@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/automation"
-	"app/pkg/model"
-	"app/pkg/notify"
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

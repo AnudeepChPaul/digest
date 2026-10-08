@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"

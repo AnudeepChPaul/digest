@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/config"
 )
 
 func bannerTestModel(t *testing.T) Model {

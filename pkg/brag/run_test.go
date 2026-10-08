@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 )
 
 func writeState(t *testing.T, root, id string, files map[string]string) {

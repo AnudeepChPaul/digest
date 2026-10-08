@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/brag"
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/brag"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 )
 
 func writeHugeLog(t *testing.T, path string) {

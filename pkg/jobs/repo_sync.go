@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"app/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
 
 	"github.com/charmbracelet/log"
 )

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"app/pkg/config"
-	"app/pkg/doctor"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/doctor"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

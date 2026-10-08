@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 func locallyReviewedItem(t *testing.T, m Model, number int, finishedAt time.Time, kind string, pr review.QueuedPR) GitPRItem {

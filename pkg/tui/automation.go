@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"app/pkg/automation"
-	"app/pkg/config"
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"

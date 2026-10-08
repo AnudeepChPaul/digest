@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"app/pkg/model"
-	"app/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 )
 
 func (m Model) loadReviewPollSnapshot() reviewPollSnapshot {

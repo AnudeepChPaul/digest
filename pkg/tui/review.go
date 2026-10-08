@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"app/pkg/automation"
 	"context"
 	"errors"
 	"fmt"
@@ -13,12 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"app/pkg/brag"
-	"app/pkg/config"
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+
+	"github.com/AnudeepChPaul/digest/pkg/brag"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"

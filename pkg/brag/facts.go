@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/model"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 )
 
 const noActivityFacts = "- No recorded activity this week."

@@ -3,9 +3,9 @@ package tui
 import (
 	"testing"
 
-	"app/pkg/automation"
-	"app/pkg/model"
-	"app/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
 )
 
 func TestNoteRowKeyUsesRawReminderAndRunState(t *testing.T) {

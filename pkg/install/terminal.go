@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"app/pkg/doctor"
+	"github.com/AnudeepChPaul/digest/pkg/doctor"
 
 	"golang.org/x/term"
 )

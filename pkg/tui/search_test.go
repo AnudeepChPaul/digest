@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

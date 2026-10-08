@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"app/pkg/config"
-	"app/pkg/notify"
-	"app/pkg/review"
-	"app/pkg/sourcecontrol"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

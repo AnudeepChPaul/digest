@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"app/pkg/model"
-	"app/pkg/paths"
-	"app/pkg/review"
-	"app/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
