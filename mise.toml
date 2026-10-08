@@ -1,6 +1,7 @@
 [tools]
-go = "latest"
-gotestsum = "latest"
+go = "1.27.1"
+gotestsum = "1.13.0"
+semver = "3.4.0"
 
 [vars]
 project = "digest"
@@ -12,9 +13,8 @@ description = "Print all vars as JSON"
 quiet = true
 run = "echo '{{ vars | json_encode() }}' | jq ."
 
-[tasks._version]
+[tasks.bump]
 description = "Bump .version with semver"
-hide = true
 quiet = true
 usage = 'arg "<bump>" default="patch" { choices "patch" "minor" "major" }'
 run = '''
@@ -35,41 +35,47 @@ quiet = true
 run = "go vet ./..."
 
 [tasks.build]
-description = "Bump version and build {{vars.project}}"
+description = "Build a dev {{vars.project}} into ~/.config/bin"
 depends = ["vet", "test"]
 quiet = true
-usage = 'arg "<bump>" default="patch" { choices "patch" "minor" "major" }'
 run = '''
 binary_path=~/.config/bin/digest
-printf '\033[36m▸\033[0m bumping {{vars.project}} version (\033[1m%s\033[0m)\n' "$usage_bump"
-mise run _version "$usage_bump"
-build_version=$(cat .version)
+build_version="$(cat .version)-dev"
 printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
 go build -trimpath -ldflags "-s -w -X github.com/AnudeepChPaul/digest/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/digest
 binary_size=$(stat -f %z "$binary_path" | awk '{ printf "%.1f MB", $1 / 1048576 }')
 printf '\033[32m✓\033[0m built %s \033[2m(%s)\033[0m\n' "$binary_path" "$binary_size"
 '''
 
-[tasks.release]
-description = "Tag .version, push it and point the brew tap at it"
+[tasks.dist]
+description = "Build release archives for macOS arm64 and amd64 into dist/"
 quiet = true
 run = '''
 set -eu
-tap_dir=~/Projects/github.com/AnudeepChPaul/homebrew-tap
-formula_path="$tap_dir/Formula/digest.rb"
+release_version=$(cat .version)
+rm -rf dist
+mkdir -p dist
+for arch in arm64 amd64; do
+  staging_dir="dist/digest-$release_version-darwin-$arch"
+  mkdir -p "$staging_dir"
+  GOOS=darwin GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/AnudeepChPaul/digest/pkg/tui.appVersion=$release_version" -o "$staging_dir/digest" ./cmd/digest
+  cp LICENSE README.md "$staging_dir/"
+  tar -czf "$staging_dir.tar.gz" -C dist "$(basename "$staging_dir")"
+  rm -rf "$staging_dir"
+done
+(cd dist && shasum -a 256 *.tar.gz > checksums.txt)
+ls -lh dist
+'''
+
+[tasks.tap]
+description = "Point the Homebrew formula in $TAP_DIR at the current .version tag"
+quiet = true
+run = '''
+set -eu
+formula_path="${TAP_DIR:?set TAP_DIR to the homebrew-tap checkout}/Formula/digest.rb"
 release_tag="v$(cat .version)"
-if [ -n "$(git status --porcelain)" ]; then
-  printf '\033[31m✗\033[0m commit your changes before releasing\n'
-  exit 1
-fi
-git push origin main
-git tag -m "digest $release_tag" "$release_tag"
-git push origin "$release_tag"
 tarball_url="https://github.com/AnudeepChPaul/digest/archive/refs/tags/$release_tag.tar.gz"
 tarball_sha=$(curl -fsSL "$tarball_url" | shasum -a 256 | cut -d' ' -f1)
-git -C "$tap_dir" pull --ff-only
 sed -i '' -E "s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
-git -C "$tap_dir" commit -am "digest $release_tag"
-git -C "$tap_dir" push
-printf '\033[32m✓\033[0m released digest \033[1m%s\033[0m; upgrade with brew upgrade digest\n' "$release_tag"
+printf '\033[32m✓\033[0m formula points at %s (%s)\n' "$release_tag" "$tarball_sha"
 '''

@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: [.version]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+      - run: |
+          mise run vet
+          mise run test
+      - id: tag
+        run: |
+          release_tag="v$(cat .version)"
+          echo "name=$release_tag" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -m "digest $release_tag" "$release_tag"
+          git push origin "$release_tag"
+      - run: mise run dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.tag.outputs.name }}" dist/*.tar.gz dist/checksums.txt --title "digest ${{ steps.tag.outputs.name }}" --generate-notes
+      - uses: actions/checkout@v7
+        with:
+          repository: AnudeepChPaul/homebrew-tap
+          path: homebrew-tap
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+      - env:
+          TAP_DIR: homebrew-tap
+        run: |
+          mise run tap
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "digest ${{ steps.tag.outputs.name }}"
+          git push origin HEAD:main
