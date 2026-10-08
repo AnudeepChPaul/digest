@@ -131,7 +131,11 @@ func init() {
 		actionCopyPreviewItem: Model.copyPreviewItem,
 		actionPreviewStop:     Model.previewStop,
 		actionPreviewEnter:    Model.previewEnter,
-		actionOpenNotePR:      Model.openNotePR,
+		actionOpenNoteLinks:   Model.openNoteLinks,
+		actionLinkMenuDown:    Model.linkMenuDown,
+		actionLinkMenuUp:      Model.linkMenuUp,
+		actionChooseLink:      Model.chooseLink,
+		actionCloseLinkMenu:   Model.closeLinkMenu,
 
 		actionSwitchPreviewTab:   Model.switchPreviewTab,
 		actionStartReview:        Model.startReviewFromKey,
@@ -818,15 +822,6 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if item.Note != nil {
 		return m.beginNoteEdit(item.Note, ViewPreview)
-	}
-	return m, nil
-}
-
-func (m Model) openNotePR(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if item, ok := m.selectedNavItem(); ok {
-		if prURL := prReviewNoteURL(item.Note); prURL != "" {
-			_ = openURL(prURL)
-		}
 	}
 	return m, nil
 }

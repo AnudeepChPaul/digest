@@ -119,7 +119,11 @@ const (
 	actionCopyPreviewItem
 	actionPreviewStop
 	actionPreviewEnter
-	actionOpenNotePR
+	actionOpenNoteLinks
+	actionLinkMenuDown
+	actionLinkMenuUp
+	actionChooseLink
+	actionCloseLinkMenu
 
 	actionSwitchPreviewTab
 	actionStartReview
@@ -224,6 +228,8 @@ func (m Model) activeBindings() []keyBinding {
 		return rejectCommentBindings()
 	case ViewPreview:
 		return m.previewBindings()
+	case ViewLinkMenu:
+		return linkMenuBindings()
 	case ViewArchived:
 		return archivedBindings()
 	case ViewInlineEdit:
@@ -376,7 +382,6 @@ func (m Model) previewBindings() []keyBinding {
 	}
 	bindings := append(draftTab,
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "edit").shownWhen(item.Note != nil),
-		newKeyBinding(actionOpenNotePR, []string{"o"}, "o", "open PR").shownWhen(prReviewNoteURL(item.Note) != ""),
 	)
 	bindings = append(bindings, m.itemBindings(item, false)...)
 	bindings = append(bindings, newKeyBinding(actionPreviewStop, []string{"d"}, "d", "delete").warning().shownWhen(item.Note != nil && item.Note.FilePath != ""))

@@ -49,6 +49,7 @@ func (m Model) itemBindings(item NavItem, onDashboard bool) []keyBinding {
 		if item.Note == nil {
 			return nil
 		}
+		links := noteLinks(item.Note)
 		toggleLabel := "done"
 		if item.Note.Status == model.StatusDone {
 			toggleLabel = "active"
@@ -56,6 +57,7 @@ func (m Model) itemBindings(item NavItem, onDashboard bool) []keyBinding {
 		return []keyBinding{
 			newKeyBinding(actionToggleDone, []string{" ", "space"}, "space", toggleLabel),
 			newKeyBinding(actionOpenActions, []string{".", "@"}, ".|@", "actions").shownWhen(len(m.noteActions(item.Note)) > 0),
+			newKeyBinding(actionOpenNoteLinks, []string{"o"}, "o", noteLinksLabel(links, onDashboard)).shownWhen(len(links) > 0),
 		}
 	}
 	return nil

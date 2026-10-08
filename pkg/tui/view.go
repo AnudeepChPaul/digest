@@ -134,6 +134,9 @@ func (m Model) renderScreen() string {
 	case ViewActionMenu:
 		return m.renderActionMenu()
 
+	case ViewLinkMenu:
+		return m.renderLinkMenu()
+
 	}
 
 	if m.mode == ViewNotifyInput {

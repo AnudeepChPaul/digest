@@ -56,6 +56,7 @@ const (
 	ViewAutomationEdit
 	ViewAutomationConfirm
 	ViewActionMenu
+	ViewLinkMenu
 	ViewNotifyInput
 	ViewSetup
 	ViewSetupDiscard
@@ -313,6 +314,9 @@ type Model struct {
 	bragRunToStop        *brag.Run
 	automationRunToStop  *automation.Run
 	actionMenuReturnMode ViewMode
+	linkMenuItems        []string
+	linkMenuSelected     int
+	linkMenuReturnMode   ViewMode
 
 	syncPulseFrame   int
 	bannerWaveActive bool

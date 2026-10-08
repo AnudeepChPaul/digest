@@ -62,11 +62,11 @@ func TestOOpensPRReviewNoteLink(t *testing.T) {
 	}
 }
 
-func TestOInManualNotePreviewOpensNothing(t *testing.T) {
+func TestOInManualNotePreviewOpensItsLink(t *testing.T) {
 	opened := stubOpenURL(t)
 	m := notePreviewModel(t, model.SourceManual, "https://github.com/o/r/pull/1")
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
-	if m.mode != ViewPreview || len(*opened) != 0 {
+	if m.mode != ViewPreview || len(*opened) != 1 || (*opened)[0] != "https://github.com/o/r/pull/1" {
 		t.Errorf("mode=%v opened=%v", m.mode, *opened)
 	}
 }
@@ -104,7 +104,7 @@ func TestPRReviewNoteFooter(t *testing.T) {
 		t.Errorf("pr-review footer should offer enter Edit and o Open PR:\n%s", prNote)
 	}
 	if manual := stripANSI(notePreviewModel(t, model.SourceManual, "x").View()); strings.Contains(manual, "Open") || !strings.Contains(manual, "Edit") {
-		t.Errorf("manual note footer should offer enter Edit, not Open PR")
+		t.Errorf("manual note without links should offer enter Edit and no o")
 	}
 }
 
