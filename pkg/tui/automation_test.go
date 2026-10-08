@@ -103,24 +103,50 @@ func TestXOnTheDashboardDoesNothing(t *testing.T) {
 	}
 }
 
-func TestPreviewOffersAutomateOnlyForMatchingNotes(t *testing.T) {
+func TestPreviewOffersAutomationsThroughActionsOnly(t *testing.T) {
 	m, _ := automationTestModel(t)
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if !footerHas(m, "automate") {
-		t.Errorf("matching note preview has no automate button: %+v", footerItemsFrom(m.activeBindings()))
+	if footerHas(m, "automate") || !footerHas(m, "actions") {
+		t.Errorf("preview should offer actions, not automate: %+v", footerItemsFrom(m.activeBindings()))
 	}
-	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	selectNote(t, &m, "")
-	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if footerHas(m, "automate") {
-		t.Error("unrelated note offers automate")
+	m = press(t, m, runes("x"))
+	if m.mode != ViewPreview {
+		t.Errorf("x should do nothing in the details preview, mode = %v", m.mode)
+	}
+	if !menuHasAutomation(m, "jira") {
+		t.Errorf("matching note menu misses the automation: %+v", m.noteActions(m.notes[len(m.notes)-1]))
 	}
 }
 
-func TestXInPreviewConfirmsThenStartsTheDraft(t *testing.T) {
+func menuHasAutomation(m Model, name string) bool {
+	note, _ := m.previewNote()
+	for _, action := range m.noteActions(note) {
+		if action.automation && action.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func chooseMenuAutomation(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	m = press(t, m, runes("."))
+	if m.mode != ViewActionMenu {
+		t.Fatalf(". did not open the actions menu, mode = %v", m.mode)
+	}
+	for m.actionMenuItems[m.actionMenuSelected].name != name {
+		if m.actionMenuSelected == len(m.actionMenuItems)-1 {
+			t.Fatalf("%s missing from menu %+v", name, m.actionMenuItems)
+		}
+		m = press(t, m, runes("j"))
+	}
+	return press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+func TestPreviewActionsConfirmThenStartTheDraft(t *testing.T) {
 	m, started := automationTestModel(t)
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = press(t, m, runes("x"))
+	m = chooseMenuAutomation(t, m, "jira")
 	if m.mode != ViewAutomationConfirm || len(*started) != 0 {
 		t.Fatalf("mode = %v started = %+v", m.mode, *started)
 	}
@@ -128,7 +154,7 @@ func TestXInPreviewConfirmsThenStartsTheDraft(t *testing.T) {
 	if m.mode != ViewPreview || len(*started) != 0 {
 		t.Fatalf("esc did not cancel: mode = %v started = %+v", m.mode, *started)
 	}
-	m = press(t, m, runes("x"))
+	m = chooseMenuAutomation(t, m, "jira")
 	m = press(t, m, runes("y"))
 	if len(*started) != 1 || (*started)[0] != (startedAutomation{m.cfg.AutomationDir(), "note-1", "jira", automation.PhaseDraft}) {
 		t.Fatalf("started = %+v", *started)
@@ -149,7 +175,7 @@ func TestRedraftWarnsAboutReplacingTheDraft(t *testing.T) {
 	m, _ := automationTestModel(t)
 	m = withDraft(t, m, automation.RunDraftReady, automation.PhaseDraft)
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m = press(t, m, runes("x"))
+	m = chooseMenuAutomation(t, m, "jira")
 	if view := stripANSI(m.View()); m.mode != ViewAutomationConfirm || !strings.Contains(view, "replaces") {
 		t.Errorf("mode = %v view:\n%s", m.mode, view)
 	}
@@ -516,6 +542,10 @@ func TestDStopsTheAutomationJob(t *testing.T) {
 			m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 		}
 		m = press(t, m, runes("d"))
+		if m.mode != ViewDeleteConfirm || len(stopped) != 0 {
+			t.Fatalf("preview %v: d should ask before stopping, mode = %v stopped = %v", fromPreview, m.mode, stopped)
+		}
+		m = press(t, m, runes("y"))
 		if len(stopped) != 1 || stopped[0] != "note-1" {
 			t.Fatalf("preview %v stopped = %v", fromPreview, stopped)
 		}

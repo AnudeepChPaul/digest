@@ -43,7 +43,7 @@ func (m Model) openSetup(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.configPath == "" {
 		return m, nil
 	}
-	return m.startSetup(m.configPath), nil
+	return m.startSetupForm(m.configPath), nil
 }
 
 func startEditorAtTop(area *textarea.Model) {

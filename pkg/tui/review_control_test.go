@@ -133,7 +133,7 @@ func TestReviewFooterLabelsD(t *testing.T) {
 		t.Errorf("idle d label = %q", labelFor())
 	}
 	markRunning(t, m, item.PR.Ref)
-	if labelFor() != "stop review" {
+	if labelFor() != "stop" {
 		t.Errorf("running d label = %q", labelFor())
 	}
 }

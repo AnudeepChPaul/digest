@@ -304,7 +304,7 @@ func TestHelpModalReplacesDashboardFooter(t *testing.T) {
 	if m.mode != ViewHelp || !strings.Contains(view, "SHORTCUTS") {
 		t.Fatalf("mode = %v view:\n%s", m.mode, view)
 	}
-	for _, label := range []string{"brag", "refresh commits", "run jobs", "sort field", "sort order"} {
+	for _, label := range []string{"brag", "refresh commits", "run job", "sort field", "sort order"} {
 		if !strings.Contains(strings.ToLower(view), label) {
 			t.Errorf("help missing %q:\n%s", label, view)
 		}

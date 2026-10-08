@@ -1,10 +1,9 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"time"
-
-	"app/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -52,24 +51,13 @@ func (m Model) selectedRowHints() []keyHint {
 		return nil
 	}
 	switch item.Kind {
-	case KindTodayNote, KindCarriedNote, KindYesterdayDone, KindTodayDone:
-		return m.noteRowHints(item.Note)
-	case KindPendingGit:
-		return []keyHint{{key: "↵", label: "open"}, {key: "y", label: "approve"}, {key: "d", label: "reject"}, {key: "r", label: "review"}}
-	case KindJobDraft, KindReviewRun, KindBragRun, KindAutomationRun:
-		return []keyHint{{key: "↵", label: "open"}, {key: "r", label: "run"}, {key: "d", label: "stop"}}
+	case KindTodayNote, KindCarriedNote, KindYesterdayDone, KindTodayDone, KindPendingGit, KindMyPR, KindJobDraft, KindReviewRun, KindBragRun, KindAutomationRun:
+	default:
+		return nil
 	}
-	return nil
-}
-
-func (m Model) noteRowHints(note *model.Note) []keyHint {
-	toggleLabel := "done"
-	if note != nil && note.Status == model.StatusDone {
-		toggleLabel = "active"
-	}
-	hints := []keyHint{{key: "↵", label: "open"}, {key: "␣", label: toggleLabel}, {key: "i", label: "inline"}}
-	if len(m.noteActions(note)) > 0 {
-		hints = append(hints, keyHint{key: ".|@", label: "actions"})
+	hints := append([]keyHint{{key: "↵", label: "open"}}, hintsFromBindings(m.itemBindings(item, true))...)
+	if item.Note != nil && item.Kind != KindPendingGit {
+		hints = slices.Insert(hints, min(2, len(hints)), keyHint{key: "i", label: "inline"})
 	}
 	return hints
 }
@@ -111,21 +99,6 @@ func (m Model) overlayUnderSelectedRow(box string, left int) string {
 
 func (m Model) rightAlignedColumn(box string) int {
 	return max(m.width-lipgloss.Width(box)-2, 0)
-}
-
-func (m Model) prHintKeysActive() bool {
-	return m.cfg.ShowKeyHints && m.currentPRItem() != nil
-}
-
-func (m Model) prRowBindings() []keyBinding {
-	if !m.prHintKeysActive() {
-		return nil
-	}
-	return []keyBinding{
-		hiddenKeyBinding(actionDashboardApprove, "y"),
-		hiddenKeyBinding(actionDashboardReject, "d"),
-		hiddenKeyBinding(actionStartReview, "r"),
-	}
 }
 
 func (m Model) dashboardApprove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

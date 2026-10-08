@@ -492,10 +492,3 @@ func (m Model) stopAutomationRun(run *automation.Run) (tea.Model, tea.Cmd) {
 	m.clampScreenSelection()
 	return m, nil
 }
-
-func automationRunPreviewBindings() []keyBinding {
-	return append([]keyBinding{
-		newKeyBinding(actionPreviewStop, []string{"d"}, "d", "stop").warning(),
-		hiddenKeyBinding(actionPreviewEnter, "enter"),
-	}, previewTailBindings()...)
-}

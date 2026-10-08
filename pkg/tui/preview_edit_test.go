@@ -42,3 +42,17 @@ func TestEnterInPRReviewNotePreviewDoesNotEdit(t *testing.T) {
 		t.Errorf("PR review note should stay in the preview, mode=%v", m.mode)
 	}
 }
+
+func TestEnterOnADashboardNoteEditsOverItsPreview(t *testing.T) {
+	m := press(t, noteSelectedModel(t), tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ViewEdit || m.editor.Value() != "Ship the trial banner\n\ndetails" {
+		t.Fatalf("enter should open the editor, mode=%v editor=%q", m.mode, m.editor.Value())
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != ViewPreview || !strings.Contains(stripANSI(m.previewViewport.View()), "details") {
+		t.Fatalf("esc should land on the note preview, mode=%v:\n%s", m.mode, stripANSI(m.previewViewport.View()))
+	}
+	if m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc}); m.mode != ViewDashboard {
+		t.Errorf("esc on the preview should close it, mode=%v", m.mode)
+	}
+}

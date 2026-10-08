@@ -102,7 +102,7 @@ func TestPRRowShowsWhoReviewWasRequestedFrom(t *testing.T) {
 	}{
 		{"code owner only", true, false, []string{teamReviewIcon}, []string{directReviewIcon}},
 		{"by name only", false, true, []string{directReviewIcon}, []string{teamReviewIcon}},
-		{"both", true, true, []string{directReviewIcon, teamReviewIcon}, nil},
+		{"both", true, true, []string{directReviewIcon}, []string{teamReviewIcon}},
 		{"neither", false, false, nil, []string{directReviewIcon, teamReviewIcon}},
 	}
 	for _, c := range cases {
@@ -118,11 +118,35 @@ func TestPRRowShowsWhoReviewWasRequestedFrom(t *testing.T) {
 	}
 }
 
+func TestPRStateColumnAlignsAcrossIconCounts(t *testing.T) {
+	m := syncTestModel(t)
+	stateEnd := func(item *GitPRItem) int {
+		row := plainRow(m.renderPendingGitRow(item, true, 100))
+		state := string(m.prState(item))
+		index := strings.LastIndex(row, state)
+		if index < 0 {
+			t.Fatalf("state %q missing from %q", state, row)
+		}
+		return lipgloss.Width(row[:index+len(state)])
+	}
+	oneIcon := tagTestPR()
+	oneIcon.PR.CodeOwner = false
+	twoIcons := tagTestPR()
+	twoIcons.Kind, twoIcons.PR.DirectRequest = sourcecontrol.ReReviewKind, true
+	if one, two := stateEnd(oneIcon), stateEnd(twoIcons); one != two {
+		t.Errorf("state column should not shift with icon count: %d vs %d", one, two)
+	}
+}
+
 func TestReReviewIconComesFirst(t *testing.T) {
 	m := syncTestModel(t)
 	item := tagTestPR()
 	item.Kind, item.PR.DirectRequest = sourcecontrol.ReReviewKind, true
-	assertOrder(t, plainRow(m.renderPendingGitRow(item, true, 100)), "Add trial state", "±120", string(m.prState(item)), reReviewIcon, directReviewIcon, teamReviewIcon)
+	reReviewRow := plainRow(m.renderPendingGitRow(item, true, 100))
+	assertOrder(t, reReviewRow, "Add trial state", "±120", string(m.prState(item)), reReviewIcon, directReviewIcon)
+	if strings.Contains(reReviewRow, teamReviewIcon) {
+		t.Errorf("only two icons fit, so the code-owner icon should yield to the direct request: %q", reReviewRow)
+	}
 
 	item.Kind = sourcecontrol.PendingReviewKind
 	if row := plainRow(m.renderPendingGitRow(item, false, 100)); strings.Contains(row, reReviewIcon) {
@@ -173,7 +197,7 @@ func TestPRTagsHugTheRightEdgeWithoutPadding(t *testing.T) {
 			t.Errorf("%s: tags should end at the right edge without padding: %q", title, lines[row])
 		}
 	}
-	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+" "+firstReviewIcon) {
+	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+"  "+firstReviewIcon) {
 		t.Errorf("a row with no audience should end with status then the first-review marker: %q", row)
 	}
 }
@@ -187,7 +211,7 @@ func TestReviewRequestIconsPairPassWithAudience(t *testing.T) {
 	}{
 		{"first review for me", sourcecontrol.PendingReviewKind, true, false, "\U000F0CA1\U000F0065"},
 		{"first review for my team", sourcecontrol.PendingReviewKind, false, true, "\U000F0CA1\U000F0849"},
-		{"first review for both", sourcecontrol.PendingReviewKind, true, true, "\U000F0CA1\U000F0065\U000F0849"},
+		{"first review for both", sourcecontrol.PendingReviewKind, true, true, "\U000F0CA1\U000F0065"},
 		{"re-review for me", sourcecontrol.ReReviewKind, true, false, "\U000F0458\U000F0065"},
 		{"re-review for my team", sourcecontrol.ReReviewKind, false, true, "\U000F0458\U000F0849"},
 		{"re-review with no audience", sourcecontrol.ReReviewKind, false, false, "\U000F0458"},

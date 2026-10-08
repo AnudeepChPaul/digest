@@ -25,7 +25,9 @@ func setupModel(t *testing.T, existing string) (Model, string, *int) {
 		}
 	}
 	installs := 0
-	previousInstall, previousDoctor := installNotifications, runDoctor
+	previousInstall, previousDoctor, previousInstalled, previousUninstall := installNotifications, runDoctor, notificationsInstalled, uninstallNotifications
+	notificationsInstalled = func() bool { return false }
+	uninstallNotifications = func() error { t.Error("unexpected uninstall"); return nil }
 	installNotifications = func(*config.Config) error {
 		installs++
 		return nil
@@ -33,7 +35,9 @@ func setupModel(t *testing.T, existing string) (Model, string, *int) {
 	runDoctor = func(*config.Config) []doctor.Result {
 		return []doctor.Result{{Name: "git", Found: true, Required: true, Path: "/bin/git"}, {Name: "gh", Required: true}}
 	}
-	t.Cleanup(func() { installNotifications, runDoctor = previousInstall, previousDoctor })
+	t.Cleanup(func() {
+		installNotifications, runDoctor, notificationsInstalled, uninstallNotifications = previousInstall, previousDoctor, previousInstalled, previousUninstall
+	})
 	m := syncTestModel(t)
 	m = m.startSetup(path)
 	return m, path, &installs
@@ -81,7 +85,7 @@ func TestSetupWalksThroughEveryQuestionAndWritesTheConfig(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsABadTimeAndSkipsInstallOnEsc(t *testing.T) {
+func TestSetupRejectsABadTimeAndSkipsInstallOnN(t *testing.T) {
 	m, path, installs := setupModel(t, "digest_root: /mine\njobs: []\n")
 	m, _ = pressKey(t, m, "n")
 	m, _ = pressKey(t, m, "enter")
@@ -93,9 +97,9 @@ func TestSetupRejectsABadTimeAndSkipsInstallOnEsc(t *testing.T) {
 	m.setupInput.SetValue("09:00")
 	m, _ = pressKey(t, m, "enter")
 	m, _ = pressKey(t, m, "n")
-	m, _ = pressKey(t, m, "esc")
+	m, _ = pressKey(t, m, "n")
 	if *installs != 0 || m.mode != ViewDashboard {
-		t.Errorf("esc should skip the install: installs %d mode %v", *installs, m.mode)
+		t.Errorf("n should skip the install: installs %d mode %v", *installs, m.mode)
 	}
 	written, _ := os.ReadFile(path)
 	backup, _ := os.ReadFile(path + ".bak")
@@ -168,5 +172,309 @@ func TestSetupTakesAPastedListOfManyRoots(t *testing.T) {
 	m, _ = pressKey(t, m, "enter")
 	if got := strings.Join(m.setup.answers.RepositoryRoots, ","); got != strings.Join(want, ",") {
 		t.Errorf("roots = %q\nwant %q", got, strings.Join(want, ","))
+	}
+}
+
+func TestSetupWorkDaysRenderSideBySide(t *testing.T) {
+	m, _, _ := setupModel(t, "")
+	m, _ = pressKey(t, m, "y")
+	m, _ = pressKey(t, m, "enter")
+	for _, line := range plainLines(m.View()) {
+		if strings.Contains(line, "Mon") && !strings.Contains(line, "Monday") {
+			for _, day := range []string{"Tue", "Wed", "Thu", "Fri", "Sat", "Sun"} {
+				if !strings.Contains(line, day) {
+					t.Errorf("%s should sit on the same line as Mon: %q", day, line)
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("no day chips:\n%s", m.View())
+}
+
+func TestEscClosesSetupOnEveryStepWithoutSaving(t *testing.T) {
+	advance := [][]string{{}, {"y"}, {"y", "enter"}, {"y", "enter", "enter"}, {"y", "enter", "enter", "enter"}, {"y", "enter", "enter", "enter", "y"}}
+	for step, keys := range advance {
+		m, path, installs := setupModel(t, "digest_root: /mine\n")
+		for _, key := range keys {
+			m, _ = pressKey(t, m, key)
+		}
+		if m.mode != ViewSetup || m.setup.step != setupStep(step) {
+			t.Fatalf("step %d: did not reach it, mode %v", step, m.mode)
+		}
+		if !strings.Contains(m.View(), "esc close") {
+			t.Errorf("step %d: hint should mention esc close:\n%s", step, m.View())
+		}
+		m, _ = pressKey(t, m, "esc")
+		if m.mode != ViewDashboard || *installs != 0 {
+			t.Errorf("step %d: esc should close setup, mode %v installs %d", step, m.mode, *installs)
+		}
+		written, _ := os.ReadFile(path)
+		if string(written) != "digest_root: /mine\n" {
+			t.Errorf("step %d: esc should not save, config = %q", step, written)
+		}
+		if _, err := os.Stat(path + ".bak"); err == nil {
+			t.Errorf("step %d: esc should not write a backup", step)
+		}
+	}
+}
+
+func TestCommaReopensSetupAfterFinishing(t *testing.T) {
+	m, path, _ := setupModel(t, "")
+	m.configPath = path
+	for _, key := range []string{"n", "enter", "enter", "n", "n"} {
+		m, _ = pressKey(t, m, key)
+	}
+	if m.mode != ViewDashboard {
+		t.Fatalf("setup should finish, mode %v", m.mode)
+	}
+	if m, _ = pressKey(t, m, ","); m.mode != ViewSetup {
+		t.Errorf(", should reopen setup after finishing it, mode %v", m.mode)
+	}
+}
+
+func setupFormModel(t *testing.T, existing string) (Model, string, *int) {
+	t.Helper()
+	m, path, installs := setupModel(t, existing)
+	return openSetupForm(t, m, path), path, installs
+}
+
+func openSetupForm(t *testing.T, m Model, path string) Model {
+	t.Helper()
+	m, _ = pressKey(t, m, "esc")
+	m.configPath = path
+	m, _ = pressKey(t, m, ",")
+	if m.mode != ViewSetup || !m.setup.form {
+		t.Fatalf(", should open the setup form, mode %v", m.mode)
+	}
+	return m
+}
+
+func readConfigFile(t *testing.T, path string) *config.Config {
+	t.Helper()
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestSetupFormShowsEveryField(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	view := stripANSI(m.View())
+	for _, want := range []string{"Git", "Repos", "Work days", "Mon", "Sun", "Morning", "Evening", "Key hints", "Notifications", "✓ git", "✗ gh", "enter save", "esc close"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("form should show %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestSetupFormMovesPastTextFieldsWithJKAndArrows(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	moves := []struct {
+		key  string
+		want setupField
+	}{{"j", setupFieldRoots}, {"x", setupFieldRoots}, {"j", setupFieldWorkDays}, {"k", setupFieldRoots}, {"down", setupFieldWorkDays}, {"up", setupFieldRoots}, {"up", setupFieldGit}}
+	for _, move := range moves {
+		if m, _ = pressKey(t, m, move.key); m.setup.field != move.want {
+			t.Fatalf("after %q field = %d, want %d", move.key, m.setup.field, move.want)
+		}
+	}
+	if strings.Join(m.setup.answers.RepositoryRoots, ",") != "~/Projects" || m.setupInput.Focused() {
+		t.Errorf("text fields should stay read-only until tab: roots %q focused %v", m.setup.answers.RepositoryRoots, m.setupInput.Focused())
+	}
+}
+
+func TestSetupFormTabAndSpaceToggleValues(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	gitWasOn := m.setup.answers.ShowGit
+	if m, _ = pressKey(t, m, "tab"); m.setup.answers.ShowGit == gitWasOn {
+		t.Errorf("tab should toggle git")
+	}
+	if m, _ = pressKey(t, m, " "); m.setup.answers.ShowGit != gitWasOn {
+		t.Errorf("space should toggle git back")
+	}
+	m, _ = pressKey(t, m, "j")
+	m, _ = pressKey(t, m, "j")
+	m, _ = pressKey(t, m, "right")
+	if m, _ = pressKey(t, m, "tab"); strings.Join(m.setup.answers.WorkDays, ",") != "mon,wed,thu,fri" {
+		t.Errorf("tab should toggle the day under the cursor: %v", m.setup.answers.WorkDays)
+	}
+	for range 4 {
+		m, _ = pressKey(t, m, "j")
+	}
+	if m, _ = pressKey(t, m, "tab"); !m.setup.notificationsOn {
+		t.Errorf("tab should toggle notifications")
+	}
+}
+
+func TestSetupFormTabEditsATextFieldAndEscReverts(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	m, _ = pressKey(t, m, "j")
+	if m, _ = pressKey(t, m, "tab"); !m.setup.editing || !m.setupInput.Focused() {
+		t.Fatalf("tab on a text field should start editing")
+	}
+	m.setupInput.SetValue("~/cod")
+	m, _ = pressKey(t, m, "e")
+	if m, _ = pressKey(t, m, "j"); m.setupInput.Value() != "~/codej" || m.setup.field != setupFieldRoots {
+		t.Errorf("keys should type while editing: %q field %d", m.setupInput.Value(), m.setup.field)
+	}
+	m.setupInput.SetValue("~/code")
+	if m, _ = pressKey(t, m, "tab"); m.setup.editing || strings.Join(m.setup.answers.RepositoryRoots, ",") != "~/code" {
+		t.Errorf("tab should leave editing and keep the value: editing %v roots %v", m.setup.editing, m.setup.answers.RepositoryRoots)
+	}
+	m, _ = pressKey(t, m, "tab")
+	m.setupInput.SetValue("~/oops")
+	m, _ = pressKey(t, m, "esc")
+	if m.mode != ViewSetup || m.setup.editing || strings.Join(m.setup.answers.RepositoryRoots, ",") != "~/code" {
+		t.Errorf("esc while editing should revert and keep the form open: mode %v editing %v roots %v", m.mode, m.setup.editing, m.setup.answers.RepositoryRoots)
+	}
+	if !strings.Contains(stripANSI(m.View()), "~/code") {
+		t.Errorf("the reverted value should show:\n%s", stripANSI(m.View()))
+	}
+}
+
+func TestSetupFormEnterWhileEditingSaves(t *testing.T) {
+	m, path, _ := setupFormModel(t, "")
+	for range 3 {
+		m, _ = pressKey(t, m, "j")
+	}
+	m, _ = pressKey(t, m, "tab")
+	m.setupInput.SetValue("07:45")
+	m, cmd := pressKey(t, m, "enter")
+	m = applyMsgs(t, m, cmd)
+	if cfg := readConfigFile(t, path); cfg.DigestNotifications.Morning != "07:45" {
+		t.Errorf("enter while editing should save the form, morning = %q", cfg.DigestNotifications.Morning)
+	}
+}
+
+func TestSetupFormBadTimeBlocksSave(t *testing.T) {
+	m, path, installs := setupFormModel(t, "digest_root: /mine\n")
+	for range 3 {
+		m, _ = pressKey(t, m, "j")
+	}
+	m, _ = pressKey(t, m, "tab")
+	m.setupInput.SetValue("25:99")
+	m, cmd := pressKey(t, m, "enter")
+	m = applyMsgs(t, m, cmd)
+	written, _ := os.ReadFile(path)
+	if m.mode != ViewSetup || m.setup.saving || !strings.Contains(stripANSI(m.View()), "HH:MM") || *installs != 0 || string(written) != "digest_root: /mine\n" {
+		t.Errorf("a bad time should block saving with a notice, mode %v config %q:\n%s", m.mode, written, stripANSI(m.View()))
+	}
+}
+
+func TestSetupFormEscClosesACleanFormAndAsksOnADirtyOne(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	if closed, _ := pressKey(t, m, "esc"); closed.mode != ViewDashboard {
+		t.Errorf("esc on an unchanged form should close it, mode %v", closed.mode)
+	}
+	m, path, _ := setupFormModel(t, "digest_root: /mine\n")
+	m, _ = pressKey(t, m, "tab")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewSetupDiscard || !strings.Contains(stripANSI(m.View()), "Discard") {
+		t.Fatalf("esc on a changed form should ask first, mode %v:\n%s", m.mode, stripANSI(m.View()))
+	}
+	gitAnswer := m.setup.answers.ShowGit
+	if m, _ = pressKey(t, m, "n"); m.mode != ViewSetup || m.setup.answers.ShowGit != gitAnswer {
+		t.Fatalf("n should return to the form with the changes, mode %v", m.mode)
+	}
+	m, _ = pressKey(t, m, "esc")
+	m, _ = pressKey(t, m, "y")
+	written, _ := os.ReadFile(path)
+	if m.mode != ViewDashboard || m.setup != nil || string(written) != "digest_root: /mine\n" {
+		t.Errorf("y should discard and close, mode %v config %q", m.mode, written)
+	}
+}
+
+func TestSetupFormSavesInTheBackgroundThenCloses(t *testing.T) {
+	m, path, installs := setupFormModel(t, "")
+	for range 6 {
+		m, _ = pressKey(t, m, "j")
+	}
+	m, _ = pressKey(t, m, "tab")
+	m, cmd := pressKey(t, m, "enter")
+	if !m.setup.saving || !strings.Contains(stripANSI(m.View()), "Saving") {
+		t.Fatalf("enter should show the saving state:\n%s", stripANSI(m.View()))
+	}
+	for _, key := range []string{"esc", "j", "tab"} {
+		if m, _ = pressKey(t, m, key); m.mode != ViewSetup || !m.setup.saving || m.setup.field != setupFieldNotifications {
+			t.Fatalf("%q should be ignored while saving: mode %v", key, m.mode)
+		}
+	}
+	m = applyMsgs(t, m, cmd)
+	if m.mode != ViewDashboard || m.setup != nil || strings.Contains(stripANSI(m.View()), "Config saved successfully") {
+		t.Fatalf("after saving the setup window should close without a message, mode %v:\n%s", m.mode, stripANSI(m.View()))
+	}
+	if *installs != 1 || m.configPath != path || readConfigFile(t, path) == nil {
+		t.Errorf("save should install notifications and keep the config path: installs %d path %q", *installs, m.configPath)
+	}
+}
+
+func setupFormWithAgent(t *testing.T, installed bool) (Model, *int, *int) {
+	t.Helper()
+	m, path, installs := setupModel(t, "")
+	uninstalls := 0
+	notificationsInstalled = func() bool { return installed }
+	uninstallNotifications = func() error { uninstalls++; return nil }
+	return openSetupForm(t, m, path), installs, &uninstalls
+}
+
+func notificationsRow(t *testing.T, m Model) string {
+	t.Helper()
+	for _, line := range strings.Split(stripANSI(m.View()), "\n") {
+		if strings.Contains(line, "Notifications") {
+			return line
+		}
+	}
+	t.Fatalf("no Notifications row:\n%s", stripANSI(m.View()))
+	return ""
+}
+
+func TestSetupFormShowsWhetherNotificationsAreInstalled(t *testing.T) {
+	for _, installed := range []bool{true, false} {
+		m, _, _ := setupFormWithAgent(t, installed)
+		want := map[bool]string{true: "on", false: "off"}[installed]
+		if row := notificationsRow(t, m); !strings.HasSuffix(strings.TrimRight(strings.TrimRight(row, " │|"), " "), want) {
+			t.Errorf("installed %v: row = %q, want %q", installed, row, want)
+		}
+		if closed, _ := pressKey(t, m, "esc"); closed.mode != ViewDashboard {
+			t.Errorf("installed %v: an untouched form should not be dirty, mode %v", installed, closed.mode)
+		}
+	}
+}
+
+func TestSetupFormSaveInstallsOrUninstallsOnlyOnChange(t *testing.T) {
+	cases := []struct {
+		installed, toggle         bool
+		wantInstalls, wantRemoves int
+	}{
+		{false, true, 1, 0},
+		{true, true, 0, 1},
+		{true, false, 0, 0},
+		{false, false, 0, 0},
+	}
+	for _, c := range cases {
+		m, installs, uninstalls := setupFormWithAgent(t, c.installed)
+		for range 6 {
+			m, _ = pressKey(t, m, "j")
+		}
+		if c.toggle {
+			m, _ = pressKey(t, m, "tab")
+		}
+		m, cmd := pressKey(t, m, "enter")
+		applyMsgs(t, m, cmd)
+		if *installs != c.wantInstalls || *uninstalls != c.wantRemoves {
+			t.Errorf("installed %v toggle %v: installs %d uninstalls %d, want %d %d", c.installed, c.toggle, *installs, *uninstalls, c.wantInstalls, c.wantRemoves)
+		}
+	}
+}
+
+func TestSetupFormScrollsToKeepTheFocusedFieldVisible(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	m.height = 16
+	for range 6 {
+		m, _ = pressKey(t, m, "j")
+	}
+	if view := stripANSI(m.View()); !strings.Contains(view, "Notifications") {
+		t.Errorf("the focused field should stay on screen:\n%s", view)
 	}
 }

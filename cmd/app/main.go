@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -18,6 +19,7 @@ import (
 	"app/pkg/config"
 	"app/pkg/doctor"
 	"app/pkg/habit"
+	"app/pkg/install"
 	"app/pkg/jobs"
 	"app/pkg/model"
 	"app/pkg/notify"
@@ -79,6 +81,27 @@ func runNotificationsCommand(cfg *config.Config, action string, args []string) e
 	return nil
 }
 
+func runInstall(cfg *config.Config) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	installer := &install.Installer{
+		Out:               os.Stdout,
+		HomeDir:           home,
+		Confirm:           install.ConfirmFromStdin(bufio.NewReader(os.Stdin)),
+		ReadKey:           install.ReadRawKey,
+		LookPath:          exec.LookPath,
+		RunCommand:        install.RunInTerminal,
+		TmuxServerRunning: install.TmuxServerRunning,
+		InstallNotifications: func() error {
+			return runNotificationsCommand(cfg, "install", []string{"notifications"})
+		},
+		MissingTools: install.MissingTools(doctor.Check(cfg, exec.LookPath)),
+	}
+	return installer.Run()
+}
+
 func printUsage() {
 	fmt.Println("Usage: digest [flags] [command] [command flags]")
 	fmt.Println("\nCommands:")
@@ -90,6 +113,7 @@ func printUsage() {
 	fmt.Println("  brag           Generate a brag (--week 2026-W40 | --month 2026-10 | --year 2026) [--regenerate]")
 	fmt.Println("  automation     Draft or create a note's ticket (--note <id> --name <automation> --phase draft|create)")
 	fmt.Println("  notify-due     Send due @notify reminders (run every minute by launchd)")
+	fmt.Println("  install        Install missing tools, notifications and a shortcut, asking before each")
 	fmt.Println("  install notifications    Install the launchd agent that runs notify-due every minute")
 	fmt.Println("  uninstall notifications  Remove that launchd agent")
 	fmt.Println("  doctor         Check that every tool digest needs is installed")
@@ -259,7 +283,11 @@ func main() {
 		exitForJob("notify-due", false, errors.Join(reminderErr, summaryErr))
 
 	case "install", "uninstall":
-		exitForJob(cmdName+" notifications", false, runNotificationsCommand(cfg, cmdName, subArgs))
+		if cmdName == "install" && len(subArgs) == 0 {
+			exitForJob("install", false, runInstall(cfg))
+		} else {
+			exitForJob(cmdName+" notifications", false, runNotificationsCommand(cfg, cmdName, subArgs))
+		}
 
 	case "setup":
 		if err := tui.Run(cfg, configErr, config.Path(*configPath), true); err != nil {

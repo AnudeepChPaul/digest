@@ -60,10 +60,10 @@ func TestReviewRunFooterItems(t *testing.T) {
 	if strings.Contains(running, "run job") || strings.Contains(failed, "run job") {
 		t.Errorf("review-run footer offers run job: %q / %q", running, failed)
 	}
-	if !strings.Contains(running, "d stop review") {
+	if !strings.Contains(running, "d stop") {
 		t.Errorf("running footer = %q", running)
 	}
-	if strings.Contains(failed, "stop review") || !strings.Contains(failed, "esc|tab close") {
+	if strings.Contains(failed, "d stop") || !strings.Contains(failed, "esc|tab close") {
 		t.Errorf("failed footer = %q", failed)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"app/pkg/notify"
 	"app/pkg/paths"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -33,13 +34,21 @@ const (
 const setupStepCount = 5
 
 type setupState struct {
-	configPath     string
-	step           setupStep
-	answers        config.SetupAnswers
-	dayCursor      int
-	editingEvening bool
-	notice         string
-	results        []doctor.Result
+	configPath          string
+	step                setupStep
+	answers             config.SetupAnswers
+	dayCursor           int
+	editingEvening      bool
+	notice              string
+	results             []doctor.Result
+	form                bool
+	field               setupField
+	notificationsOn     bool
+	notificationsWereOn bool
+	editing             bool
+	saving              bool
+	initialAnswers      config.SetupAnswers
+	spinner             spinner.Model
 }
 
 var installNotifications = func(cfg *config.Config) error {
@@ -49,6 +58,10 @@ var installNotifications = func(cfg *config.Config) error {
 	}
 	return notify.Install(executable, filepath.Join(cfg.LogsDir(), "notify.log"))
 }
+
+var notificationsInstalled = notify.Installed
+
+var uninstallNotifications = notify.Uninstall
 
 var runDoctor = func(cfg *config.Config) []doctor.Result {
 	return doctor.Check(cfg, exec.LookPath)
@@ -225,25 +238,26 @@ func (m Model) setupToggleDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) finishSetup(install bool) (tea.Model, tea.Cmd) {
-	existing, readErr := os.ReadFile(m.setup.configPath)
+func writeSetupConfig(configPath string, answers config.SetupAnswers) (*config.Config, error) {
+	existing, readErr := os.ReadFile(configPath)
 	text := config.DefaultConfigYAML
 	if readErr == nil && string(existing) != config.DefaultConfigYAML {
 		text = string(existing)
-		if err := os.WriteFile(m.setup.configPath+".bak", existing, paths.PrivateFileMode); err != nil {
-			m.showError("SETUP ERROR", err)
-			return m, nil
+		if err := os.WriteFile(configPath+".bak", existing, paths.PrivateFileMode); err != nil {
+			return nil, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(m.setup.configPath), paths.PrivateDirMode); err != nil {
-		m.showError("SETUP ERROR", err)
-		return m, nil
+	if err := os.MkdirAll(filepath.Dir(configPath), paths.PrivateDirMode); err != nil {
+		return nil, err
 	}
-	if err := os.WriteFile(m.setup.configPath, []byte(config.RenderConfig(text, m.setup.answers)), paths.PrivateFileMode); err != nil {
-		m.showError("SETUP ERROR", err)
-		return m, nil
+	if err := os.WriteFile(configPath, []byte(config.RenderConfig(text, answers)), paths.PrivateFileMode); err != nil {
+		return nil, err
 	}
-	cfg, err := config.Load(m.setup.configPath)
+	return config.Load(configPath)
+}
+
+func (m Model) finishSetup(install bool) (tea.Model, tea.Cmd) {
+	cfg, err := writeSetupConfig(m.setup.configPath, m.setup.answers)
 	if err != nil {
 		m.showError("SETUP ERROR", err)
 		return m, nil
@@ -256,13 +270,38 @@ func (m Model) finishSetup(install bool) (tea.Model, tea.Cmd) {
 	}
 	fresh := NewModel(cfg, nil)
 	fresh.width, fresh.height = m.width, m.height
+	fresh.configPath = m.setup.configPath
 	return fresh, fresh.Init()
 }
 
-var setupAccent = lipgloss.NewStyle().Foreground(colourAccent).Bold(true)
+var (
+	setupAccent    = lipgloss.NewStyle().Foreground(colourAccent).Bold(true)
+	workDayChip    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colourAccent).Foreground(colourText).Padding(0, 1)
+	offDayChip     = workDayChip.BorderForeground(colourOverlay).Foreground(colourOverlay)
+	cursorDayLabel = lipgloss.NewStyle().Underline(true).Bold(true)
+)
+
+func renderDayChips(state *setupState) string {
+	var chips []string
+	for index, day := range config.WeekdayOrder {
+		label := strings.ToUpper(day[:1]) + day[1:]
+		if index == state.dayCursor {
+			label = cursorDayLabel.Render(label)
+		}
+		chip := offDayChip
+		if slices.Contains(state.answers.WorkDays, day) {
+			chip = workDayChip
+		}
+		chips = append(chips, chip.Render(label))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, chips...)
+}
 
 func (m Model) renderSetup(modalWidth int) string {
 	state := m.setup
+	if state.form {
+		return m.renderSetupForm(modalWidth)
+	}
 	progress := mutedStyle.Render(fmt.Sprintf("%d/%d", min(int(state.step)+1, setupStepCount+1), setupStepCount+1))
 	var body []string
 	switch state.step {
@@ -271,19 +310,7 @@ func (m Model) renderSetup(modalWidth int) string {
 	case setupStepRoots:
 		body = []string{"📁 Where do your repos live? (comma separated)", "", m.setupInput.View()}
 	case setupStepWorkDays:
-		var days []string
-		for index, day := range config.WeekdayOrder {
-			label := strings.ToUpper(day[:1]) + day[1:]
-			chip := mutedStyle.Render(" " + label + " ")
-			if slices.Contains(state.answers.WorkDays, day) {
-				chip = hintPillStyle.Render(" " + label + " ")
-			}
-			if index == state.dayCursor {
-				chip = underlined(chip)
-			}
-			days = append(days, chip)
-		}
-		body = []string{"🗓  Which days do you work?", mutedStyle.Render("Your weeks run Monday → Sunday."), "", strings.Join(days, " "), "", mutedStyle.Render("←/→ move · space toggle · enter next")}
+		body = []string{"🗓  Which days do you work?", mutedStyle.Render("Your weeks run Monday → Sunday."), "", renderDayChips(state), "", mutedStyle.Render("←/→ move · space toggle · enter next")}
 	case setupStepTimes:
 		morning, evening := "☀️  morning "+state.answers.Morning, "🌙 evening "+state.answers.Evening
 		if state.editingEvening {
@@ -303,11 +330,12 @@ func (m Model) renderSetup(modalWidth int) string {
 			}
 			body = append(body, fmt.Sprintf("%s %s", mark, result.Name))
 		}
-		body = append(body, "", "🔔 Turn on notifications? "+setupAccent.Render("y|enter")+mutedStyle.Render(" · esc to skip"))
+		body = append(body, "", "🔔 Turn on notifications? "+setupAccent.Render("y|enter")+mutedStyle.Render(" · n to skip"))
 	}
 	if state.notice != "" {
 		body = append(body, "", yellowBadgeStyle.Render(state.notice))
 	}
+	body = append(body, "", mutedStyle.Render("esc close"))
 	top := []string{modalTitleStyle.Render(" DIGEST SETUP ") + "  " + progress, ""}
 	if answered := setupAnswersSoFar(state); len(answered) > 0 {
 		top = append(top, append(answered, "")...)
@@ -333,7 +361,7 @@ func (m Model) setupBindings() []keyBinding {
 	case setupStepDoctor:
 		return []keyBinding{
 			newKeyBinding(actionSetupConfirm, []string{"y", "Y", "enter"}, "y|enter", "install"),
-			newKeyBinding(actionSetupSkip, []string{"esc", "n", "N"}, "esc", "skip"),
+			newKeyBinding(actionSetupSkip, []string{"n", "N"}, "n", "skip"),
 		}
 	}
 	return []keyBinding{
@@ -343,11 +371,16 @@ func (m Model) setupBindings() []keyBinding {
 }
 
 func (m Model) setupKeyBindings() []keyBinding {
-	return append(m.setupBindings(), hiddenKeyBinding(actionSetupQuit, "ctrl+c"))
+	if m.setup.form {
+		return m.setupFormBindings()
+	}
+	return append(m.setupBindings(), hiddenKeyBinding(actionCloseSetup, "esc"))
 }
 
-func (m Model) quitSetup(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return m, tea.Quit
+func (m Model) closeSetup(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.setup = nil
+	m.mode = ViewDashboard
+	return m, nil
 }
 
 func setupAnswersSoFar(state *setupState) []string {

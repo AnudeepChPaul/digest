@@ -22,6 +22,7 @@ import (
 	"app/pkg/sourcecontrol"
 	"app/pkg/store"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -56,6 +57,7 @@ const (
 	ViewActionMenu
 	ViewNotifyInput
 	ViewSetup
+	ViewSetupDiscard
 )
 
 type NavItemKind int
@@ -302,11 +304,14 @@ type Model struct {
 	jobDryRunExitCodes map[string]int
 	jobDryRunHasRun    map[string]bool
 
-	archivedSelectedMap map[int]bool
-	deleteTargetNotes   []*model.Note
-	deleteReturnMode    ViewMode
-	jobToExecute        string
-	jobToAbort          string
+	archivedSelectedMap  map[int]bool
+	deleteTargetNotes    []*model.Note
+	deleteReturnMode     ViewMode
+	jobToExecute         string
+	jobToAbort           string
+	bragRunToStop        *brag.Run
+	automationRunToStop  *automation.Run
+	actionMenuReturnMode ViewMode
 
 	syncPulseFrame   int
 	bannerWaveActive bool
@@ -1276,6 +1281,12 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ctrlCResetMsg:
 		m.ctrlCCount = 0
 		return m, nil
+
+	case setupSavedMsg:
+		return m.applySetupSaved(msg)
+
+	case spinner.TickMsg:
+		return m.tickSetupSpinner(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

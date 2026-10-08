@@ -23,13 +23,15 @@ var keyActionHandlers map[keyAction]keyActionHandler
 
 func init() {
 	keyActionHandlers = map[keyAction]keyActionHandler{
-		actionQuit:               Model.quitFromDashboard,
+		actionQuit:               Model.countCtrlCToQuit,
 		actionDismissSyncErrors:  Model.dismissSyncErrors,
 		actionSync:               Model.syncFromKey,
 		actionToggleSortField:    Model.toggleSortField,
 		actionToggleSortOrder:    Model.toggleSortOrder,
 		actionTogglePendingScope: Model.togglePendingScope,
-		actionRunJobs:            Model.runJobsFromKey,
+		actionRunSelectedJob:     Model.runSelectedJob,
+		actionDryRunSelectedJob:  Model.dryRunSelectedJob,
+		actionStopSelectedItem:   Model.stopSelectedItem,
 		actionHalfPageDown:       Model.dashboardHalfPageDown,
 		actionHalfPageUp:         Model.dashboardHalfPageUp,
 		actionToday:              Model.jumpToToday,
@@ -76,7 +78,14 @@ func init() {
 		actionSetupDayLeft:       Model.setupDayLeft,
 		actionSetupDayRight:      Model.setupDayRight,
 		actionSetupToggleDay:     Model.setupToggleDay,
-		actionSetupQuit:          Model.quitSetup,
+		actionSetupFieldNext:     Model.setupFieldNext,
+		actionSetupFieldPrevious: Model.setupFieldPrevious,
+		actionSetupFormToggle:    Model.setupFormToggle,
+		actionSetupFormSave:      Model.setupFormSave,
+		actionSetupFormTab:       Model.setupFormTab,
+		actionSetupFormEscape:    Model.setupFormEscape,
+		actionKeepEditingSetup:   Model.keepEditingSetup,
+		actionCloseSetup:         Model.closeSetup,
 		actionOpenSetup:          Model.openSetup,
 		actionOpenMessages:       Model.openMessageLog,
 		actionEditorHalfPageUp:   Model.editorHalfPageUp,
@@ -181,13 +190,13 @@ func (m Model) resolveKey(msg tea.KeyMsg) (keyBinding, bool) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.clampScreenSelection()
+	if msg.String() == "ctrl+c" {
+		return m.countCtrlCToQuit(msg)
+	}
 	if binding, found := m.resolveKey(msg); found {
 		if handler, ok := keyActionHandlers[binding.action]; ok {
 			return handler(m, msg)
 		}
-		return m, nil
-	}
-	if msg.String() == "ctrl+c" {
 		return m, nil
 	}
 	return m.forwardUnboundKey(msg)
@@ -249,6 +258,9 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		*m.rejectInput, cmd = m.rejectInput.Update(msg)
 		return m, cmd
 	case ViewSetup:
+		if m.setup.saving {
+			return m, nil
+		}
 		*m.setupInput, cmd = m.setupInput.Update(msg)
 		m.setup.notice = ""
 		return m, cmd
@@ -271,7 +283,7 @@ func (m Model) selectedNavItem() (NavItem, bool) {
 	return NavItem{}, false
 }
 
-func (m Model) quitFromDashboard(tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) countCtrlCToQuit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.ctrlCCount++
 	if m.ctrlCCount >= 3 {
 		m.cancelGitSync()
@@ -308,10 +320,6 @@ func (m Model) togglePendingScope(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.restoreSelection(selectedKey, selectedOccurrence)
 	m.updateScrollOffset()
 	return m, nil
-}
-
-func (m Model) runJobsFromKey(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return m, m.startJobDryRunsCmd()
 }
 
 func (m Model) dashboardHalfPageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -403,7 +411,8 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if item.Note != nil {
-		return m.beginNoteEdit(item.Note, ViewDashboard)
+		previewed, _ := m.openPreview(item)
+		return previewed.(Model).beginNoteEdit(item.Note, ViewPreview)
 	}
 	return m, nil
 }
@@ -425,22 +434,6 @@ func (m Model) deleteSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning {
-		return m.beginReviewRunConfirm(reviewActionStop, item.ReviewRun.Meta.Ref)
-	}
-	if item.Kind == KindBragRun && item.BragRun != nil {
-		return m.stopOrDismissBragRun(item.BragRun)
-	}
-	if item.Kind == KindAutomationRun && item.AutomationRun != nil {
-		return m.stopAutomationRun(item.AutomationRun)
-	}
-	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
-		m.jobToAbort = item.Draft.Name
-		m.deleteTargetNotes = nil
-		m.deleteReturnMode = ViewDashboard
-		m.mode = ViewDeleteConfirm
-		return m, nil
-	}
 	if item.Note != nil {
 		m.beginNoteDelete(item.Note, ViewDashboard)
 	}
@@ -453,8 +446,7 @@ func (m *Model) beginNoteDelete(note *model.Note, returnMode ViewMode) {
 	}
 	m.deleteTargetNotes = []*model.Note{note}
 	m.deleteReturnMode = returnMode
-	m.jobToExecute = ""
-	m.jobToAbort = ""
+	m.clearPendingConfirms()
 	m.mode = ViewDeleteConfirm
 }
 
@@ -593,13 +585,19 @@ func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		jobName := m.jobToExecute
 		m.jobToExecute = ""
 		execErr := executeJobBackground(m.cfg, jobName)
-		m.mode = ViewPreview
-		m.updatePreviewViewport()
+		m.mode = m.deleteReturnMode
+		if m.mode == ViewPreview {
+			m.updatePreviewViewport()
+		}
 		if execErr != nil {
 			m.showError("JOB ERROR", execErr)
 		}
 		m.refreshJobStates()
 		return m, tea.Batch(m.ensureJobLogRefresh(), m.ensureSyncPulse(), m.ensureRunStatePoll())
+	}
+
+	if m.bragRunToStop != nil || m.automationRunToStop != nil {
+		return m.confirmStopRun()
 	}
 
 	targets := m.deleteTargetNotes
@@ -621,8 +619,7 @@ func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) cancelDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = m.deleteReturnMode
 	m.deleteTargetNotes = nil
-	m.jobToExecute = ""
-	m.jobToAbort = ""
+	m.clearPendingConfirms()
 	return m, nil
 }
 
@@ -796,22 +793,6 @@ func (m Model) previewStop(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning {
-		return m.beginReviewRunConfirm(reviewActionStop, item.ReviewRun.Meta.Ref)
-	}
-	if item.Kind == KindBragRun && item.BragRun != nil {
-		return m.stopOrDismissBragRun(item.BragRun)
-	}
-	if item.Kind == KindAutomationRun && item.AutomationRun != nil {
-		return m.stopAutomationRun(item.AutomationRun)
-	}
-	if item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name) {
-		m.jobToAbort = item.Draft.Name
-		m.deleteTargetNotes = nil
-		m.deleteReturnMode = ViewPreview
-		m.mode = ViewDeleteConfirm
-		return m, nil
-	}
 	if item.Note != nil {
 		m.beginNoteDelete(item.Note, ViewPreview)
 	}
@@ -823,12 +804,8 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindJobDraft && item.Draft != nil && !isJobRunning(item.Draft.Name) {
-		m.jobToExecute = item.Draft.Name
-		m.deleteTargetNotes = nil
-		m.deleteReturnMode = ViewPreview
-		m.mode = ViewDeleteConfirm
-		return m, nil
+	if item.Kind == KindJobDraft {
+		return m.runSelectedJob(tea.KeyMsg{})
 	}
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
 		_ = openURL(item.PendingGitPR.URL)
@@ -1021,8 +998,7 @@ func (m Model) deleteArchived(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if targets := m.archivedTargets(); len(targets) > 0 {
 		m.deleteTargetNotes = targets
 		m.deleteReturnMode = ViewArchived
-		m.jobToExecute = ""
-		m.jobToAbort = ""
+		m.clearPendingConfirms()
 		m.mode = ViewDeleteConfirm
 	}
 	return m, nil

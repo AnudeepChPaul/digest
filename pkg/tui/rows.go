@@ -127,6 +127,8 @@ const (
 	reReviewIcon     = "\U000F0458"
 	teamReviewIcon   = "\U000F0849"
 	directReviewIcon = "\U000F0065"
+
+	reviewIconSlotWidth = 2
 )
 
 func reviewRequestIcon(item *GitPRItem) string {
@@ -134,10 +136,10 @@ func reviewRequestIcon(item *GitPRItem) string {
 	if item.Kind == sourcecontrol.ReReviewKind {
 		icons = reReviewIcon
 	}
-	if item.PR.DirectRequest {
+	switch {
+	case item.PR.DirectRequest:
 		icons += directReviewIcon
-	}
-	if item.PR.CodeOwner {
+	case item.PR.CodeOwner:
 		icons += teamReviewIcon
 	}
 	return dimBlueText.Render(icons)
@@ -148,7 +150,8 @@ func (m Model) prTags(item *GitPRItem, selected bool) []string {
 	if item.PR == nil {
 		return []string{state}
 	}
-	stateWithIcons := state + " " + reviewRequestIcon(item)
+	icons := reviewRequestIcon(item)
+	stateWithIcons := state + " " + safeRepeat(" ", reviewIconSlotWidth-lipgloss.Width(icons)) + icons
 	if !selected && !m.cfg.ShowAllTags() {
 		return []string{stateWithIcons}
 	}

@@ -103,6 +103,7 @@ func (m Model) openActionMenu(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.actionMenuNoteID = note.ID
 	m.actionMenuItems = m.noteActions(note)
 	m.actionMenuSelected = 0
+	m.actionMenuReturnMode = m.mode
 	m.mode = ViewActionMenu
 	return m, nil
 }
@@ -118,7 +119,10 @@ func (m Model) actionMenuUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) closeActionMenu(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.mode = ViewDashboard
+	m.mode = m.actionMenuReturnMode
+	if m.mode == ViewPreview {
+		m.updatePreviewViewport()
+	}
 	return m, nil
 }
 
@@ -145,7 +149,7 @@ func (m Model) chooseAction(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ViewNotifyInput
 	default:
 		m = m.askAutomationConfirm(m.actionMenuNoteID, chosen.name, automation.PhaseDraft)
-		m.automationReturnMode = ViewDashboard
+		m.automationReturnMode = m.actionMenuReturnMode
 	}
 	return m, saveUsage
 }

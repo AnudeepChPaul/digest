@@ -48,6 +48,20 @@ func (m Model) View() string {
 	if m.width < 40 {
 		return "Terminal window is too small."
 	}
+	screen := m.renderScreen()
+	if m.ctrlCCount == 0 || m.mode == ViewDashboard || m.mode == ViewInlineEdit || m.mode == ViewNotifyInput {
+		return screen
+	}
+	return withQuitCountdown(screen, fmt.Sprintf("ctrl+c %d more to quit", 3-m.ctrlCCount), m.width)
+}
+
+func withQuitCountdown(screen, warning string, width int) string {
+	lines := strings.Split(screen, "\n")
+	lines[len(lines)-1] = lipgloss.PlaceHorizontal(width, lipgloss.Center, yellowBadgeStyle.Render(warning))
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderScreen() string {
 	if m.scrollPending {
 		m.settleScroll()
 	}
@@ -113,6 +127,9 @@ func (m Model) View() string {
 
 	case ViewSetup:
 		return m.renderSetup(modalWidth)
+
+	case ViewSetupDiscard:
+		return m.renderSetupDiscard(modalWidth)
 
 	case ViewActionMenu:
 		return m.renderActionMenu()
@@ -211,6 +228,9 @@ func (m Model) renderDeleteConfirmModal(modalWidth int) string {
 	} else if m.jobToExecute != "" {
 		titleText = modalTitleStyle.Render(" EXECUTE JOB ")
 		prompt = fmt.Sprintf("Are you sure you want to run '%s'?", m.jobToExecute)
+	} else if target := m.stopTargetName(); target != "" {
+		titleText = deleteTitleStyle.Render(" STOP JOB ")
+		prompt = fmt.Sprintf("Are you sure you want to stop '%s'?", target)
 	} else {
 		titleText = deleteTitleStyle.Render(" DELETE CONFIRMATION ")
 		if len(m.deleteTargetNotes) > 1 {

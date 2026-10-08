@@ -114,9 +114,9 @@ func TestSearchModalRows(t *testing.T) {
 	}
 }
 
-func TestSearchCtrlCClosesAndTermStays(t *testing.T) {
+func TestSearchEscClosesAndTermStays(t *testing.T) {
 	m := typeQuery(t, searchTestModel(t), "flaky")
-	m = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != ViewDashboard || m.ctrlCCount != 0 {
 		t.Fatalf("mode = %d, ctrlC = %d", m.mode, m.ctrlCCount)
 	}

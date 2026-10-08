@@ -1,6 +1,9 @@
 package tui
 
-import "app/pkg/model"
+import (
+	"app/pkg/model"
+	"app/pkg/review"
+)
 
 func (m Model) loadReviewPollSnapshot() reviewPollSnapshot {
 	return loadReviewPollSnapshot(m.reviewRoot(), m.bragRoot(), m.listedReviewRefs(), m.localReviews)
@@ -15,7 +18,12 @@ func (m Model) reviewFooterItems(item *GitPRItem) []footerItem {
 }
 
 func reviewRunFooterItems(running bool) []footerItem {
-	return footerItemsFrom(reviewRunPreviewBindings(running))
+	status := review.RunFailed
+	if running {
+		status = review.RunRunning
+	}
+	item := NavItem{Kind: KindReviewRun, ReviewRun: &review.ReviewRun{Status: status}}
+	return footerItemsFrom(Model{}.runPreviewBindings(item))
 }
 
 func (m Model) getYesterdayDoneNotes() []*model.Note {

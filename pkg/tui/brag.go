@@ -533,11 +533,13 @@ func bragRunPreview(root string, run brag.Run) string {
 	return fmt.Sprintf("# Brag: %s (%s)\n\n```\n%s\n```", run.Meta.ID, status, logText)
 }
 
+var stopBragRun = brag.Stop
+
 func (m Model) stopOrDismissBragRun(run *brag.Run) (tea.Model, tea.Cmd) {
 	root := m.bragRoot()
 	var err error
 	if brag.IsRunning(root, run.Meta.ID) {
-		err = brag.Stop(root, run.Meta.ID)
+		err = stopBragRun(root, run.Meta.ID)
 	} else {
 		err = brag.Dismiss(root, run.Meta.ID)
 	}

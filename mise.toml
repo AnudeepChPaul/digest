@@ -29,9 +29,14 @@ description = "Run tests"
 quiet = true
 run = "gotestsum --format testname ./..."
 
+[tasks.vet]
+description = "Run go vet"
+quiet = true
+run = "go vet ./..."
+
 [tasks.build]
 description = "Bump version and build {{vars.project}}"
-depends = ["test"]
+depends = ["vet", "test"]
 quiet = true
 usage = 'arg "<bump>" default="patch" { choices "patch" "minor" "major" }'
 run = '''
@@ -40,6 +45,30 @@ printf '\033[36m▸\033[0m bumping {{vars.project}} version (\033[1m%s\033[0m)\n
 mise run _version "$usage_bump"
 build_version=$(cat .version)
 printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
-go build -ldflags "-X app/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/app
-printf '\033[32m✓\033[0m built %s\n' "$binary_path"
+go build -trimpath -ldflags "-s -w -X app/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/app
+binary_size=$(stat -f %z "$binary_path" | awk '{ printf "%.1f MB", $1 / 1048576 }')
+printf '\033[32m✓\033[0m built %s \033[2m(%s)\033[0m\n' "$binary_path" "$binary_size"
+'''
+
+[tasks.release]
+description = "Tag .version, push it and point the brew tap at it"
+quiet = true
+run = '''
+set -eu
+tap_dir=~/Projects/github.com/AnudeepChPaul/homebrew-tap
+formula_path="$tap_dir/Formula/digest.rb"
+release_tag="v$(cat .version)"
+if [ -n "$(git status --porcelain)" ]; then
+  printf '\033[31m✗\033[0m commit your changes before releasing\n'
+  exit 1
+fi
+git push origin main
+git tag "$release_tag"
+git push origin "$release_tag"
+release_revision=$(git rev-parse HEAD)
+git -C "$tap_dir" pull --ff-only
+sed -i '' -E "s/tag: +\"v[^\"]+\"/tag:      \"$release_tag\"/; s/revision: +\"[0-9a-f]+\"/revision: \"$release_revision\"/" "$formula_path"
+git -C "$tap_dir" commit -am "digest $release_tag"
+git -C "$tap_dir" push
+printf '\033[32m✓\033[0m released digest \033[1m%s\033[0m; upgrade with brew upgrade digest\n' "$release_tag"
 '''

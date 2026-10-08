@@ -133,7 +133,7 @@ func writeDryRunFailure(jobName string, failure error) {
 	_ = os.WriteFile(dryRunFilePath(jobName, "exit"), []byte("1"), paths.PrivateFileMode)
 }
 
-func startDryRunBackground(spec config.JobSpec) error {
+var startDryRunBackground = func(spec config.JobSpec) error {
 	cmdStr, err := resolveJobCommand(spec, true)
 	if err != nil {
 		writeDryRunFailure(spec.Name, err)
@@ -350,7 +350,7 @@ func pruneJobLogArchives(logsDir, jobName string, retentionDays int, now time.Ti
 	}
 }
 
-func executeJobBackground(cfg *config.Config, jobName string) error {
+var executeJobBackground = func(cfg *config.Config, jobName string) error {
 	commandStr, err := resolveJobCommand(findJobSpec(cfg, jobName), false)
 	if err != nil {
 		return err
@@ -597,30 +597,17 @@ func (m Model) handleJobLogTick() (tea.Model, tea.Cmd) {
 	return m, tickJobLogCmd()
 }
 
-func (m *Model) startJobDryRunsCmd() tea.Cmd {
-	if m.cfg == nil || len(m.cfg.JobList()) == 0 {
+func (m *Model) startJobDryRunCmd(jobName string) tea.Cmd {
+	if m.cfg == nil || m.dryRunsInFlight[jobName] {
 		return nil
 	}
-	started := 0
-	var errs []error
-	for _, j := range m.cfg.JobList() {
-		if m.dryRunsInFlight[j.Name] {
-			continue
-		}
-		if err := startDryRunBackground(j); err != nil {
-			errs = append(errs, err)
-		} else {
-			started++
-		}
-	}
+	err := startDryRunBackground(findJobSpec(m.cfg, jobName))
 	m.refreshDryRunResults()
 	if m.mode == ViewPreview {
 		m.updatePreviewViewport()
 	}
-	if len(errs) > 0 {
-		m.showError("JOB ERROR", errs...)
-	}
-	if started == 0 {
+	if err != nil {
+		m.showError("JOB ERROR", err)
 		return nil
 	}
 	return tea.Batch(m.ensureRunStatePoll(), m.ensureSyncPulse())

@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"app/pkg/brag"
-	"app/pkg/review"
-
 	"github.com/charmbracelet/bubbles/key"
 )
 
@@ -20,7 +17,9 @@ const (
 	actionToggleSortField
 	actionToggleSortOrder
 	actionTogglePendingScope
-	actionRunJobs
+	actionRunSelectedJob
+	actionDryRunSelectedJob
+	actionStopSelectedItem
 	actionHalfPageDown
 	actionHalfPageUp
 	actionToday
@@ -67,7 +66,14 @@ const (
 	actionSetupDayLeft
 	actionSetupDayRight
 	actionSetupToggleDay
-	actionSetupQuit
+	actionCloseSetup
+	actionSetupFieldNext
+	actionSetupFieldPrevious
+	actionSetupFormToggle
+	actionSetupFormSave
+	actionSetupFormTab
+	actionSetupFormEscape
+	actionKeepEditingSetup
 	actionDashboardReject
 	actionCancelNotify
 	actionOpenSetup
@@ -249,6 +255,8 @@ func (m Model) activeBindings() []keyBinding {
 		return notifyInputBindings()
 	case ViewSetup:
 		return m.setupKeyBindings()
+	case ViewSetupDiscard:
+		return setupDiscardBindings()
 	}
 	return nil
 }
@@ -262,7 +270,7 @@ func (m Model) dashboardBindings() []keyBinding {
 	if m.ctrlCCount > 0 {
 		quit = quit.warning()
 	}
-	bindings := append(m.prRowBindings(),
+	bindings := append(hiddenCopies(m.selectedItemBindings(true)),
 		newKeyBinding(actionOpenItem, []string{"enter"}, "↵", "open"),
 		newKeyBinding(actionToggleDone, []string{" ", "space"}, "space", "done"),
 		newKeyBinding(actionNewNote, []string{"a"}, "a", "new"),
@@ -277,7 +285,7 @@ func (m Model) dashboardBindings() []keyBinding {
 		newKeyBinding(actionOpenArchive, []string{"ctrl+e"}, "ctrl+e", "open archive"),
 		newKeyBinding(actionSync, []string{"g"}, "g", "run git"),
 		newKeyBinding(actionRefreshCommits, []string{"c"}, "c", "refresh commits").shownWhen(m.cfg.DailyCommitsEnabled()),
-		newKeyBinding(actionRunJobs, []string{"r"}, "r", "run jobs"),
+		newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "run job"),
 		newKeyBinding(actionDeleteItem, []string{"d"}, "d", "delete"),
 		newKeyBinding(actionCursorDown, []string{"j", "down"}, "j|k", "nav"),
 		hiddenKeyBinding(actionCursorUp, "k", "up"),
@@ -347,27 +355,14 @@ func (m Model) previewBindings() []keyBinding {
 	switch {
 	case item.Kind == KindPendingGit && item.PendingGitPR != nil:
 		return m.prPreviewBindings(item.PendingGitPR)
-	case item.Kind == KindReviewRun && item.ReviewRun != nil:
-		return reviewRunPreviewBindings(item.ReviewRun.Status == review.RunRunning)
-	case item.Kind == KindBragRun && item.BragRun != nil:
-		running := item.BragRun.Status == brag.RunRunning
-		return append([]keyBinding{
-			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "stop brag").warning().shownWhen(running),
-			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "dismiss").shownWhen(!running),
-			hiddenKeyBinding(actionPreviewEnter, "enter"),
-		}, previewTailBindings()...)
-	case item.Kind == KindAutomationRun && item.AutomationRun != nil:
-		return automationRunPreviewBindings()
+	case item.Kind == KindReviewRun && item.ReviewRun != nil, item.Kind == KindBragRun && item.BragRun != nil, item.Kind == KindAutomationRun && item.AutomationRun != nil:
+		return m.runPreviewBindings(item)
 	case item.Kind == KindMyPR && item.MyPR != nil:
 		return append([]keyBinding{
 			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"),
 		}, previewTailBindings()...)
 	case item.Kind == KindJobDraft && item.Draft != nil:
-		running := m.jobRunning(item.Draft.Name)
-		return append([]keyBinding{
-			newKeyBinding(actionPreviewStop, []string{"d"}, "d", "abort job").warning().shownWhen(running),
-			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "run job").shownWhen(!running),
-		}, previewTailBindings()...)
+		return append(append(m.itemBindings(item, false), hiddenKeyBinding(actionPreviewEnter, "enter")), previewTailBindings()...)
 	}
 	if m.onDraftTab() {
 		return m.noteDraftTabBindings()
@@ -378,12 +373,13 @@ func (m Model) previewBindings() []keyBinding {
 		draftTab = []keyBinding{newKeyBinding(actionSwitchPreviewTab, []string{"tab"}, "tab", "tabs")}
 		tail[0] = newKeyBinding(actionClosePreview, []string{"esc"}, "esc", "close")
 	}
-	return append(append(draftTab,
+	bindings := append(draftTab,
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR").shownWhen(prReviewNoteURL(item.Note) != ""),
 		newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "edit").shownWhen(item.Note != nil && prReviewNoteURL(item.Note) == ""),
-		newKeyBinding(actionPreviewStop, []string{"d"}, "d", "delete").warning().shownWhen(item.Note != nil && item.Note.FilePath != ""),
-		newKeyBinding(actionAutomate, []string{"x"}, "x", "automate").shownWhen(m.canAutomate()),
-	), tail...)
+	)
+	bindings = append(bindings, m.itemBindings(item, false)...)
+	bindings = append(bindings, newKeyBinding(actionPreviewStop, []string{"d"}, "d", "delete").warning().shownWhen(item.Note != nil && item.Note.FilePath != ""))
+	return append(bindings, tail...)
 }
 
 func previewTailBindings() []keyBinding {
@@ -395,24 +391,16 @@ func previewTailBindings() []keyBinding {
 	}
 }
 
-func reviewRunPreviewBindings(running bool) []keyBinding {
-	return append([]keyBinding{
-		newKeyBinding(actionPreviewStop, []string{"d"}, "d", "stop review").warning().shownWhen(running),
-		hiddenKeyBinding(actionPreviewEnter, "enter"),
-	}, previewTailBindings()...)
+func (m Model) runPreviewBindings(item NavItem) []keyBinding {
+	return append(append(m.itemBindings(item, false), hiddenKeyBinding(actionPreviewEnter, "enter")), previewTailBindings()...)
 }
 
 func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
-	rejectOrStop := "reject"
-	if _, running := m.reviewPIDFor(item); running {
-		rejectOrStop = "stop review"
-	}
 	onReviewTab := m.previewTab == previewTabReview
 	hasFindings := onReviewTab && m.previewFindingsCount > 0
-	bindings := []keyBinding{
+	bindings := append([]keyBinding{
 		newKeyBinding(actionSwitchPreviewTab, []string{"tab"}, "tab", "tabs"),
-		newKeyBinding(actionStartReview, []string{"r"}, "r", "review"),
-	}
+	}, m.itemBindings(NavItem{Kind: KindPendingGit, PendingGitPR: item}, false)...)
 	if hasFindings {
 		bindings = append(bindings,
 			newKeyBinding(actionToggleFinding, []string{" ", "space"}, "space", "select"),
@@ -425,9 +413,7 @@ func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
 		bindings = append(bindings, newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"))
 	}
 	bindings = append(bindings,
-		newKeyBinding(actionApprove, []string{"a", "y"}, "a|y", "approve"),
-		newKeyBinding(actionRejectOrStopReview, []string{"d"}, "d", rejectOrStop).warning(),
-		newKeyBinding(actionOpenClone, []string{"o"}, "o", "nvim"),
+		hiddenKeyBinding(actionApprove, "a"),
 		newKeyBinding(actionPreviewPrevious, []string{"p"}, "p|n", "prev/next"),
 		hiddenKeyBinding(actionPreviewNext, "n"),
 		newKeyBinding(actionCopyPreviewItem, []string{"ctrl+y"}, "ctrl+y", "copy"),
@@ -479,7 +465,7 @@ func searchBindings() []keyBinding {
 		hiddenKeyBinding(actionSearchHalfPageUp, "ctrl+u"),
 		newKeyBinding(actionOpenSearchPreview, []string{"tab"}, "tab", "preview"),
 		newKeyBinding(actionExportSearch, []string{"ctrl+e"}, "ctrl+e", "export"),
-		newKeyBinding(actionCloseSearch, []string{"esc", "ctrl+c"}, "esc|ctrl+c", "close"),
+		newKeyBinding(actionCloseSearch, []string{"esc"}, "esc", "close"),
 	}
 }
 
