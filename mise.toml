@@ -63,7 +63,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 git push origin main
-git tag "$release_tag"
+git tag -m "digest $release_tag" "$release_tag"
 git push origin "$release_tag"
 release_revision=$(git rev-parse HEAD)
 git -C "$tap_dir" pull --ff-only
