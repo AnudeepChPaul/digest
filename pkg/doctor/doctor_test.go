@@ -51,7 +51,23 @@ func TestPluginsAreReportedPerAutomation(t *testing.T) {
 	}
 }
 
+func fakeInstalledPlugin(t *testing.T, plugin string) {
+	t.Helper()
+	home := t.TempDir()
+	scripts := filepath.Join(home, ".claude", "plugins", "cache", "acme", plugin, "1.0.0", "scripts")
+	if err := os.MkdirAll(scripts, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, script := range []string{"run-skill.py", "validate_token.py"} {
+		if err := os.WriteFile(filepath.Join(scripts, script), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+}
+
 func TestCheckCoversBuiltInAndConfiguredTools(t *testing.T) {
+	fakeInstalledPlugin(t, "jira-inator")
 	previous := operatingSystem
 	operatingSystem = "darwin"
 	t.Cleanup(func() { operatingSystem = previous })
