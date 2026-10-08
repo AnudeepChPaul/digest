@@ -56,7 +56,7 @@ func reuseClone(ctx context.Context, ref PRRef, dir string, logger *log.Logger, 
 	return nil
 }
 
-const partialCloneSuffix = ".partial"
+const PartialCloneSuffix = ".partial"
 
 func CloneExists(root string, ref PRRef) bool {
 	_, err := os.Stat(filepath.Join(CloneDir(root, ref), ".git"))
@@ -64,7 +64,7 @@ func CloneExists(root string, ref PRRef) bool {
 }
 
 func freshClone(ctx context.Context, ref PRRef, root, dir string, logger *log.Logger, output io.Writer) error {
-	partialDir := dir + partialCloneSuffix
+	partialDir := dir + PartialCloneSuffix
 	for _, stale := range []string{dir, partialDir} {
 		if err := os.RemoveAll(stale); err != nil {
 			return fmt.Errorf("remove previous clone: %w", err)

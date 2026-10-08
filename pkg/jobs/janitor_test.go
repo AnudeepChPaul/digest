@@ -189,3 +189,76 @@ func TestReapReviewClonesRemovesIdleClonesWhateverTheirState(t *testing.T) {
 		}
 	}
 }
+
+func seedPartialClone(t *testing.T, root string, ref review.PRRef) string {
+	t.Helper()
+	partialDir := review.CloneDir(root, ref) + review.PartialCloneSuffix
+	if err := os.MkdirAll(filepath.Join(partialDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return partialDir
+}
+
+func TestReapReviewClonesRemovesLeftoverPartialClones(t *testing.T) {
+	root := t.TempDir()
+	withoutState := seedPartialClone(t, root, review.PRRef{Repo: "console", Number: 7})
+	stoppedRef := review.PRRef{Repo: "console", Number: 8, URL: "u-stopped"}
+	if err := review.WriteMeta(review.StateDir(root, stoppedRef), review.Meta{Ref: stoppedRef}); err != nil {
+		t.Fatal(err)
+	}
+	stopped := seedPartialClone(t, root, stoppedRef)
+	original := lookupPRStates
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		return map[string]string{"u-stopped": "OPEN"}, nil
+	}
+	defer func() { lookupPRStates = original }()
+
+	actions, _ := reapReviewClones(root, true)
+	if len(actions) != 2 || !strings.Contains(strings.Join(actions, "\n"), "would remove partial clone") {
+		t.Errorf("dry run actions = %v", actions)
+	}
+	for _, partialDir := range []string{withoutState, stopped} {
+		if _, err := os.Stat(partialDir); err != nil {
+			t.Errorf("dry run removed %s", partialDir)
+		}
+	}
+
+	actions, failures := reapReviewClones(root, false)
+	if len(actions) != 2 || len(failures) != 0 {
+		t.Fatalf("actions=%v failures=%v", actions, failures)
+	}
+	for _, partialDir := range []string{withoutState, stopped} {
+		if _, err := os.Stat(partialDir); err == nil {
+			t.Errorf("leftover %s still present", partialDir)
+		}
+	}
+}
+
+func TestReapReviewClonesKeepsThePartialCloneOfARunningReview(t *testing.T) {
+	root := t.TempDir()
+	ref := review.PRRef{Repo: "console", Number: 3, URL: "u-running"}
+	if err := review.WriteMeta(review.StateDir(root, ref), review.Meta{Ref: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(review.StateDir(root, ref), "review.pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	partialDir := seedPartialClone(t, root, ref)
+	reapReviewClones(root, false)
+	if _, err := os.Stat(partialDir); err != nil {
+		t.Error("a review that is still cloning should keep its partial folder")
+	}
+}
+
+func TestReapingAReviewCloneRemovesItsPartialFolder(t *testing.T) {
+	root := t.TempDir()
+	ref := review.PRRef{Repo: "console", Number: 1, URL: "u-merged"}
+	seedReviewClone(t, root, ref)
+	partialDir := seedPartialClone(t, root, ref)
+	if action, failure := removeReviewClone(root, ref, "merged", false); action == "" || failure != "" {
+		t.Fatalf("action=%q failure=%q", action, failure)
+	}
+	if _, err := os.Stat(partialDir); err == nil {
+		t.Error("partial folder left after reaping the clone")
+	}
+}

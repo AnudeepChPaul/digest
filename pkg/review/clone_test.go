@@ -42,7 +42,7 @@ func TestPrepareFreshClone(t *testing.T) {
 	if len(calls) < 2 {
 		t.Fatalf("calls = %v", calls)
 	}
-	partial := dir + partialCloneSuffix
+	partial := dir + PartialCloneSuffix
 	if !strings.HasPrefix(calls[0], root+"|gh repo clone github.com/o/console "+partial) {
 		t.Errorf("clone call = %q", calls[0])
 	}
@@ -92,7 +92,7 @@ func TestCloneExistsOnlyAfterCheckoutSucceeds(t *testing.T) {
 func TestFreshCloneClearsALeftoverPartialFolder(t *testing.T) {
 	root := t.TempDir()
 	ref := PRRef{Host: "github.com", Owner: "o", Repo: "console", Number: 9}
-	leftover := filepath.Join(CloneDir(root, ref)+partialCloneSuffix, "leftover.txt")
+	leftover := filepath.Join(CloneDir(root, ref)+PartialCloneSuffix, "leftover.txt")
 	writeFile(t, leftover, "old")
 	recordSteps(t, "")
 	if _, err := Prepare(context.Background(), ref, root, log.New(io.Discard)); err != nil {

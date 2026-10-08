@@ -50,8 +50,10 @@ func removeReviewClone(root string, ref review.PRRef, reason string, dryRun bool
 	if dryRun {
 		return fmt.Sprintf("would remove review clone %s (%s)", cloneDir, reason), ""
 	}
-	if err := os.RemoveAll(cloneDir); err != nil {
-		return "", fmt.Sprintf("remove %s: %v", cloneDir, err)
+	for _, dir := range []string{cloneDir, cloneDir + review.PartialCloneSuffix} {
+		if err := os.RemoveAll(dir); err != nil {
+			return "", fmt.Sprintf("remove %s: %v", dir, err)
+		}
 	}
 	if err := os.RemoveAll(review.StateDir(root, ref)); err != nil {
 		return "", fmt.Sprintf("remove state for %s: %v", ref.DirName(), err)
@@ -59,12 +61,30 @@ func removeReviewClone(root string, ref review.PRRef, reason string, dryRun bool
 	return fmt.Sprintf("removed review clone %s (%s)", cloneDir, reason), ""
 }
 
-func reapReviewClones(root string, dryRun bool) ([]string, []string) {
-	stateRoot := filepath.Join(root, ".state")
-	entries, err := os.ReadDir(stateRoot)
+func reapPartialClones(root, stateRoot string, dryRun bool, record func(action, failure string)) {
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil, nil
+		return
 	}
+	for _, entry := range entries {
+		cloneName, isPartial := strings.CutSuffix(entry.Name(), review.PartialCloneSuffix)
+		if !entry.IsDir() || !isPartial || review.Status(filepath.Join(stateRoot, cloneName)) == review.RunRunning {
+			continue
+		}
+		partialDir := filepath.Join(root, entry.Name())
+		if dryRun {
+			record(fmt.Sprintf("would remove partial clone %s", partialDir), "")
+			continue
+		}
+		if err := os.RemoveAll(partialDir); err != nil {
+			record("", fmt.Sprintf("remove %s: %v", partialDir, err))
+			continue
+		}
+		record(fmt.Sprintf("removed partial clone %s", partialDir), "")
+	}
+}
+
+func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 	var actions, failures []string
 	record := func(action, failure string) {
 		if action != "" {
@@ -73,6 +93,12 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 		if failure != "" {
 			failures = append(failures, failure)
 		}
+	}
+	stateRoot := filepath.Join(root, ".state")
+	reapPartialClones(root, stateRoot, dryRun, record)
+	entries, err := os.ReadDir(stateRoot)
+	if err != nil {
+		return actions, failures
 	}
 	idleCutoff := time.Now().Add(-reviewCloneIdleAge)
 	var refs []review.PRRef
