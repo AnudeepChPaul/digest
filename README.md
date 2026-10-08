@@ -31,14 +31,38 @@ From source, with [mise](https://mise.jdx.dev):
 mise run build
 ```
 
-Then run `digest install` to add any missing tools, the reminder launchd agent and a keyboard shortcut. Each step asks first.
+## Setup
+
+After installing, run these three commands once.
+
+1. Install what digest depends on:
+
+   ```sh
+   digest install
+   ```
+
+   This installs any missing tools with Homebrew, the launchd agent that sends reminders, and a keyboard shortcut that opens digest. It asks before each one.
+
+2. Check that digest can run everything:
+
+   ```sh
+   digest doctor
+   ```
+
+   This lists every tool digest uses, whether it was found and which feature needs it. It exits with an error if a required tool is missing; run `digest install` again to add it.
+
+3. Configure digest:
+
+   ```sh
+   digest setup
+   ```
+
+   This walks through git roots, work days, summaries, hints and notifications. You can also open it from the dashboard with `,`, and the first run of `digest` starts it on its own.
 
 ## Usage
 
 ```sh
-digest            # open the dashboard; the first run walks through setup
-digest doctor     # check the tools digest needs
-digest setup      # run setup again
+digest            # open the dashboard
 digest --help     # every command and flag
 ```
 
