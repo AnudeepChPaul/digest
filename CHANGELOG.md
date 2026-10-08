@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.5 — 2026-10-08
+
+### Fixes
+- faster editor and dashboard, safer reviews, read-only dry runs
+
 ## v1.2.4 — 2026-10-08
 
 ### Fixes
