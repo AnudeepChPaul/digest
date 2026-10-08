@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/paths"
@@ -20,6 +21,7 @@ var commandWaitDelay = 2 * time.Second
 var runStep = func(ctx context.Context, output io.Writer, dir string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = commandWaitDelay
+	killGroupOnCancel(cmd)
 	cmd.Dir = dir
 	cmd.Env = stepEnv()
 	cmd.Stdout = output
@@ -30,11 +32,17 @@ var runStep = func(ctx context.Context, output io.Writer, dir string, name strin
 var runInstall = func(ctx context.Context, output io.Writer, dir, script string) error {
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.WaitDelay = commandWaitDelay
+	killGroupOnCancel(cmd)
 	cmd.Dir = dir
 	cmd.Env = installEnv()
 	cmd.Stdout = output
 	cmd.Stderr = output
 	return cmd.Run()
+}
+
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 }
 
 func Prepare(ctx context.Context, ref PRRef, root string, logger *log.Logger) (string, error) {

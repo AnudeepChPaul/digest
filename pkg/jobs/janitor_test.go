@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/review"
+
+	"github.com/charmbracelet/log"
 )
 
 func seedReviewClone(t *testing.T, root string, ref review.PRRef) {
@@ -255,10 +259,111 @@ func TestReapingAReviewCloneRemovesItsPartialFolder(t *testing.T) {
 	ref := review.PRRef{Repo: "console", Number: 1, URL: "u-merged"}
 	seedReviewClone(t, root, ref)
 	partialDir := seedPartialClone(t, root, ref)
-	if action, failure := removeReviewClone(root, ref, "merged", false); action == "" || failure != "" {
+	if action, failure := (reviewFolders{ref: ref, stateDir: review.StateDir(root, ref), cloneDir: review.CloneDir(root, ref)}).remove("merged", false); action == "" || failure != "" {
 		t.Fatalf("action=%q failure=%q", action, failure)
 	}
 	if _, err := os.Stat(partialDir); err == nil {
 		t.Error("partial folder left after reaping the clone")
+	}
+}
+
+func TestReapReviewClonesHandlesLegacyFolderNames(t *testing.T) {
+	root := t.TempDir()
+	ref := review.PRRef{Owner: "o", Repo: "console", Number: 1, URL: "u-merged-legacy"}
+	legacyClone := filepath.Join(root, "console_1")
+	if err := os.MkdirAll(filepath.Join(legacyClone, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := review.WriteMeta(filepath.Join(root, ".state", "console_1"), review.Meta{Ref: ref}); err != nil {
+		t.Fatal(err)
+	}
+	original := lookupPRStates
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		return map[string]string{"u-merged-legacy": "MERGED"}, nil
+	}
+	defer func() { lookupPRStates = original }()
+	if actions, failures := reapReviewClones(root, false); len(actions) != 1 || len(failures) != 0 {
+		t.Fatalf("actions=%v failures=%v", actions, failures)
+	}
+	for _, leftover := range []string{legacyClone, review.CloneDir(root, ref), filepath.Join(root, ".state", "console_1")} {
+		if _, err := os.Stat(leftover); err == nil {
+			t.Errorf("%s left behind", leftover)
+		}
+	}
+}
+
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snapshot := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		snapshot[path] = fmt.Sprintf("%v %d %d", info.Mode(), info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func TestJanitorDryRunLeavesReviewFoldersUntouched(t *testing.T) {
+	root := t.TempDir()
+	legacy := review.PRRef{Owner: "o", Repo: "console", Number: 1, URL: "u-legacy"}
+	if err := os.MkdirAll(filepath.Join(root, "console_1", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := review.WriteMeta(filepath.Join(root, ".state", "console_1"), review.Meta{Ref: legacy}); err != nil {
+		t.Fatal(err)
+	}
+	stale := review.PRRef{Owner: "o", Repo: "api", Number: 2, URL: "u-stale"}
+	seedReviewClone(t, root, stale)
+	if err := os.WriteFile(filepath.Join(review.StateDir(root, stale), "review.pid"), []byte("999999"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	seedPartialClone(t, root, review.PRRef{Owner: "o", Repo: "web", Number: 3})
+	original := lookupPRStates
+	lookupPRStates = func(ctx context.Context, refs []review.PRRef) (map[string]string, error) {
+		return map[string]string{"u-legacy": "MERGED", "u-stale": "MERGED"}, nil
+	}
+	defer func() { lookupPRStates = original }()
+
+	before := snapshotTree(t, root)
+	actions, failures := reapReviewClones(root, true)
+	after := snapshotTree(t, root)
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v", failures)
+	}
+	for path, state := range before {
+		if after[path] != state {
+			t.Errorf("dry run changed %s: %q -> %q", path, state, after[path])
+		}
+	}
+	for path := range after {
+		if _, existed := before[path]; !existed {
+			t.Errorf("dry run created %s", path)
+		}
+	}
+	report := strings.Join(actions, "\n")
+	for _, want := range []string{filepath.Join(root, "console_1"), review.CloneDir(root, stale)} {
+		if !strings.Contains(report, "would remove review clone "+want+" (merged)") {
+			t.Errorf("dry run should report %s as merged:\n%s", want, report)
+		}
+	}
+}
+
+func TestJanitorDryRunSummarySaysWhatWouldHappen(t *testing.T) {
+	job := &JanitorJob{Roots: []string{t.TempDir()}, QuarantineRoot: filepath.Join(t.TempDir(), "q"), ReviewRoot: t.TempDir(), Logger: log.New(io.Discard)}
+	result, err := job.Run(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Summary, "removed") || strings.Contains(result.Summary, "reclaimed") || !strings.Contains(result.Summary, "to remove") {
+		t.Errorf("dry-run summary = %q", result.Summary)
 	}
 }

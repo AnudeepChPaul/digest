@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/paths"
@@ -43,6 +42,8 @@ func Run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 var parentPID = os.Getppid
 
 var reviewCommandTimeout = 45 * time.Minute
+
+var cloneTimeout = 20 * time.Minute
 
 func claimRun(stateDir string) (func(runErr error), error) {
 	if err := os.MkdirAll(stateDir, paths.PrivateDirMode); err != nil {
@@ -80,6 +81,7 @@ func claimRun(stateDir string) (func(runErr error), error) {
 }
 
 func run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *log.Logger) (runErr error) {
+	AdoptLegacyDirs(root, ref)
 	stateDir := StateDir(root, ref)
 	release, err := claimRun(stateDir)
 	if err != nil {
@@ -94,7 +96,9 @@ func run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 		}
 	}
 
-	cloneDir, err := prepareClone(ctx, ref, root, logger)
+	cloneCtx, cancelClone := context.WithTimeout(ctx, cloneTimeout)
+	cloneDir, err := prepareClone(cloneCtx, ref, root, logger)
+	cancelClone()
 	if err != nil {
 		return err
 	}
@@ -113,8 +117,7 @@ func run(ctx context.Context, ref PRRef, root, commandTemplate string, logger *l
 	defer cancelReview()
 	cmd := exec.CommandContext(reviewCtx, "sh", "-c", command)
 	cmd.WaitDelay = commandWaitDelay
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	killGroupOnCancel(cmd)
 	cmd.Dir = cloneDir
 	cmd.Env = ReviewEnv()
 	cmd.Stdout = os.Stdout

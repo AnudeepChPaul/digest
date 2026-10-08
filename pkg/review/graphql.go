@@ -246,6 +246,7 @@ func (result *SearchResult) decode(raw json.RawMessage, details bool, viewer str
 		if err := json.Unmarshal(node, &pr); err != nil {
 			return err
 		}
+		plainTextFields(&pr)
 		if pr.URL == "" {
 			continue
 		}

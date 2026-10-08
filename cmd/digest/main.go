@@ -140,12 +140,19 @@ func main() {
 	}
 
 	firstRun := !config.Exists(*configPath)
-	cfg, configErr := config.LoadOrCreate(*configPath)
+	dryRun := isDryRun(flag.Args())
+	loadConfig := config.LoadOrCreate
+	if dryRun {
+		loadConfig = config.LoadOrDefault
+	}
+	cfg, configErr := loadConfig(*configPath)
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", configErr)
 	}
-	if err := cfg.TightenPermissions(*configPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	if !dryRun {
+		if err := cfg.TightenPermissions(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
 	}
 
 	args := flag.Args()
@@ -326,4 +333,14 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func isDryRun(args []string) bool {
+	for _, arg := range args {
+		name, value, hasValue := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if strings.HasPrefix(arg, "-") && name == "dry-run" {
+			return !hasValue || value == "true" || value == "1"
+		}
+	}
+	return false
 }

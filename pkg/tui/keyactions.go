@@ -244,6 +244,7 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case ViewEdit, ViewBragEdit, ViewAutomationEdit:
 		*m.editor, cmd = m.editor.Update(msg)
+		m.editorRevision++
 		return m, cmd
 	case ViewBragView:
 		scrollViewport(&m.previewViewport, msg.String())

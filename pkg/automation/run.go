@@ -207,7 +207,12 @@ func Stop(root, noteID string) error {
 	return os.WriteFile(filepath.Join(dir, runExitFile), []byte("143"), paths.PrivateFileMode)
 }
 
+var ErrInvalidNoteID = errors.New("note id does not name a folder inside the automations root")
+
 func Dismiss(root, noteID string) error {
+	if noteID == "" || filepath.Dir(StateDir(root, noteID)) != filepath.Clean(root) || filepath.Base(StateDir(root, noteID)) != noteID {
+		return ErrInvalidNoteID
+	}
 	if running(root, noteID) {
 		return ErrRunning
 	}

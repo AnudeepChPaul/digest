@@ -57,7 +57,7 @@ func markdownRendererFor(width int) *glamour.TermRenderer {
 
 var markdownRenderMu sync.Mutex
 
-func renderMarkdown(body string, width int) string {
+var renderMarkdown = func(body string, width int) string {
 	if strings.TrimSpace(body) == "" {
 		return mutedStyle.Render("(No note body text)")
 	}

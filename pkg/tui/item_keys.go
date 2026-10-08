@@ -19,10 +19,13 @@ func (m Model) itemBindings(item NavItem, onDashboard bool) []keyBinding {
 		if m.jobRunning(item.Draft.Name) {
 			return []keyBinding{newKeyBinding(actionStopSelectedItem, []string{"d"}, "d", "stop").warning()}
 		}
-		return []keyBinding{
+		bindings := []keyBinding{
 			newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "run"),
-			newKeyBinding(actionDryRunSelectedJob, []string{"d"}, "d", "dry run").shownWhen(!item.Draft.DryRunInFlight),
 		}
+		if jobHasDryRun(item.Draft.Name, item.Draft.DryRunCommand) {
+			bindings = append(bindings, newKeyBinding(actionDryRunSelectedJob, []string{"d"}, "d", "dry run").shownWhen(!item.Draft.DryRunInFlight))
+		}
+		return bindings
 	case KindReviewRun, KindBragRun, KindAutomationRun:
 		if label := m.runStopLabel(item); label != "" {
 			return []keyBinding{newKeyBinding(actionStopSelectedItem, []string{"d"}, "d", label).warning()}
@@ -129,7 +132,7 @@ func (m Model) runSelectedJob(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) dryRunSelectedJob(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	item, found := m.selectedNavItem()
-	if !found || item.Kind != KindJobDraft || item.Draft == nil || isJobRunning(item.Draft.Name) {
+	if !found || item.Kind != KindJobDraft || item.Draft == nil || isJobRunning(item.Draft.Name) || !jobHasDryRun(item.Draft.Name, item.Draft.DryRunCommand) {
 		return m, nil
 	}
 	return m, m.startJobDryRunCmd(item.Draft.Name)

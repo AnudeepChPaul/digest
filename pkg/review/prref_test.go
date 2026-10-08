@@ -31,7 +31,7 @@ func TestParsePRURLRejectsInvalid(t *testing.T) {
 
 func TestPRRefNames(t *testing.T) {
 	ref := PRRef{Host: "github.com", Owner: "o", Repo: "console", Number: 12}
-	if ref.DirName() != "console_12" {
+	if ref.DirName() != "o_console_12" {
 		t.Errorf("DirName = %q", ref.DirName())
 	}
 	if ref.NameWithOwner() != "o/console" {

@@ -158,3 +158,27 @@ func BenchmarkPreviewNext(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkRenderHeaderSettled(b *testing.B) {
+	m := benchModel(b)
+	m.bannerWaveActive = false
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = m.renderHeader()
+	}
+}
+
+func BenchmarkPulseTickPlusViewSettled(b *testing.B) {
+	m := benchModel(b)
+	m.bannerWaveActive = false
+	m.loadingGit = true
+	m.syncPulseRunning = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		next, _ := m.Update(syncPulseTickMsg{})
+		m = next.(Model)
+		_ = m.View()
+	}
+}

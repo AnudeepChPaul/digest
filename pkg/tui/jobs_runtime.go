@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -76,11 +78,7 @@ func isJobRunning(jobName string) bool {
 	if err != nil {
 		return false
 	}
-	if isProcessAlive(pid) {
-		return true
-	}
-	_ = os.Remove(pidFile)
-	return false
+	return isProcessAlive(pid)
 }
 
 func dryRunFilePath(jobName string, suffix string) string {
@@ -301,22 +299,50 @@ var builtinJobNames = map[string]bool{
 
 var errNoJobCommand = errors.New("no command configured")
 
+var errDryRunFlagMissing = errors.New("dry-run command does not pass --dry-run")
+
+func shellQuote(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'"
+}
+
+func digestExecutable() string {
+	if execPath, err := os.Executable(); err == nil {
+		return shellQuote(execPath)
+	}
+	return "digest"
+}
+
+func jobHasDryRun(name, dryRunCommand string) bool {
+	return dryRunCommand != "" || builtinJobNames[name]
+}
+
+func withRunningDigest(command string, dryRun bool) (string, error) {
+	words := strings.Fields(command)
+	if len(words) < 2 || words[0] != "digest" || !builtinJobNames[words[1]] {
+		return command, nil
+	}
+	if dryRun && !slices.ContainsFunc(words[2:], func(word string) bool { return word == "--dry-run" || word == "-dry-run" }) {
+		return "", errDryRunFlagMissing
+	}
+	return digestExecutable() + strings.TrimPrefix(strings.TrimSpace(command), "digest"), nil
+}
+
 func resolveJobCommand(spec config.JobSpec, dryRun bool) (string, error) {
 	configured := spec.Command
 	if dryRun {
 		configured = spec.DryRunCommand
 	}
 	if configured != "" {
-		return configured, nil
+		command, err := withRunningDigest(configured, dryRun)
+		if err != nil {
+			return "", fmt.Errorf("job %q: %w", spec.Name, err)
+		}
+		return command, nil
 	}
 	if !builtinJobNames[spec.Name] {
 		return "", fmt.Errorf("job %q: %w", spec.Name, errNoJobCommand)
 	}
-	execPath, err := os.Executable()
-	if err != nil {
-		execPath = "digest"
-	}
-	commandStr := fmt.Sprintf("%s %s", execPath, spec.Name)
+	commandStr := fmt.Sprintf("%s %s", digestExecutable(), spec.Name)
 	if dryRun {
 		commandStr += " --dry-run"
 	}
@@ -489,7 +515,7 @@ func readFileTail(path string, maxBytes int64) string {
 			data = data[newline+1:]
 		}
 	}
-	return string(data)
+	return review.PlainText(string(data))
 }
 
 func readJobLog(jobName string) string {

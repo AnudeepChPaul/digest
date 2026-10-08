@@ -12,7 +12,7 @@ var allowedEnvNames = map[string]bool{
 }
 
 var installEnvNames = map[string]bool{
-	"NPM_TOKEN": true, "SSH_AUTH_SOCK": true, "VOLTA_HOME": true, "PNPM_HOME": true, "COREPACK_HOME": true,
+	"VOLTA_HOME": true, "PNPM_HOME": true, "COREPACK_HOME": true,
 }
 
 var installEnvPrefixes = []string{"npm_config_", "NPM_CONFIG_", "ASDF_"}

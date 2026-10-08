@@ -64,6 +64,7 @@ func CompareSince(ctx context.Context, ref PRRef, baseSHA, headSHA string) (Comp
 	if err := json.Unmarshal(output, &decoded); err != nil {
 		return Comparison{}, fmt.Errorf("decode compare: %w", err)
 	}
+	plainTextFields(&decoded)
 	comparison := Comparison{Commits: make([]CompareCommit, 0, len(decoded.Commits)), Files: make([]CompareFile, 0, len(decoded.Files))}
 	for _, commit := range decoded.Commits {
 		headline, _, _ := strings.Cut(commit.Message, "\n")

@@ -458,9 +458,28 @@ func (c *Config) TightenPermissions(configPath string) error {
 	}
 	var failures []error
 	for path, mode := range targets {
-		if err := os.Chmod(path, mode); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		info, err := os.Stat(path)
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && info.Mode().Perm() == mode) {
+			continue
+		}
+		if err == nil {
+			err = os.Chmod(path, mode)
+		}
+		if err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func LoadOrDefault(path string) (*Config, error) {
+	resolved := resolveConfigPath(path)
+	cfg, err := Load(resolved)
+	if err == nil {
+		return cfg, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return DefaultConfig(), nil
+	}
+	return DefaultConfig(), fmt.Errorf("failed to load config %s, using defaults: %w", resolved, err)
 }

@@ -208,6 +208,7 @@ func (m Model) listedReviewRefs() []review.PRRef {
 func readLocalReviews(root string, refs []review.PRRef, previous map[string]localReviewState) map[string]localReviewState {
 	states := make(map[string]localReviewState)
 	for _, ref := range refs {
+		review.AdoptLegacyDirs(root, ref)
 		stateDir := review.StateDir(root, ref)
 		if _, seen := states[stateDir]; !seen {
 			state := withRecommendation(stateDir, readLocalReview(stateDir), previous)
@@ -965,7 +966,7 @@ func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int
 	return renderJobStyleRow(amberDiamond.Render(), reviewRunLabel(run), rightBlock, selected, width)
 }
 
-func reviewRunPreview(root string, run review.ReviewRun) string {
+func reviewRunPreview(root string, run review.ReviewRun) runPreview {
 	status := "FAILED"
 	if run.Status == review.RunRunning {
 		status = "RUNNING"
@@ -974,7 +975,7 @@ func reviewRunPreview(root string, run review.ReviewRun) string {
 	if logText == "" {
 		logText = "(no log output yet)"
 	}
-	return fmt.Sprintf("# Review: %s (%s)\n\n%s\n\n```\n%s\n```", reviewRunLabel(run), status, run.Meta.Ref.URL, logText)
+	return runPreview{heading: fmt.Sprintf("# Review: %s (%s)\n\n%s", reviewRunLabel(run), status, run.Meta.Ref.URL), log: logText}
 }
 
 func reviewNoteID(repository string, number int) string {

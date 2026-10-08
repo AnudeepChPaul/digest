@@ -48,7 +48,7 @@ func (m Model) View() string {
 	if m.width < 40 {
 		return "Terminal window is too small."
 	}
-	screen := m.renderScreen()
+	screen := m.withPulseDots(m.renderScreen())
 	if m.ctrlCCount == 0 || m.mode == ViewDashboard || m.mode == ViewInlineEdit || m.mode == ViewNotifyInput {
 		return screen
 	}
@@ -406,7 +406,7 @@ func (m Model) renderEditModal(modalWidth int) string {
 		lipgloss.Left,
 		titleText,
 		"",
-		m.editor.View(),
+		m.editorView(),
 		"",
 		footerText,
 	)

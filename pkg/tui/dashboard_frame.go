@@ -21,7 +21,6 @@ type dashboardFrameKey struct {
 	height         int
 	selected       int
 	mode           ViewMode
-	pulsePhase     int
 }
 
 type dashboardFrame struct {
@@ -47,7 +46,6 @@ func (m Model) dashboardFrameKey() dashboardFrameKey {
 		height:         m.height,
 		selected:       m.selected,
 		mode:           m.mode,
-		pulsePhase:     m.syncPulseFrame % pulsePhaseCount,
 	}
 }
 

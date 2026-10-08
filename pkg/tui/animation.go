@@ -107,8 +107,17 @@ var (
 	selectedDoneBox    = lipgloss.NewStyle().Bold(true).Foreground(colourGreen)
 )
 
+const jobPulseMarker = "\x1b[8;9m●\x1b[28;29m"
+
 func (m Model) renderJobPulseDot() string {
-	return jobPulseStyles[m.syncPulseFrame%len(jobPulseStyles)].Render("●")
+	return jobPulseMarker
+}
+
+func (m Model) withPulseDots(screen string) string {
+	if !strings.Contains(screen, jobPulseMarker) {
+		return screen
+	}
+	return strings.ReplaceAll(screen, jobPulseMarker, jobPulseStyles[m.syncPulseFrame%len(jobPulseStyles)].Render("●"))
 }
 
 func (m Model) renderDryRunIndicator() string {

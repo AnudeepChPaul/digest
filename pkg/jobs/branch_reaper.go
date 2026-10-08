@@ -53,8 +53,12 @@ func fetchMergedPRs(repo string, timeout time.Duration) ([]MergedPR, error) {
 	return prs, nil
 }
 
-func fetchPRHead(repo string, pr MergedPR) CmdResult {
-	return gitCmdTimeout(repo, 30*time.Second, "fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("pull/%d/head", pr.Number))
+func fetchPRHead(repo string, pr MergedPR, dryRun bool) CmdResult {
+	args := []string{"fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("pull/%d/head", pr.Number)}
+	if dryRun {
+		args = append([]string{"fetch", "--no-prune", "--no-auto-gc"}, args[1:]...)
+	}
+	return gitCmdTimeout(repo, 30*time.Second, args...)
 }
 
 func flattenGitOutput(output string) string {
@@ -66,12 +70,12 @@ func notInHead(repo, branch string) string {
 	return flattenGitOutput(unmerged.Stdout + unmerged.Stderr)
 }
 
-func matchMergedPR(repo, branch string, prs []MergedPR) (*MergedPR, string) {
+func matchMergedPR(repo, branch string, prs []MergedPR, dryRun bool) (*MergedPR, string) {
 	branchRef := "refs/heads/" + branch
 	var outputs []string
 	for i := range prs {
 		pr := prs[i]
-		fetch := fetchPRHead(repo, pr)
+		fetch := fetchPRHead(repo, pr, dryRun)
 		if !fetch.Ok {
 			outputs = append(outputs, fmt.Sprintf("#%d: %s", pr.Number, flattenGitOutput(fetch.Stderr)))
 			continue
@@ -140,7 +144,7 @@ func (j *BranchReaperJob) reapRepo(repo string, dryRun bool, cutoff time.Time, l
 				result.actions = append(result.actions, fmt.Sprintf("%s: would delete %s", name, b))
 				continue
 			}
-			matched, gitOutput := matchMergedPR(repo, b, branchPRs)
+			matched, gitOutput := matchMergedPR(repo, b, branchPRs, dryRun)
 			if matched != nil {
 				logger.Warn("Would delete branch", "repo", name, "branch", b, "via", "-D", "pr", fmt.Sprintf("#%d", matched.Number), "refused", refused)
 				result.actions = append(result.actions, fmt.Sprintf("%s: would delete %s (PR #%d)", name, b, matched.Number))
@@ -158,7 +162,7 @@ func (j *BranchReaperJob) reapRepo(repo string, dryRun bool, cutoff time.Time, l
 			continue
 		}
 
-		matched, gitOutput := matchMergedPR(repo, b, branchPRs)
+		matched, gitOutput := matchMergedPR(repo, b, branchPRs, dryRun)
 		if matched == nil {
 			logger.Error("Git refused to delete branch", "repo", name, "branch", b, "git", flattenGitOutput(softDelete.Stderr), "unmerged", gitOutput)
 			result.drafts = append(result.drafts, fmt.Sprintf("%s: %s - git refused delete", name, b))

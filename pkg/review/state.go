@@ -170,6 +170,7 @@ func terminateGroup(target int) error {
 var ErrReviewRunning = errors.New("a review is already running for this PR")
 
 func StartBackground(pr QueuedPR, root string) error {
+	AdoptLegacyDirs(root, pr.Ref)
 	dir := StateDir(root, pr.Ref)
 	if Status(dir) == RunRunning {
 		return ErrReviewRunning
@@ -279,4 +280,25 @@ func Stop(root string, ref PRRef) error {
 		return err
 	}
 	return nil
+}
+
+func AdoptLegacyDirs(root string, ref PRRef) {
+	if ref.Owner == "" || ref.URL == "" {
+		return
+	}
+	stateDir := StateDir(root, ref)
+	if _, err := os.Stat(stateDir); err == nil {
+		return
+	}
+	legacyState := filepath.Join(root, stateDirName, ref.legacyDirName())
+	if meta, err := ReadMeta(legacyState); err != nil || meta.Ref.URL != ref.URL || Status(legacyState) == RunRunning {
+		return
+	}
+	legacyClone := filepath.Join(root, ref.legacyDirName())
+	if _, err := os.Stat(legacyClone); err == nil {
+		if err := os.Rename(legacyClone, CloneDir(root, ref)); err != nil {
+			return
+		}
+	}
+	_ = os.Rename(legacyState, stateDir)
 }

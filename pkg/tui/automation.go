@@ -391,7 +391,7 @@ func (m Model) renderAutomationConfirm(modalWidth int) string {
 func (m Model) renderAutomationEdit() string {
 	modalWidth, _ := m.bragModalSize()
 	title := modalTitleStyle.Render(fmt.Sprintf(" EDIT %s DRAFT ", strings.ToUpper(m.automationName)))
-	parts := []string{title, "", m.editor.View(), ""}
+	parts := []string{title, "", m.editorView(), ""}
 	if m.automationNotice != "" {
 		parts = append(parts, yellowBadgeStyle.Render(m.automationNotice), "")
 	}
@@ -461,7 +461,7 @@ func (m Model) renderAutomationRunRow(run automation.Run, selected bool, width i
 	return renderJobStyleRow(amberDiamond.Render(), m.automationJobLabel(run), m.renderPulseIndicator(label), selected, width)
 }
 
-func (m Model) automationRunPreview(run automation.Run) string {
+func (m Model) automationRunPreview(run automation.Run) runPreview {
 	status := "FAILED"
 	if m.automationJobRunning(&run) {
 		status = "RUNNING"
@@ -470,7 +470,7 @@ func (m Model) automationRunPreview(run automation.Run) string {
 	if logText == "" {
 		logText = "(no log output yet)"
 	}
-	return fmt.Sprintf("# Automation: %s (%s)\n\n```\n%s\n```", m.automationJobLabel(run), status, logText)
+	return runPreview{heading: fmt.Sprintf("# Automation: %s (%s)", m.automationJobLabel(run), status), log: logText}
 }
 
 func (m Model) stopAutomationRun(run *automation.Run) (tea.Model, tea.Cmd) {

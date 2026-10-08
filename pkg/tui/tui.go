@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -23,6 +24,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 	"github.com/AnudeepChPaul/digest/pkg/store"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -382,6 +384,8 @@ type Model struct {
 	notifyEntries           map[string]notify.Entry
 	hintGeneration          int
 	hintVisible             bool
+	editorRevision          int
+	editorCache             *editorViewCache
 	prActionFromDashboard   bool
 	setup                   *setupState
 	setupInput              *textinput.Model
@@ -459,6 +463,8 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	ta := textarea.New()
 	ta.Placeholder = "First line: Summary\n\nRemaining lines: Body..."
 	ta.ShowLineNumbers = false
+	ta.MaxHeight = 0
+	ta.Cursor.SetMode(cursor.CursorStatic)
 
 	textStyle := lipgloss.NewStyle().Foreground(colourText).UnsetBackground()
 	placeholderStyle := lipgloss.NewStyle().UnsetBackground()
@@ -503,6 +509,7 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 		noteRows:                newNoteRowCache(),
 		popupMemo:               &framedPopupMemo{},
 		editor:                  &ta,
+		editorCache:             &editorViewCache{},
 		searchCache:             &searchMemo{},
 		reviewReports:           &reviewReportMemo{},
 		loadingCommits:          cfg != nil && cfg.DailyCommitsEnabled(),
@@ -619,13 +626,17 @@ func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
 }
 
 func (m Model) deleteNotesCmd(notes ...*model.Note) tea.Cmd {
-	noteStore := m.store
+	noteStore, automationRoot := m.store, m.automationRoot()
 	copies := copyNotes(notes)
 	return func() tea.Msg {
 		var errs []error
 		for i := range copies {
 			if err := noteStore.Delete(&copies[i]); err != nil {
 				errs = append(errs, fmt.Errorf("delete %q: %w", copies[i].Summary, err))
+				continue
+			}
+			if err := automation.Dismiss(automationRoot, copies[i].ID); err != nil && !errors.Is(err, automation.ErrInvalidNoteID) {
+				errs = append(errs, fmt.Errorf("remove automation for %q: %w", copies[i].Summary, err))
 			}
 		}
 		return notesSavedMsg{errs: errs}
@@ -1093,18 +1104,16 @@ func (m *Model) updatePreviewViewport() {
 			} else if isDryRunOutput {
 				statusHeader = "DRY RUN ANALYSIS"
 			}
-			heading := renderMarkdown(fmt.Sprintf("# Job: %s (%s)", item.Draft.Name, statusHeader), innerWidth)
-			logTail := lipgloss.NewStyle().Width(innerWidth).Render(lastLines(strings.TrimSpace(logText), jobLogTailLines))
-			mdContent = heading + "\n\n" + logTail
+			mdContent = runPreview{heading: fmt.Sprintf("# Job: %s (%s)", item.Draft.Name, statusHeader), log: logText}.render(innerWidth)
 		} else {
 			mdContent = renderMarkdown(fmt.Sprintf("# Job: %s\n\nNo dry-run analysis or log output available.\nPress **[r]** on dashboard to run dry-run check, or press **[Enter]** to execute job.", item.Draft.Name), innerWidth)
 		}
 	} else if item.Kind == KindReviewRun && item.ReviewRun != nil {
-		mdContent = renderMarkdown(reviewRunPreview(m.reviewRoot(), *item.ReviewRun), innerWidth)
+		mdContent = reviewRunPreview(m.reviewRoot(), *item.ReviewRun).render(innerWidth)
 	} else if item.Kind == KindBragRun && item.BragRun != nil {
-		mdContent = renderMarkdown(bragRunPreview(m.bragRoot(), *item.BragRun), innerWidth)
+		mdContent = bragRunPreview(m.bragRoot(), *item.BragRun).render(innerWidth)
 	} else if item.Kind == KindAutomationRun && item.AutomationRun != nil {
-		mdContent = renderMarkdown(m.automationRunPreview(*item.AutomationRun), innerWidth)
+		mdContent = m.automationRunPreview(*item.AutomationRun).render(innerWidth)
 	} else if item.Kind == KindMyPR && item.MyPR != nil {
 		mdContent = renderMarkdown(myPRDetailsMarkdown(*item.MyPR), innerWidth)
 	} else if item.Note != nil && m.onDraftTab() {
@@ -1170,6 +1179,16 @@ func (m Model) renderArchivedContent(width int, selectedIndex int) string {
 	}
 
 	return listing.String()
+}
+
+type runPreview struct {
+	heading string
+	log     string
+}
+
+func (preview runPreview) render(width int) string {
+	logTail := lipgloss.NewStyle().Width(width).Render(lastLines(strings.TrimSpace(preview.log), jobLogTailLines))
+	return renderMarkdown(preview.heading, width) + "\n\n" + logTail
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1509,8 +1528,10 @@ func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+var gatherHabits = habit.Gather
+
 func (m Model) progressText() string {
-	facts := habit.Gather(m.notes, time.Now(), m.cfg.IsWorkDay)
+	facts := gatherHabits(m.notes, time.Now(), m.cfg.IsWorkDay)
 	var parts []string
 	if facts.Streak > 0 {
 		parts = append(parts, yellowBadgeStyle.Render(fmt.Sprintf("🔥 %d-day streak", facts.Streak)))

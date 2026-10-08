@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -105,5 +106,58 @@ func TestCancelledRunStopsTheReviewCommand(t *testing.T) {
 	started := time.Now()
 	if err := Run(ctx, ref, root, "sleep 30", log.New(io.Discard)); err == nil || time.Since(started) > 10*time.Second {
 		t.Errorf("err = %v after %v", err, time.Since(started))
+	}
+}
+
+func TestCloneAndInstallStopAtTheirTimeout(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 8, URL: "u"}
+	originalPrepare, originalNotify, originalTimeout := prepareClone, sendNotification, cloneTimeout
+	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	sendNotification = func(title, message, openURL string) error { return nil }
+	cloneTimeout = 200 * time.Millisecond
+	defer func() {
+		prepareClone, sendNotification, cloneTimeout = originalPrepare, originalNotify, originalTimeout
+	}()
+	started := time.Now()
+	err := Run(context.Background(), ref, root, "true", log.New(io.Discard))
+	if err == nil || time.Since(started) > 10*time.Second {
+		t.Errorf("a hung clone should fail at its timeout: err = %v after %v", err, time.Since(started))
+	}
+}
+
+func TestCancelledStepsKillTheirChildProcesses(t *testing.T) {
+	for name, start := range map[string]func(ctx context.Context, dir, script string) error{
+		"install": func(ctx context.Context, dir, script string) error { return runInstall(ctx, io.Discard, dir, script) },
+		"step": func(ctx context.Context, dir, script string) error {
+			return runStep(ctx, io.Discard, dir, "bash", "-c", script)
+		},
+	} {
+		dir := t.TempDir()
+		pidPath := filepath.Join(dir, "child.pid")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- start(ctx, dir, "sleep 30 & echo $! > child.pid; wait") }()
+		var childPID int
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if pid, ok := readInt(pidPath); ok {
+				childPID = pid
+				break
+			}
+		}
+		if childPID == 0 {
+			t.Fatalf("%s: child never started", name)
+		}
+		cancel()
+		<-done
+		for deadline := time.Now().Add(3 * time.Second); processAlive(childPID) && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		}
+		if processAlive(childPID) {
+			_ = syscall.Kill(childPID, syscall.SIGKILL)
+			t.Errorf("%s: cancelling left child process %d running", name, childPID)
+		}
 	}
 }

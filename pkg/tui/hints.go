@@ -29,7 +29,7 @@ type keyHint struct {
 
 func (m *Model) restartHintTimer() tea.Cmd {
 	m.hintVisible = false
-	if !m.cfg.ShowKeyHints {
+	if !m.cfg.ShowKeyHints || m.mode != ViewDashboard {
 		return nil
 	}
 	m.hintGeneration++

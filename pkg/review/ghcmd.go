@@ -99,6 +99,7 @@ func ParsePRDetails(raw json.RawMessage, viewer string) (QueuedPR, error) {
 	if err := json.Unmarshal(raw, &details); err != nil {
 		return QueuedPR{}, fmt.Errorf("decode pr details: %w", err)
 	}
+	plainTextFields(&details)
 	ref, err := ParsePRURL(details.URL)
 	if err != nil {
 		return QueuedPR{}, err

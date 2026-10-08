@@ -41,6 +41,7 @@ func Load(dir string) (*Report, error) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", FindingsFile, err)
 	}
+	plainTextFields(&report)
 	return &report, nil
 }
 

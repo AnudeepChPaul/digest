@@ -73,7 +73,7 @@ func TestCloneExistsOnlyAfterCheckoutSucceeds(t *testing.T) {
 		}
 		return nil
 	}
-	defer func() { runStep = original }()
+	t.Cleanup(func() { runStep = original })
 	if _, err := Prepare(context.Background(), ref, root, log.New(io.Discard)); err == nil {
 		t.Fatal("checkout failure should fail the clone")
 	}

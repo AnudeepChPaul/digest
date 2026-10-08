@@ -115,17 +115,24 @@ func TestGitStepsIgnoreRepoHooks(t *testing.T) {
 
 func TestEnvAllowlistsKeepWhatRealSetupsNeed(t *testing.T) {
 	kept := map[string]string{
-		"NPM_TOKEN": "npm-auth", "npm_config_registry": "https://registry.example", "NODE_EXTRA_CA_CERTS": "/ca.pem", "SSL_CERT_FILE": "/cert.pem",
-		"SSH_AUTH_SOCK": "/agent.sock", "VOLTA_HOME": "/volta", "ASDF_DATA_DIR": "/asdf", "PNPM_HOME": "/pnpm", "COREPACK_HOME": "/corepack",
+		"npm_config_registry": "https://registry.example", "NODE_EXTRA_CA_CERTS": "/ca.pem", "SSL_CERT_FILE": "/cert.pem",
+		"VOLTA_HOME": "/volta", "ASDF_DATA_DIR": "/asdf", "PNPM_HOME": "/pnpm", "COREPACK_HOME": "/corepack",
 	}
 	for name, value := range kept {
 		t.Setenv(name, value)
 	}
 	t.Setenv("GH_TOKEN", "secret-gh")
+	t.Setenv("NPM_TOKEN", "npm-auth")
+	t.Setenv("SSH_AUTH_SOCK", "/agent.sock")
 	install := strings.Join(installEnv(), "\n")
 	for name, value := range kept {
 		if !strings.Contains(install, name+"="+value) {
 			t.Errorf("install env should keep %s", name)
+		}
+	}
+	for _, secret := range []string{"secret-gh", "npm-auth", "/agent.sock"} {
+		if strings.Contains(install, secret) {
+			t.Errorf("install env leaks %s to the PR's install scripts", secret)
 		}
 	}
 	reviewKept := map[string]string{"GH_HOST": "git.example.com", "GH_CONFIG_DIR": "/gh", "AWS_PROFILE": "bedrock", "AWS_REGION": "us-east-1", "CLOUD_ML_REGION": "us-east5", "GOOGLE_APPLICATION_CREDENTIALS": "/gcp.json", "REQUESTS_CA_BUNDLE": "/bundle.pem"}

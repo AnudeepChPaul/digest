@@ -486,7 +486,7 @@ func (m Model) renderBragEdit() string {
 	modalWidth, _ := m.bragModalSize()
 	innerWidth := modalWidth - 6
 	title := modalTitleStyle.Render(fmt.Sprintf(" EDIT BRAG: %s ", strings.ToUpper(m.bragPeriod.Label())))
-	parts := []string{title, "", m.editor.View(), ""}
+	parts := []string{title, "", m.editorView(), ""}
 	if m.bragNotice != "" {
 		parts = append(parts, yellowBadgeStyle.Render(m.bragNotice), "")
 	}
@@ -521,7 +521,7 @@ func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
 	return renderJobStyleRow(amberDiamond.Render(), bragRunLabel(run), rightBlock, selected, width)
 }
 
-func bragRunPreview(root string, run brag.Run) string {
+func bragRunPreview(root string, run brag.Run) runPreview {
 	status := "FAILED"
 	if run.Status == brag.RunRunning {
 		status = "RUNNING"
@@ -530,7 +530,7 @@ func bragRunPreview(root string, run brag.Run) string {
 	if logText == "" {
 		logText = "(no log output yet)"
 	}
-	return fmt.Sprintf("# Brag: %s (%s)\n\n```\n%s\n```", run.Meta.ID, status, logText)
+	return runPreview{heading: fmt.Sprintf("# Brag: %s (%s)", run.Meta.ID, status), log: logText}
 }
 
 var stopBragRun = brag.Stop

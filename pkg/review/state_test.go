@@ -1,6 +1,7 @@
 package review
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -153,5 +154,58 @@ func TestLocalReviewOutdated(t *testing.T) {
 	}
 	if LocalReviewOutdated(root, QueuedPR{Ref: ref, HeadSHA: "old"}) || LocalReviewOutdated(root, QueuedPR{Ref: ref}) {
 		t.Error("same or unknown head must not be outdated")
+	}
+}
+
+func seedLegacyReview(t *testing.T, root string, ref PRRef) (string, string) {
+	t.Helper()
+	legacyName := fmt.Sprintf("%s_%d", ref.Repo, ref.Number)
+	legacyClone, legacyState := filepath.Join(root, legacyName), filepath.Join(root, stateDirName, legacyName)
+	writeFile(t, filepath.Join(legacyClone, ".git", "HEAD"), "ref")
+	if err := WriteMeta(legacyState, Meta{Ref: ref}); err != nil {
+		t.Fatal(err)
+	}
+	return legacyClone, legacyState
+}
+
+func TestSameRepoNameFromTwoOwnersGetsTwoFolders(t *testing.T) {
+	alice := PRRef{Owner: "alice", Repo: "api", Number: 5, URL: "https://github.com/alice/api/pull/5"}
+	bob := PRRef{Owner: "bob", Repo: "api", Number: 5, URL: "https://github.com/bob/api/pull/5"}
+	if CloneDir("/r", alice) == CloneDir("/r", bob) || StateDir("/r", alice) == StateDir("/r", bob) {
+		t.Errorf("alice and bob share %s", CloneDir("/r", alice))
+	}
+}
+
+func TestAdoptLegacyDirsMovesAMatchingReview(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Owner: "o", Repo: "console", Number: 9, URL: "https://github.com/o/console/pull/9"}
+	legacyClone, legacyState := seedLegacyReview(t, root, ref)
+	AdoptLegacyDirs(root, ref)
+	if !CloneExists(root, ref) {
+		t.Error("legacy clone not moved to the owner-qualified folder")
+	}
+	if meta, err := ReadMeta(StateDir(root, ref)); err != nil || meta.Ref.URL != ref.URL {
+		t.Errorf("legacy state not moved: %v", err)
+	}
+	for _, legacy := range []string{legacyClone, legacyState} {
+		if _, err := os.Stat(legacy); err == nil {
+			t.Errorf("%s still present", legacy)
+		}
+	}
+}
+
+func TestAdoptLegacyDirsLeavesOtherOwnersAndRunningReviews(t *testing.T) {
+	root := t.TempDir()
+	alice := PRRef{Owner: "alice", Repo: "api", Number: 5, URL: "https://github.com/alice/api/pull/5"}
+	bob := PRRef{Owner: "bob", Repo: "api", Number: 5, URL: "https://github.com/bob/api/pull/5"}
+	legacyClone, legacyState := seedLegacyReview(t, root, alice)
+	AdoptLegacyDirs(root, bob)
+	if _, err := os.Stat(legacyClone); err != nil || CloneExists(root, bob) {
+		t.Error("bob adopted alice's clone")
+	}
+	writeFile(t, filepath.Join(legacyState, pidFile), strconv.Itoa(os.Getpid()))
+	AdoptLegacyDirs(root, alice)
+	if _, err := os.Stat(legacyState); err != nil {
+		t.Error("a running review's folders were moved under it")
 	}
 }

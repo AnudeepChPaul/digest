@@ -19,6 +19,7 @@ var prepareClone = review.PrepareTo
 
 func ClonePR(ctx context.Context, root string, pr review.QueuedPR) (string, error) {
 	ref := pr.Ref
+	review.AdoptLegacyDirs(root, ref)
 	dir := review.CloneDir(root, ref)
 	if review.CloneExists(root, ref) {
 		return dir, nil

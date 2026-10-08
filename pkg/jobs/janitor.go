@@ -27,13 +27,26 @@ var lookupPRStates = review.FetchPRStates
 
 const reviewCloneIdleAge = 7 * 24 * time.Hour
 
-func reviewCloneLastTouched(root string, ref review.PRRef) time.Time {
-	stateDir := review.StateDir(root, ref)
-	cloneDir := review.CloneDir(root, ref)
-	candidates := []string{stateDir, cloneDir, filepath.Join(cloneDir, ".git")}
-	if entries, err := os.ReadDir(stateDir); err == nil {
+type reviewFolders struct {
+	ref      review.PRRef
+	stateDir string
+	cloneDir string
+}
+
+func foldersOf(root, stateRoot, name string) reviewFolders {
+	return reviewFolders{stateDir: filepath.Join(stateRoot, name), cloneDir: filepath.Join(root, name)}
+}
+
+func reviewRunning(stateDir string) bool {
+	_, running := review.RunningPID(stateDir)
+	return running
+}
+
+func (folders reviewFolders) lastTouched() time.Time {
+	candidates := []string{folders.stateDir, folders.cloneDir, filepath.Join(folders.cloneDir, ".git")}
+	if entries, err := os.ReadDir(folders.stateDir); err == nil {
 		for _, entry := range entries {
-			candidates = append(candidates, filepath.Join(stateDir, entry.Name()))
+			candidates = append(candidates, filepath.Join(folders.stateDir, entry.Name()))
 		}
 	}
 	var latest time.Time
@@ -45,20 +58,19 @@ func reviewCloneLastTouched(root string, ref review.PRRef) time.Time {
 	return latest
 }
 
-func removeReviewClone(root string, ref review.PRRef, reason string, dryRun bool) (string, string) {
-	cloneDir := review.CloneDir(root, ref)
+func (folders reviewFolders) remove(reason string, dryRun bool) (string, string) {
 	if dryRun {
-		return fmt.Sprintf("would remove review clone %s (%s)", cloneDir, reason), ""
+		return fmt.Sprintf("would remove review clone %s (%s)", folders.cloneDir, reason), ""
 	}
-	for _, dir := range []string{cloneDir, cloneDir + review.PartialCloneSuffix} {
+	for _, dir := range []string{folders.cloneDir, folders.cloneDir + review.PartialCloneSuffix} {
 		if err := os.RemoveAll(dir); err != nil {
 			return "", fmt.Sprintf("remove %s: %v", dir, err)
 		}
 	}
-	if err := os.RemoveAll(review.StateDir(root, ref)); err != nil {
-		return "", fmt.Sprintf("remove state for %s: %v", ref.DirName(), err)
+	if err := os.RemoveAll(folders.stateDir); err != nil {
+		return "", fmt.Sprintf("remove state %s: %v", folders.stateDir, err)
 	}
-	return fmt.Sprintf("removed review clone %s (%s)", cloneDir, reason), ""
+	return fmt.Sprintf("removed review clone %s (%s)", folders.cloneDir, reason), ""
 }
 
 func reapPartialClones(root, stateRoot string, dryRun bool, record func(action, failure string)) {
@@ -68,7 +80,7 @@ func reapPartialClones(root, stateRoot string, dryRun bool, record func(action, 
 	}
 	for _, entry := range entries {
 		cloneName, isPartial := strings.CutSuffix(entry.Name(), review.PartialCloneSuffix)
-		if !entry.IsDir() || !isPartial || review.Status(filepath.Join(stateRoot, cloneName)) == review.RunRunning {
+		if !entry.IsDir() || !isPartial || reviewRunning(filepath.Join(stateRoot, cloneName)) {
 			continue
 		}
 		partialDir := filepath.Join(root, entry.Name())
@@ -101,27 +113,32 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 		return actions, failures
 	}
 	idleCutoff := time.Now().Add(-reviewCloneIdleAge)
-	var refs []review.PRRef
+	var candidates []reviewFolders
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		stateDir := filepath.Join(stateRoot, entry.Name())
-		if review.Status(stateDir) == review.RunRunning {
+		folders := foldersOf(root, stateRoot, entry.Name())
+		if reviewRunning(folders.stateDir) {
 			continue
 		}
-		meta, err := review.ReadMeta(stateDir)
+		meta, err := review.ReadMeta(folders.stateDir)
 		if err != nil || meta.Ref.URL == "" {
 			continue
 		}
-		if reviewCloneLastTouched(root, meta.Ref).Before(idleCutoff) {
-			record(removeReviewClone(root, meta.Ref, "idle 7d", dryRun))
+		folders.ref = meta.Ref
+		if folders.lastTouched().Before(idleCutoff) {
+			record(folders.remove("idle 7d", dryRun))
 			continue
 		}
-		refs = append(refs, meta.Ref)
+		candidates = append(candidates, folders)
 	}
-	if len(refs) == 0 {
+	if len(candidates) == 0 {
 		return actions, failures
+	}
+	refs := make([]review.PRRef, len(candidates))
+	for index, folders := range candidates {
+		refs[index] = folders.ref
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -129,16 +146,16 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 	if err != nil {
 		return actions, append(failures, fmt.Sprintf("pr states: %v", err))
 	}
-	for _, ref := range refs {
-		state, found := states[ref.URL]
+	for _, folders := range candidates {
+		state, found := states[folders.ref.URL]
 		if !found {
-			failures = append(failures, fmt.Sprintf("pr state %s: not returned", ref.URL))
+			failures = append(failures, fmt.Sprintf("pr state %s: not returned", folders.ref.URL))
 			continue
 		}
 		if state != "MERGED" && state != "CLOSED" {
 			continue
 		}
-		record(removeReviewClone(root, ref, strings.ToLower(state), dryRun))
+		record(folders.remove(strings.ToLower(state), dryRun))
 	}
 	return actions, failures
 }
@@ -243,8 +260,11 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 		}
 	}
 
-	summary := fmt.Sprintf("%d quarantined · %d KiB reclaimed · %d expired batches purged · %d review clones removed",
-		len(matched), reclaimed/1024, len(purged), len(reviewActions))
+	summaryFormat := "%d quarantined · %d KiB reclaimed · %d expired batches purged · %d review clones removed"
+	if dryRun {
+		summaryFormat = "%d to quarantine · %d KiB to reclaim · %d expired batches to purge · %d review clones to remove"
+	}
+	summary := fmt.Sprintf(summaryFormat, len(matched), reclaimed/1024, len(purged), len(reviewActions))
 	if len(failures) > 0 {
 		summary = fmt.Sprintf("%s · %d failed", summary, len(failures))
 	}

@@ -74,11 +74,11 @@ func DiscoverRepos(roots []string) ([]string, error) {
 	return repos, nil
 }
 
-func ClassifyRepo(repo string) RepoInfo {
+func ClassifyRepo(repo string, dryRun bool) RepoInfo {
 	if !gitCmd(repo, "remote").Ok {
 		return RepoInfo{Path: repo, State: NoRemote}
 	}
-	if !gitCmdTimeout(repo, 10*time.Second, "fetch", "--prune", "origin").Ok {
+	if !gitCmdTimeout(repo, 10*time.Second, fetchArgs(dryRun, "origin")...).Ok {
 		return RepoInfo{Path: repo, State: Unreachable}
 	}
 
@@ -162,7 +162,7 @@ func (j *RepoSyncJob) Run(dryRun bool) (*JobResult, error) {
 		go func() {
 			defer wg.Done()
 			for repo := range jobsChan {
-				info := ClassifyRepo(repo)
+				info := ClassifyRepo(repo, dryRun)
 				curr := atomic.AddInt32(&completed, 1)
 
 				outMux.Lock()
@@ -248,6 +248,13 @@ func gitCmd(cwd string, args ...string) CmdResult {
 
 var commandWaitDelay = 2 * time.Second
 
+func fetchArgs(dryRun bool, refspecs ...string) []string {
+	if dryRun {
+		return append([]string{"fetch", "--no-prune", "--no-auto-gc"}, refspecs...)
+	}
+	return append([]string{"fetch", "--prune"}, refspecs...)
+}
+
 func gitCmdTimeout(cwd string, timeout time.Duration, args ...string) CmdResult {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -257,6 +264,7 @@ func gitCmdTimeout(cwd string, timeout time.Duration, args ...string) CmdResult 
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=5",
 	)
 

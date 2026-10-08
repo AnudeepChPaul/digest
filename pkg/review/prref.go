@@ -39,6 +39,13 @@ func ParsePRURL(raw string) (PRRef, error) {
 }
 
 func (p PRRef) DirName() string {
+	if p.Owner == "" {
+		return p.legacyDirName()
+	}
+	return fmt.Sprintf("%s_%s_%d", p.Owner, p.Repo, p.Number)
+}
+
+func (p PRRef) legacyDirName() string {
 	return fmt.Sprintf("%s_%d", p.Repo, p.Number)
 }
 
