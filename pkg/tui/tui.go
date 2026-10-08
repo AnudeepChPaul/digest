@@ -1518,8 +1518,11 @@ func (m Model) progressText() string {
 
 func (m Model) renderHeader() string {
 	renderedDate := mutedStyle.Bold(true).Render("— " + time.Now().Format("Monday 02 Jan"))
-	renderedVersion := versionStyle.Render("v" + appVersion)
-	middleLine := fmt.Sprintf("%s  %s  %s", m.renderBannerLine(bannerMiddleRow), renderedVersion, renderedDate)
+	middleLine := m.renderBannerLine(bannerMiddleRow) + "  "
+	if version := displayVersion(); version != "" {
+		middleLine += versionStyle.Render(version) + "  "
+	}
+	middleLine += renderedDate
 	if notice := m.unbraggedWeekNotice(); notice != "" {
 		noticeRoom := m.width - lipgloss.Width(middleLine) - 7
 		if noticeRoom > 0 {

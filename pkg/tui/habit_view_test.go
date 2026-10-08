@@ -63,6 +63,7 @@ func TestPRReviewNotesAndAlwaysModeShowEveryTag(t *testing.T) {
 }
 
 func TestHeaderShowsTheStreakAndWeek(t *testing.T) {
+	withVersionSources(t, "1.2.3", "", false)
 	m, _ := actionsTestModel(t)
 	m.notes = slices.DeleteFunc(m.notes, func(note *model.Note) bool { return note.Status == model.StatusDone })
 	if header := stripANSI(m.renderHeader()); strings.Contains(header, "streak") || strings.Contains(header, "closed this week") {
@@ -81,7 +82,7 @@ func TestHeaderShowsTheStreakAndWeek(t *testing.T) {
 	}
 	headerLines := plainLines(m.renderHeader())
 	topLine, middleLine, bottomLine := headerLines[1], headerLines[2], headerLines[3]
-	streakAt, versionAt := strings.Index(topLine, "🔥"), strings.Index(middleLine, "v"+appVersion)
+	streakAt, versionAt := strings.Index(topLine, "🔥"), strings.Index(middleLine, displayVersion())
 	if streakAt < 0 || versionAt < 0 || !strings.Contains(topLine, "closed this week") || lipgloss.Width(topLine[:streakAt]) != lipgloss.Width(middleLine[:versionAt]) {
 		t.Errorf("progress should sit on the top line above the version:\n%s\n%s", topLine, middleLine)
 	}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -118,8 +119,21 @@ func (m Model) renderJobRunningIndicator() string {
 	return m.renderJobPulseDot() + " " + jobPulseTextStyle.Render("running...")
 }
 
+var readBuildInfo = debug.ReadBuildInfo
+
+func displayVersion() string {
+	if appVersion != "" {
+		return "v" + appVersion
+	}
+	if buildInfo, ok := readBuildInfo(); ok && buildInfo.Main.Version != "" && buildInfo.Main.Version != "(devel)" {
+		releaseVersion, _, _ := strings.Cut(buildInfo.Main.Version, "+")
+		return releaseVersion
+	}
+	return ""
+}
+
 var (
-	appVersion   = "dev"
+	appVersion   = ""
 	versionStyle = lipgloss.NewStyle().Faint(true).Foreground(colourOverlay)
 )
 

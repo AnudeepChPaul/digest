@@ -40,7 +40,7 @@ depends = ["vet", "test"]
 quiet = true
 run = '''
 binary_path=~/.config/bin/digest
-build_version="$(cat .version)-dev"
+build_version="$(cat .version)+$(git rev-parse --short HEAD)"
 printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
 go build -trimpath -ldflags "-s -w -X github.com/AnudeepChPaul/digest/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/digest
 binary_size=$(stat -f %z "$binary_path" | awk '{ printf "%.1f MB", $1 / 1048576 }')
