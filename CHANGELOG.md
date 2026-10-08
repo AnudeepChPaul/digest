@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.3 — 2026-10-08
+
+### Fixes
+- show o nvim on PR rows only once the clone has finished
+
 ## v1.2.2 — 2026-10-08
 
 ### Fixes
