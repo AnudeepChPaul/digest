@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.2 — 2026-10-08
+
+### Fixes
+- open a note's links with o, picking from a list when there are several
+
 ## v1.2.1 — 2026-10-08
 
 ### Fixes
