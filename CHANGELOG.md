@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.4 — 2026-10-08
+
+### Fixes
+- janitor removes leftover partial review clones
+
 ## v1.2.3 — 2026-10-08
 
 ### Fixes
