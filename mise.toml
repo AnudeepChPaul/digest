@@ -65,9 +65,10 @@ fi
 git push origin main
 git tag -m "digest $release_tag" "$release_tag"
 git push origin "$release_tag"
-release_revision=$(git rev-parse HEAD)
+tarball_url="https://github.com/AnudeepChPaul/digest/archive/refs/tags/$release_tag.tar.gz"
+tarball_sha=$(curl -fsSL "$tarball_url" | shasum -a 256 | cut -d' ' -f1)
 git -C "$tap_dir" pull --ff-only
-sed -i '' -E "s/tag: +\"v[^\"]+\"/tag:      \"$release_tag\"/; s/revision: +\"[0-9a-f]+\"/revision: \"$release_revision\"/" "$formula_path"
+sed -i '' -E "s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
 git -C "$tap_dir" commit -am "digest $release_tag"
 git -C "$tap_dir" push
 printf '\033[32m✓\033[0m released digest \033[1m%s\033[0m; upgrade with brew upgrade digest\n' "$release_tag"
