@@ -68,6 +68,10 @@ digest --help     # every command and flag
 
 Inside the dashboard, `,` opens settings and the footer lists the keys for the current screen.
 
+### Upgrading notes
+
+Notes are named after their id and status: `<id>.md` while active, `<id>-<finished>.done.md` once done and `<id>-<archived>.archived.md` once archived, so the dashboard only opens the files it shows. Quit the TUI and run `digest migrate` once to rename older notes, give old and PR notes timestamp ids, and move their reminders with them. Running it again changes nothing.
+
 ## Requirements
 
 macOS, git and the GitHub CLI (`gh`). Optional: tmux, Neovim, terminal-notifier and Claude Code for AI reviews and brag summaries.

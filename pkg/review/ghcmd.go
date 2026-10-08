@@ -16,6 +16,8 @@ type ActivityPR struct {
 	Title      string
 	URL        string
 	Repository string
+	Owner      string
+	CreatedAt  time.Time
 	State      string
 	ReviewedAt time.Time
 	Comments   string

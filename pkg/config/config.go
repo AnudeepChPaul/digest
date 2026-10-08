@@ -134,6 +134,7 @@ func (c *Config) CacheDir() string      { return filepath.Join(c.Root(), "cache"
 func (c *Config) LogsDir() string       { return filepath.Join(c.Root(), "logs") }
 func (c *Config) QuarantineDir() string { return filepath.Join(c.Root(), ".quarantine") }
 func (c *Config) AutomationDir() string { return filepath.Join(c.Root(), "automations") }
+func (c *Config) TUIMarkerPath() string { return filepath.Join(c.Root(), ".state", "tui.pid") }
 
 func findAutomation(specs []AutomationSpec, name string) (AutomationSpec, bool) {
 	for _, spec := range specs {

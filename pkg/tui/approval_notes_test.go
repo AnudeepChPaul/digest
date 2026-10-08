@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +38,15 @@ func TestApprovalNotesCreatedOnceWithRepoPRID(t *testing.T) {
 	}
 	var created *model.Note
 	for _, note := range notes {
-		if note.ID == "console:6" {
+		if note.Ref == "o/console#6" {
 			created = note
 		}
 	}
 	if created == nil {
-		t.Fatalf("no console:6 note")
+		t.Fatalf("no o/console#6 note")
+	}
+	if created.ID == "console:6" || !strings.HasPrefix(filepath.Base(created.FilePath), created.ID) {
+		t.Errorf("new review note should get a timestamp id that names its file: id=%q file=%q", created.ID, created.FilePath)
 	}
 	if created.Summary != "Approved:console:6 Fix date picker" || created.Status != model.StatusDone || created.Source != model.SourcePRReview || created.Repo != "console" {
 		t.Errorf("note = %+v", created)
@@ -104,5 +109,29 @@ func TestReopenApprovedNotesMatchesNewAndLegacySummary(t *testing.T) {
 		if note.Status != model.StatusActive {
 			t.Errorf("%s status = %s, want active", note.ID, note.Status)
 		}
+	}
+}
+
+func TestReviewNotesUseThePRCreatedTimeAndAnOwnerFallback(t *testing.T) {
+	noteStore := store.New(t.TempDir())
+	prCreated := time.Date(2026, 9, 20, 11, 0, 0, 0, time.Local)
+	reviews := []review.ActivityPR{
+		{Number: 3, Title: "A", URL: "https://github.com/acme/web/pull/3", Repository: "web", State: "APPROVED", ReviewedAt: time.Now(), CreatedAt: prCreated},
+		{Number: 4, Title: "B", URL: "not a pr link", Repository: "web", State: "APPROVED", ReviewedAt: time.Now()},
+	}
+	reviewNotesCmd(noteStore, reviews)()
+	notes, err := noteStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := map[string]*model.Note{}
+	for _, note := range notes {
+		refs[note.Ref] = note
+	}
+	if note := refs["acme/web#3"]; note == nil || !note.Created.Equal(prCreated) || note.ID != store.NoteID(prCreated) {
+		t.Errorf("review note should take the PR created time: %+v", note)
+	}
+	if refs["owner/web#4"] == nil {
+		t.Errorf("unknown owner should be stored as owner: %v", refs)
 	}
 }

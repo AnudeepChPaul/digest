@@ -49,8 +49,13 @@ func TestSyncPulseRunsAsOneLoop(t *testing.T) {
 		t.Error("the pulse should stop once nothing is syncing")
 	}
 	stopped := next.(Model)
+	if stopped.ensureSyncPulse() != nil {
+		t.Error("the pulse should stay stopped while nothing animates")
+	}
+	stopped.loadingGit = true
+	stopped.postMessage(messageSourceGit, messageProgress, "syncing")
 	if stopped.ensureSyncPulse() == nil {
-		t.Error("a stopped pulse should start again")
+		t.Error("a stopped pulse should start again once syncing starts")
 	}
 }
 

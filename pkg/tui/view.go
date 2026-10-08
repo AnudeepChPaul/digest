@@ -48,7 +48,7 @@ func (m Model) View() string {
 	if m.width < 40 {
 		return "Terminal window is too small."
 	}
-	screen := m.withPulseDots(m.renderScreen())
+	screen := m.renderScreen()
 	if m.ctrlCCount == 0 || m.mode == ViewDashboard || m.mode == ViewInlineEdit || m.mode == ViewNotifyInput {
 		return screen
 	}
@@ -137,6 +137,14 @@ func (m Model) renderScreen() string {
 	case ViewLinkMenu:
 		return m.renderLinkMenu()
 
+	case ViewRecreateConfirm:
+		return m.renderRecreateConfirm(modalWidth)
+
+	}
+
+	if m.mode == ViewRecreateRow {
+		pill := m.recreateRowPill()
+		return m.overlayUnderSelectedRow(pill, m.rightAlignedColumn(pill))
 	}
 
 	if m.mode == ViewNotifyInput {

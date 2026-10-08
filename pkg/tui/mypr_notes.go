@@ -209,12 +209,7 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 		if err != nil {
 			return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
 		}
-		byID := make(map[string]*model.Note, len(notes))
-		for _, note := range notes {
-			if note.Source == model.SourceMyPR {
-				byID[note.ID] = note
-			}
-		}
+		notesByRef := indexPRNotes(notes, model.SourceMyPR)
 		saved, seenChanged := false, false
 		save := func(note *model.Note) error {
 			if err := noteStore.Save(note); err != nil {
@@ -229,11 +224,15 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 			if !wasSeen || !jsonEqual(previous, current) {
 				seen[pr.Ref.URL], seenChanged = current, true
 			}
-			noteID := myPRNoteID(pr.Ref)
-			note, exists := byID[noteID]
+			ref := prNoteRef(pr.Ref.Owner, pr.Ref.Repo, pr.Ref.Number)
+			note, exists := notesByRef.find(ref, pr.Ref.Repo, pr.Ref.Number, myPRNoteID(pr.Ref))
 			switch {
 			case !wasSeen && !exists:
-				note = &model.Note{ID: noteID, Created: now, Updated: now, Status: model.StatusActive, Source: model.SourceMyPR, Repo: pr.Ref.Repo, Summary: myPRNoteSummary(pr.Ref, pr.Title)}
+				created := pr.CreatedAt.Local()
+				if pr.CreatedAt.IsZero() {
+					created = now
+				}
+				note = &model.Note{Ref: ref, Created: created, Updated: now, Status: model.StatusActive, Source: model.SourceMyPR, Repo: pr.Ref.Repo, Summary: myPRNoteSummary(pr.Ref, pr.Title)}
 				note.Body = composeMyPRBody(myPRBodyHead(pr), "", myPRUpdates(nil, pr, now))
 			case !exists:
 				continue
@@ -250,10 +249,13 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 				}
 				note.Body, note.Summary, note.Updated = body, summary, now
 			}
+			if note.Ref == "" {
+				note.Ref = ref
+			}
 			if err := save(note); err != nil {
 				return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
 			}
-			byID[noteID] = note
+			notesByRef.remember(note)
 		}
 		for url, state := range closed {
 			entry, wasSeen := seen[url]
@@ -262,7 +264,7 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 			}
 			delete(seen, url)
 			seenChanged = true
-			note, exists := byID[myPRNoteID(entry.Ref)]
+			note, exists := notesByRef.find(prNoteRef(entry.Ref.Owner, entry.Ref.Repo, entry.Ref.Number), entry.Ref.Repo, entry.Ref.Number, myPRNoteID(entry.Ref))
 			if !exists {
 				continue
 			}

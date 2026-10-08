@@ -39,7 +39,7 @@ func TestMyPRsSectionListsPRsAndCreatesNotes(t *testing.T) {
 	}
 	found := false
 	for _, note := range m.notes {
-		found = found || (note.ID == "MyPR:o:console:4" && note.Source == model.SourceMyPR)
+		found = found || (note.Ref == "o/console#4" && note.Source == model.SourceMyPR)
 	}
 	if !found {
 		t.Errorf("note missing from model: %+v", m.notes)

@@ -160,12 +160,12 @@ func TestBothDaySectionsCreateApprovalNotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := map[string]bool{}
+	refs := map[string]bool{}
 	for _, note := range notes {
-		ids[note.ID] = true
+		refs[note.Ref] = true
 	}
-	if !ids["console:1"] || !ids["console:2"] || len(notes) != 2 {
-		t.Errorf("notes = %v", ids)
+	if !refs[prNoteRef(prRef("console", 1).Owner, "console", 1)] || !refs[prNoteRef(prRef("console", 2).Owner, "console", 2)] || len(notes) != 2 {
+		t.Errorf("notes = %v", refs)
 	}
 }
 

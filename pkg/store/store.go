@@ -2,11 +2,14 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/model"
@@ -23,18 +26,63 @@ func New(root string) *NoteStore {
 	return &NoteStore{Root: paths.Expand(root)}
 }
 
+const (
+	noteExtension     = ".md"
+	doneExtension     = ".done.md"
+	archivedExtension = ".archived.md"
+)
+
+var (
+	ErrNoteFileMissing = errors.New("note file is missing")
+	saveLock           sync.Mutex
+	spacedDatePattern  = regexp.MustCompile(`(?m)^((?:created|updated):[ \t]+['"]?\d{4}-\d{2}-\d{2}) (\d{2}:)`)
+)
+
 func noteStem(t time.Time) string {
-	return t.Format("02-01-2006") + "-" + strconv.FormatInt(t.UnixMilli(), 10)
+	return t.Local().Format("02-01-2006") + "-" + strconv.FormatInt(t.UnixMilli(), 10)
 }
 
-func (s *NoteStore) newNotePath(created time.Time) (string, string) {
-	dir := filepath.Join(s.Root, created.Format("2006"), created.Format("01"))
+func NoteID(created time.Time) string {
+	return noteStem(created)
+}
+
+func IsStemID(id string) bool {
+	if len(id) < len("02-01-2006-0") {
+		return false
+	}
+	if _, err := time.Parse("02-01-2006", id[:10]); err != nil || id[10] != '-' {
+		return false
+	}
+	_, err := strconv.ParseInt(id[11:], 10, 64)
+	return err == nil
+}
+
+func FileName(n *model.Note) string {
+	finished := "-" + strconv.FormatInt(n.Updated.UnixMilli(), 10)
+	switch n.Status {
+	case model.StatusDone:
+		return n.ID + finished + doneExtension
+	case model.StatusArchived:
+		return n.ID + finished + archivedExtension
+	}
+	return n.ID + noteExtension
+}
+
+func idTaken(dir, stem string) bool {
+	if _, err := os.Stat(filepath.Join(dir, stem+noteExtension)); err == nil {
+		return true
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, stem+"-*"))
+	return len(matches) > 0
+}
+
+func (s *NoteStore) newNoteID(created time.Time) (string, string) {
+	dir := filepath.Join(s.Root, created.Local().Format("2006"), created.Local().Format("01"))
 	candidate := created
 	for {
 		stem := noteStem(candidate)
-		path := filepath.Join(dir, stem+".md")
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return path, stem
+		if !idTaken(dir, stem) {
+			return dir, stem
 		}
 		candidate = candidate.Add(time.Millisecond)
 	}
@@ -57,6 +105,16 @@ func (s *NoteStore) withinRoot(path string) error {
 }
 
 func (s *NoteStore) Save(n *model.Note) error {
+	return s.save(n, false)
+}
+
+func (s *NoteStore) Recreate(n *model.Note) error {
+	return s.save(n, true)
+}
+
+func (s *NoteStore) save(n *model.Note, createMissing bool) error {
+	saveLock.Lock()
+	defer saveLock.Unlock()
 	now := time.Now()
 	if n.Created.IsZero() {
 		n.Created = now
@@ -65,16 +123,16 @@ func (s *NoteStore) Save(n *model.Note) error {
 		n.Updated = now
 	}
 
-	targetPath := n.FilePath
-	if targetPath == "" {
-		path, stem := s.newNotePath(n.Created)
-		targetPath = path
+	currentPath := n.FilePath
+	isNew := currentPath == ""
+	if isNew {
+		dir, stem := s.newNoteID(n.Created)
 		if n.ID == "" {
 			n.ID = stem
 		}
+		currentPath = filepath.Join(dir, stem+noteExtension)
 	}
-
-	if err := s.withinRoot(targetPath); err != nil {
+	if err := s.withinRoot(currentPath); err != nil {
 		return err
 	}
 
@@ -82,7 +140,6 @@ func (s *NoteStore) Save(n *model.Note) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal frontmatter: %w", err)
 	}
-
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
 	buf.Write(yamlBytes)
@@ -92,15 +149,47 @@ func (s *NoteStore) Save(n *model.Note) error {
 		buf.WriteString("\n")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(targetPath), paths.PrivateDirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(currentPath), paths.PrivateDirMode); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
+	if err := writeNoteFile(currentPath, buf.Bytes(), isNew || createMissing); err != nil {
+		return err
+	}
+	n.FilePath = currentPath
 
-	if err := os.WriteFile(targetPath, buf.Bytes(), paths.PrivateFileMode); err != nil {
+	if !IsStemID(n.ID) {
+		return nil
+	}
+	targetPath := filepath.Join(filepath.Dir(currentPath), FileName(n))
+	if targetPath == currentPath {
+		return nil
+	}
+	if err := os.Rename(currentPath, targetPath); err != nil {
+		return fmt.Errorf("failed to rename note file: %w", err)
+	}
+	n.FilePath = targetPath
+	return nil
+}
+
+func writeNoteFile(path string, content []byte, create bool) error {
+	flags := os.O_WRONLY | os.O_TRUNC
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, paths.PrivateFileMode)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", ErrNoteFileMissing, path)
+	}
+	if err != nil {
 		return fmt.Errorf("failed to write note file: %w", err)
 	}
-
-	n.FilePath = targetPath
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		return fmt.Errorf("failed to write note file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to write note file: %w", err)
+	}
 	return nil
 }
 
@@ -134,7 +223,8 @@ func Load(path string) (*model.Note, error) {
 	}
 
 	var note model.Note
-	if err := yaml.Unmarshal([]byte(parts[0]), &note); err != nil {
+	frontmatter := spacedDatePattern.ReplaceAllString(parts[0], "${1}T${2}")
+	if err := yaml.Unmarshal([]byte(frontmatter), &note); err != nil {
 		return nil, fmt.Errorf("yaml parse error in %s: %w", path, err)
 	}
 

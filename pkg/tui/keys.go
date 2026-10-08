@@ -169,6 +169,9 @@ const (
 	actionDeleteSearchResult
 
 	actionDismissError
+
+	actionRecreateNote
+	actionDiscardMissingNote
 )
 
 type keyBinding struct {
@@ -264,6 +267,8 @@ func (m Model) activeBindings() []keyBinding {
 		return m.setupKeyBindings()
 	case ViewSetupDiscard:
 		return setupDiscardBindings()
+	case ViewRecreateConfirm, ViewRecreateRow:
+		return recreateNoteBindings()
 	}
 	return nil
 }

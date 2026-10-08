@@ -61,12 +61,22 @@ func TestReviewRunsListedUnderJobsOnStartup(t *testing.T) {
 	}
 }
 
-func TestPulseKeepsTickingWhileReviewRuns(t *testing.T) {
+func TestPulseStopsWhenOnlyAReviewRuns(t *testing.T) {
 	m, _, _ := reviewRunsModel(t)
 	m.loadingGit = false
+	m.messages = nil
+	if _, cmd := m.Update(syncPulseTickMsg{}); cmd != nil {
+		t.Errorf("pulse kept ticking with no animated header icon")
+	}
+}
+
+func TestPulseKeepsTickingWhileTheHeaderSyncSpinnerShows(t *testing.T) {
+	m, _, _ := reviewRunsModel(t)
+	m.messages, m.loadingGit = nil, true
+	m.postMessage(messageSourceGit, messageProgress, "syncing")
 	next, cmd := m.Update(syncPulseTickMsg{})
 	if cmd == nil || next.(Model).syncPulseFrame != m.syncPulseFrame+1 {
-		t.Errorf("pulse stopped while a review is running")
+		t.Errorf("pulse stopped while the header spinner shows")
 	}
 }
 

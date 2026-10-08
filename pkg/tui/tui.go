@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -21,6 +20,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/notify"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/running"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 	"github.com/AnudeepChPaul/digest/pkg/store"
 	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
@@ -62,6 +62,8 @@ const (
 	ViewNotifyInput
 	ViewSetup
 	ViewSetupDiscard
+	ViewRecreateConfirm
+	ViewRecreateRow
 )
 
 type NavItemKind int
@@ -146,11 +148,6 @@ type localReviewState struct {
 type jobAbortedMsg struct {
 	jobName string
 	err     error
-}
-
-type notesSavedMsg struct {
-	errs     []error
-	savedIDs []string
 }
 
 type gitDay = sourcecontrol.Day
@@ -350,6 +347,10 @@ type Model struct {
 	initialSelectionPending bool
 	selectAfterReload       string
 	awaitingNewNoteSave     bool
+	notesComplete           bool
+	loadingAllNotes         bool
+	missingSave             *failedNoteSave
+	missingSaveReturnMode   ViewMode
 	pendingSortChosen       bool
 	syncOnLoad              bool
 	reviewRuns              []review.ReviewRun
@@ -434,8 +435,9 @@ type Model struct {
 }
 
 type loadNotesMsg struct {
-	notes []*model.Note
-	err   error
+	notes    []*model.Note
+	err      error
+	complete bool
 }
 
 func autoSyncTickCmd(intervalSecs int) tea.Cmd {
@@ -521,7 +523,8 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 		bannerWaveActive:        true,
 	}
 	m.sessionCtx, m.cancelSession = context.WithCancel(context.Background())
-	m.notes, m.startupNotesErr = m.store.List()
+	m.notes, m.startupNotesErr = m.store.ListDashboard(m.currentDate)
+	m.loadingAllNotes = true
 	m.actionUsage = loadActionUsage(cfg.CacheDir())
 	m.notifyEntries = listNotifyEntries(cfg.Root()).entries
 	m.fetchedPreviousDay = m.previousNoteDay()
@@ -535,7 +538,7 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	m.refreshBragRuns()
 	m.applyAutomationRuns(automation.ListRuns(m.automationRoot()))
 	m.reviewPolling = m.anyReviewRunning() || m.anyBragRunning() || m.anyAutomationRunning()
-	m.syncPulseRunning = m.anythingBusy()
+	m.syncPulseRunning = m.headerAnimating()
 	m.runStatePolling = m.isAnyDryRunInFlight() || m.isAnyJobRunning()
 	if startupErr != nil {
 		m.showError("CONFIG ERROR", startupErr)
@@ -565,7 +568,7 @@ func (m *Model) loadGitOnStartup() {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.startupNotesCmd(), tickBannerWaveCmd(), m.loadCommitsCmd(), m.startupHintCmd()}
+	cmds := []tea.Cmd{m.startupNotesCmd(), loadAllNotesCmd(m.store), tickBannerWaveCmd(), m.loadCommitsCmd(), m.startupHintCmd()}
 	if m.syncPulseRunning {
 		cmds = append(cmds, tickSyncPulseCmd())
 	}
@@ -594,53 +597,12 @@ func (m Model) startupNotesCmd() tea.Cmd {
 }
 
 func (m Model) loadNotesCmd() tea.Msg {
-	notes, err := m.store.List()
+	if m.notesComplete {
+		notes, err := m.store.List()
+		return loadNotesMsg{notes: notes, err: err, complete: true}
+	}
+	notes, err := m.store.ListDashboard(m.currentDate)
 	return loadNotesMsg{notes: notes, err: err}
-}
-
-func copyNotes(notes []*model.Note) []model.Note {
-	copies := make([]model.Note, 0, len(notes))
-	for _, note := range notes {
-		if note != nil {
-			copies = append(copies, *note)
-		}
-	}
-	return copies
-}
-
-func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
-	noteStore := m.store
-	copies := copyNotes(notes)
-	return func() tea.Msg {
-		var errs []error
-		var savedIDs []string
-		for i := range copies {
-			if err := noteStore.Save(&copies[i]); err != nil {
-				errs = append(errs, fmt.Errorf("save %q: %w", copies[i].Summary, err))
-				continue
-			}
-			savedIDs = append(savedIDs, copies[i].ID)
-		}
-		return notesSavedMsg{errs: errs, savedIDs: savedIDs}
-	}
-}
-
-func (m Model) deleteNotesCmd(notes ...*model.Note) tea.Cmd {
-	noteStore, automationRoot := m.store, m.automationRoot()
-	copies := copyNotes(notes)
-	return func() tea.Msg {
-		var errs []error
-		for i := range copies {
-			if err := noteStore.Delete(&copies[i]); err != nil {
-				errs = append(errs, fmt.Errorf("delete %q: %w", copies[i].Summary, err))
-				continue
-			}
-			if err := automation.Dismiss(automationRoot, copies[i].ID); err != nil && !errors.Is(err, automation.ErrInvalidNoteID) {
-				errs = append(errs, fmt.Errorf("remove automation for %q: %w", copies[i].Summary, err))
-			}
-		}
-		return notesSavedMsg{errs: errs}
-	}
 }
 
 func (m *Model) refreshArchivedViewport() {
@@ -1248,7 +1210,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickBannerWaveCmd()
 
 	case syncPulseTickMsg:
-		if m.anythingBusy() {
+		if m.headerAnimating() {
 			m.syncPulseFrame++
 			return m, tickSyncPulseCmd()
 		}
@@ -1285,14 +1247,10 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSearchExported(msg)
 
 	case notesSavedMsg:
-		if len(msg.errs) > 0 {
-			m.showError("STORE ERROR", msg.errs...)
-		}
-		if m.awaitingNewNoteSave && len(msg.savedIDs) == 1 {
-			m.selectAfterReload = msg.savedIDs[0]
-		}
-		m.awaitingNewNoteSave = false
-		return m, m.loadNotesCmd
+		return m.applySavedNotes(msg)
+
+	case notesDeletedMsg:
+		return m.applyDeletedNotes(msg)
 
 	case autoSyncTickMsg:
 		if m.cfg.GitEnabled() && m.cfg.GitAutoSyncInterval > 0 {
@@ -1332,7 +1290,13 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case loadNotesMsg:
-		m.notes = msg.notes
+		if msg.complete {
+			m.loadingAllNotes = false
+		}
+		if msg.err == nil && (msg.complete || !m.notesComplete) {
+			m.notes = msg.notes
+			m.notesComplete = m.notesComplete || msg.complete
+		}
 		if m.initialSelectionPending {
 			m.initialSelectionPending = false
 			m.selectLaunchItem()
@@ -1425,7 +1389,7 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.saved {
 			return m, nil
 		}
-		return m.Update(loadNotesMsg{notes: msg.notes})
+		return m.Update(loadNotesMsg{notes: msg.notes, complete: true})
 
 	case gitPendingMsg:
 		var cmds []tea.Cmd
@@ -1751,8 +1715,13 @@ func Run(cfg *config.Config, startupErr error, configPath string, startInSetup b
 	if startInSetup {
 		model = model.startSetup(configPath)
 	}
+	release, err := running.Mark(cfg.TUIMarkerPath())
+	if err != nil {
+		return err
+	}
+	defer release()
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
 

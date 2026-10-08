@@ -955,7 +955,7 @@ func (m Model) renderReviewRunningIndicator() string {
 }
 
 func (m Model) renderPulseIndicator(label string) string {
-	return m.renderJobPulseDot() + " " + reviewingStyle.Render(label)
+	return reviewingStyle.Render(label)
 }
 
 func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int) string {
@@ -1046,16 +1046,12 @@ func isRepeatOfLatest(note *model.Note, summary string, reviewedAt time.Time) bo
 
 var reviewNotesMu sync.Mutex
 
-func prReviewNotesByID(noteStore *store.NoteStore) (map[string]*model.Note, error) {
+func prReviewNotes(noteStore *store.NoteStore) (prNoteIndex, error) {
 	notes, err := noteStore.List()
 	if err != nil {
-		return nil, err
+		return prNoteIndex{}, err
 	}
-	byID := make(map[string]*model.Note, len(notes))
-	for _, note := range notes {
-		byID[note.ID] = note
-	}
-	return byID, nil
+	return indexPRNotes(notes, ""), nil
 }
 
 func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea.Cmd {
@@ -1067,21 +1063,25 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 	return func() tea.Msg {
 		reviewNotesMu.Lock()
 		defer reviewNotesMu.Unlock()
-		byID, err := prReviewNotesByID(noteStore)
+		notesByRef, err := prReviewNotes(noteStore)
 		if err != nil {
 			return loadNotesMsg{err: err}
 		}
 		saved := false
 		for _, pr := range ordered {
-			noteID := reviewNoteID(pr.Repository, pr.Number)
+			ref := prNoteRef(activityOwner(pr), pr.Repository, pr.Number)
 			reviewedAt := pr.ReviewedAt.Local()
 			summary := reviewNoteSummary(pr.State, pr.Repository, pr.Number, pr.Title)
-			note, exists := byID[noteID]
+			note, exists := notesByRef.find(ref, pr.Repository, pr.Number, reviewNoteID(pr.Repository, pr.Number))
 			switch {
 			case !exists:
+				created := pr.CreatedAt.Local()
+				if pr.CreatedAt.IsZero() {
+					created = reviewedAt
+				}
 				note = &model.Note{
-					ID:      noteID,
-					Created: reviewedAt,
+					Ref:     ref,
+					Created: created,
 					Source:  model.SourcePRReview,
 					Summary: summary,
 					Repo:    pr.Repository,
@@ -1101,17 +1101,20 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 			}
 			note.Status = reviewNoteStatus(pr.State)
 			note.Updated = reviewedAt
+			if note.Ref == "" {
+				note.Ref = ref
+			}
 			if err := noteStore.Save(note); err != nil {
 				return loadNotesMsg{err: err}
 			}
-			byID[noteID] = note
+			notesByRef.remember(note)
 			saved = true
 		}
 		if !saved {
 			return nil
 		}
 		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err}
+		return loadNotesMsg{notes: notes, err: err, complete: true}
 	}
 }
 
@@ -1122,13 +1125,17 @@ func reopenApprovedNotesCmd(noteStore *store.NoteStore, pending []GitPRItem, req
 	return func() tea.Msg {
 		reviewNotesMu.Lock()
 		defer reviewNotesMu.Unlock()
-		byID, err := prReviewNotesByID(noteStore)
+		notesByRef, err := prReviewNotes(noteStore)
 		if err != nil {
 			return loadNotesMsg{err: err}
 		}
 		reopened := false
 		for _, item := range pending {
-			note, exists := byID[reviewNoteID(item.Repository, item.Number)]
+			owner := ""
+			if item.PR != nil {
+				owner = item.PR.Ref.Owner
+			}
+			note, exists := notesByRef.find(prNoteRef(owner, item.Repository, item.Number), item.Repository, item.Number, reviewNoteID(item.Repository, item.Number))
 			if !exists || note.Source != model.SourcePRReview || note.Status != model.StatusDone || !isApprovedSummary(note.Summary) || !note.Updated.Before(requestedSince) {
 				continue
 			}
@@ -1143,7 +1150,7 @@ func reopenApprovedNotesCmd(noteStore *store.NoteStore, pending []GitPRItem, req
 			return nil
 		}
 		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err}
+		return loadNotesMsg{notes: notes, err: err, complete: true}
 	}
 }
 

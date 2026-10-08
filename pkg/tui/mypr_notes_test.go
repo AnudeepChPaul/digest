@@ -57,7 +57,7 @@ func TestMyPRNoteCreatedWithLinkDescriptionAndUpdates(t *testing.T) {
 	})
 	msg := runMyPRNotes(t, noteStore, seenPath, []review.QueuedPR{pr}, nil, now)
 	note := onlyMyPRNote(t, noteStore)
-	if note.ID != "MyPR:org:console:4" || note.Summary != "NewPR: org:console:4: Fix picker" || note.Source != model.SourceMyPR || note.Status != model.StatusActive || note.Repo != "console" {
+	if note.Ref != "org/console#4" || note.ID != store.NoteID(pr.CreatedAt) || !note.Created.Equal(pr.CreatedAt) || note.Summary != "NewPR: org:console:4: Fix picker" || note.Source != model.SourceMyPR || note.Status != model.StatusActive || note.Repo != "console" {
 		t.Errorf("note = %+v", note)
 	}
 	lines := strings.Split(note.Body, "\n")

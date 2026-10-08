@@ -218,3 +218,16 @@ func Dismiss(root, noteID string) error {
 	}
 	return os.RemoveAll(StateDir(root, noteID))
 }
+
+func AnyRunning(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && running(root, entry.Name()) {
+			return true
+		}
+	}
+	return false
+}

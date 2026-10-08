@@ -113,8 +113,10 @@ func init() {
 		actionGitCursorUp:     Model.gitCursorUp,
 		actionOpenGitItem:     Model.openGitItem,
 
-		actionConfirmDelete: Model.confirmDelete,
-		actionCancelDelete:  Model.cancelDelete,
+		actionConfirmDelete:      Model.confirmDelete,
+		actionRecreateNote:       Model.confirmRecreateNote,
+		actionDiscardMissingNote: Model.discardMissingNote,
+		actionCancelDelete:       Model.cancelDelete,
 
 		actionConfirmReview: Model.confirmReview,
 		actionCancelReview:  Model.cancelReview,
@@ -304,7 +306,7 @@ func (m Model) countCtrlCToQuit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) dismissSyncErrors(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.syncErrors = nil
 	m.dismissErrorMessages()
-	return m, nil
+	return m, m.ensureSyncPulse()
 }
 
 func (m Model) syncFromKey(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -362,7 +364,7 @@ func (m Model) jumpToToday(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentDate = time.Now()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.scheduleDaySync()
+	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
 }
 
 func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -378,7 +380,7 @@ func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.archivedViewport = viewport.New(innerWidth, innerHeight)
 	m.archivedViewport.SetContent(m.renderArchivedContent(innerWidth, m.archivedSelected))
 	m.mode = ViewArchived
-	return m, nil
+	return m, m.ensureAllNotes()
 }
 
 func (m Model) openSelectedPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -500,7 +502,7 @@ func (m Model) previousDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.scheduleDaySync()
+	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
 }
 
 func (m Model) nextDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -508,7 +510,7 @@ func (m Model) nextDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, m.scheduleDaySync()
+	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
 }
 
 func (m Model) dashboardCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -540,7 +542,7 @@ func (m Model) openSearch(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = ViewSearch
 	m.keepSearchSelectionVisible()
 	m.searchInput.Focus()
-	return m, textinput.Blink
+	return m, tea.Batch(textinput.Blink, m.ensureAllNotes())
 }
 
 func (m Model) closeGitDetails(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -620,6 +622,9 @@ func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		n.Updated = m.currentDate
 	}
 	m.afterPreviewArchive(returnMode)
+	if returnMode == ViewPreview || returnMode == ViewSearchPreview {
+		return m, m.saveNotesFromPreviewCmd(targets...)
+	}
 	return m, m.saveNotesCmd(targets...)
 }
 
@@ -1053,7 +1058,7 @@ func (m Model) saveNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.mode = m.returnFromEdit()
-	return m, m.saveNotesCmd(m.currentNote)
+	return m, m.saveNotesFromPreviewCmd(m.currentNote)
 }
 
 func (m Model) copyEditor(tea.KeyMsg) (tea.Model, tea.Cmd) {

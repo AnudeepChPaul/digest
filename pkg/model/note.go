@@ -35,9 +35,14 @@ type Note struct {
 	Summary string    `yaml:"summary"`
 	Subject string    `yaml:"subject,omitempty"`
 	Repo    string    `yaml:"repo,omitempty"`
+	Ref     string    `yaml:"ref,omitempty"`
 
 	Automated string `yaml:"automated,omitempty"`
 
 	Body     string `yaml:"-"`
 	FilePath string `yaml:"-"`
+}
+
+func (n *Note) MarksPreviousDay() bool {
+	return n.Status != StatusArchived && (n.Source == SourceManual || n.Source == "")
 }

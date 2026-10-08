@@ -24,15 +24,19 @@ func tickSyncPulseCmd() tea.Cmd {
 }
 
 func (m *Model) ensureSyncPulse() tea.Cmd {
-	if m.syncPulseRunning {
+	if m.syncPulseRunning || !m.headerAnimating() {
 		return nil
 	}
 	m.syncPulseRunning = true
 	return tickSyncPulseCmd()
 }
 
-func (m Model) anythingBusy() bool {
-	return m.loadingGit || m.loadingCommits || m.isAnyJobRunning() || m.isAnyDryRunInFlight() || m.anyReviewRunning() || m.anyBragRunning()
+func (m Model) headerAnimating() bool {
+	if !m.loadingGit && !m.loadingCommits {
+		return false
+	}
+	message, found := m.activeMessage()
+	return found && message.kind == messageProgress
 }
 
 type waveStyles struct {
@@ -98,34 +102,17 @@ var (
 		"#89B4FA", "#B4BEFE", "#C6A0F6", "#F5C2E7",
 		"#F9E2AF", "#F5C2E7", "#B4BEFE", "#74C7EC",
 	)
-	jobPulseStyles = pulseStyles(
-		"#F9E2AF", "#EED49F", "#F5BDE6", "#C6A0F6",
-		"#89B4FA", "#74C7EC", "#8BD5CA", "#A6E3A1",
-	)
 	jobPulseTextStyle  = lipgloss.NewStyle().Foreground(colourYellow).Bold(true)
 	selectedPendingBox = lipgloss.NewStyle().Bold(true).Foreground(colourText)
 	selectedDoneBox    = lipgloss.NewStyle().Bold(true).Foreground(colourGreen)
 )
 
-const jobPulseMarker = "\x1b[8;9m●\x1b[28;29m"
-
-func (m Model) renderJobPulseDot() string {
-	return jobPulseMarker
-}
-
-func (m Model) withPulseDots(screen string) string {
-	if !strings.Contains(screen, jobPulseMarker) {
-		return screen
-	}
-	return strings.ReplaceAll(screen, jobPulseMarker, jobPulseStyles[m.syncPulseFrame%len(jobPulseStyles)].Render("●"))
-}
-
 func (m Model) renderDryRunIndicator() string {
-	return m.renderJobPulseDot() + " " + jobPulseTextStyle.Render("dry run...")
+	return jobPulseTextStyle.Render("dry run...")
 }
 
 func (m Model) renderJobRunningIndicator() string {
-	return m.renderJobPulseDot() + " " + jobPulseTextStyle.Render("running...")
+	return jobPulseTextStyle.Render("running...")
 }
 
 var readBuildInfo = debug.ReadBuildInfo

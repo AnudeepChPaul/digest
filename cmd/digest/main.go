@@ -21,6 +21,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/habit"
 	"github.com/AnudeepChPaul/digest/pkg/install"
 	"github.com/AnudeepChPaul/digest/pkg/jobs"
+	"github.com/AnudeepChPaul/digest/pkg/migrate"
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/notify"
 	"github.com/AnudeepChPaul/digest/pkg/paths"
@@ -113,6 +114,7 @@ func printUsage() {
 	fmt.Println("  brag           Generate a brag (--week 2026-W40 | --month 2026-10 | --year 2026) [--regenerate]")
 	fmt.Println("  automation     Draft or create a note's ticket (--note <id> --name <automation> --phase draft|create)")
 	fmt.Println("  notify-due     Send due @notify reminders (run every minute by launchd)")
+	fmt.Println("  migrate        Rename note files by status and give older and PR notes timestamp ids (quit the TUI first)")
 	fmt.Println("  install        Install missing tools, notifications and a shortcut, asking before each")
 	fmt.Println("  install notifications    Install the launchd agent that runs notify-due every minute")
 	fmt.Println("  uninstall notifications  Remove that launchd agent")
@@ -315,6 +317,22 @@ func main() {
 			fmt.Println("Wrote " + written)
 		}
 		exitForJob("export config", false, err)
+
+	case "migrate":
+		prCreatedAt := func(url string) (time.Time, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return review.FetchPRCreatedAt(ctx, url)
+		}
+		_, err := migrate.Run(migrate.Options{
+			NotesDir:      cfg.NotesDir(),
+			Root:          cfg.Root(),
+			AutomationDir: cfg.AutomationDir(),
+			TUIMarker:     cfg.TUIMarkerPath(),
+			Out:           os.Stdout,
+			PRCreatedAt:   prCreatedAt,
+		})
+		exitForJob("migrate", false, err)
 
 	case "doctor":
 		results := doctor.Check(cfg, exec.LookPath)

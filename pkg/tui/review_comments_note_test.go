@@ -16,18 +16,18 @@ func changesRecord(comments string, reviewedAt time.Time) review.ActivityPR {
 	return review.ActivityPR{Number: 7, Title: "Fix", URL: changesPRURL, Repository: "console", State: "CHANGES_REQUESTED", ReviewedAt: reviewedAt, Comments: comments}
 }
 
-func loadNote(t *testing.T, noteStore *store.NoteStore, id string) *model.Note {
+func loadNote(t *testing.T, noteStore *store.NoteStore, ref string) *model.Note {
 	t.Helper()
 	notes, err := noteStore.List()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, note := range notes {
-		if note.ID == id {
+		if note.Ref == ref {
 			return note
 		}
 	}
-	t.Fatalf("no note %s", id)
+	t.Fatalf("no note %s", ref)
 	return nil
 }
 
@@ -35,7 +35,7 @@ func TestRequestChangesNoteKeepsTheCommentsOnCreation(t *testing.T) {
 	noteStore := store.New(t.TempDir())
 	reviewedAt := time.Date(2026, 10, 5, 14, 0, 0, 0, time.Local)
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("Please add tests", reviewedAt)})()
-	note := loadNote(t, noteStore, "console:7")
+	note := loadNote(t, noteStore, "o/console#7")
 	if !strings.HasSuffix(note.Body, "\n\n"+changesPRURL) || !strings.Contains(note.Body, "Please add tests") || !strings.Contains(note.Body, "2026-10-05 14:00") {
 		t.Errorf("body = %q", note.Body)
 	}
@@ -49,7 +49,7 @@ func TestRequestChangesAppendsCommentsOnALaterRound(t *testing.T) {
 	firstAt := time.Date(2026, 10, 5, 10, 0, 0, 0, time.Local)
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("First round", firstAt)})()
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("Second round see https://github.com/o/other/pull/9", firstAt.Add(time.Hour))})()
-	note := loadNote(t, noteStore, "console:7")
+	note := loadNote(t, noteStore, "o/console#7")
 	second := strings.Index(note.Body, "Second round")
 	first := strings.Index(note.Body, "First round")
 	if second < 0 || first < 0 || second > first {
@@ -69,7 +69,7 @@ func TestRequestChangesAppendsCommentsOnALaterRound(t *testing.T) {
 func TestSyncedReviewWithoutCommentsAddsNoBlock(t *testing.T) {
 	noteStore := store.New(t.TempDir())
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("", time.Now())})()
-	if body := loadNote(t, noteStore, "console:7").Body; body != changesPRURL {
+	if body := loadNote(t, noteStore, "o/console#7").Body; body != changesPRURL {
 		t.Errorf("body = %q", body)
 	}
 }
@@ -94,12 +94,12 @@ func TestCommentsLandEvenWhenTheSyncedRecordArrivedFirst(t *testing.T) {
 	syncedAt := time.Date(2026, 10, 5, 14, 0, 0, 0, time.Local)
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("", syncedAt)})()
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("Late comments", syncedAt.Add(10*time.Second))})()
-	note := loadNote(t, noteStore, "console:7")
+	note := loadNote(t, noteStore, "o/console#7")
 	if !strings.Contains(note.Body, "Late comments") || strings.Count(note.Body, "RequestedChanges") != 0 {
 		t.Errorf("body = %q", note.Body)
 	}
 	reviewNotesCmd(noteStore, []review.ActivityPR{changesRecord("Late comments", syncedAt.Add(20*time.Second))})()
-	if body := loadNote(t, noteStore, "console:7").Body; strings.Count(body, "Late comments") != 1 {
+	if body := loadNote(t, noteStore, "o/console#7").Body; strings.Count(body, "Late comments") != 1 {
 		t.Errorf("block duplicated: %q", body)
 	}
 }

@@ -184,7 +184,7 @@ func (m Model) openBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if rows := m.bragRows(); m.bragSelected >= len(rows) {
 		m.bragSelected = max(len(rows)-1, 0)
 	}
-	return m, nil
+	return m, m.ensureAllNotes()
 }
 
 func (m Model) closeBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
