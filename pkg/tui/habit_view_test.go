@@ -8,6 +8,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func tagRowsModel(t *testing.T) Model {
@@ -77,6 +78,15 @@ func TestHeaderShowsTheStreakAndWeek(t *testing.T) {
 	)
 	if header := stripANSI(m.renderHeader()); !strings.Contains(header, "🔥 2-day streak") || !strings.Contains(header, "closed this week") {
 		t.Errorf("header should show the streak:\n%s", header)
+	}
+	headerLines := plainLines(m.renderHeader())
+	topLine, middleLine, bottomLine := headerLines[1], headerLines[2], headerLines[3]
+	streakAt, versionAt := strings.Index(topLine, "🔥"), strings.Index(middleLine, "v"+appVersion)
+	if streakAt < 0 || versionAt < 0 || !strings.Contains(topLine, "closed this week") || lipgloss.Width(topLine[:streakAt]) != lipgloss.Width(middleLine[:versionAt]) {
+		t.Errorf("progress should sit on the top line above the version:\n%s\n%s", topLine, middleLine)
+	}
+	if strings.Contains(bottomLine, "streak") || strings.Contains(bottomLine, "closed this week") {
+		t.Errorf("bottom line should hold only the banner: %q", bottomLine)
 	}
 }
 

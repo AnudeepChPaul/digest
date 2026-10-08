@@ -1529,11 +1529,14 @@ func (m Model) renderHeader() string {
 	}
 
 	bottomLine := m.renderBannerLine(bannerBottomRow)
-	if progress := m.progressText(); progress != "" && m.width-4-lipgloss.Width(bottomLine)-lipgloss.Width(progress) > 2 {
-		bottomLine += safeRepeat(" ", m.width-4-lipgloss.Width(bottomLine)-lipgloss.Width(progress)) + progress
-	}
 
 	topLine := m.renderBannerLine(bannerTopRow)
+	if progress := m.progressText(); progress != "" {
+		versionColumn := lipgloss.Width(m.renderBannerLine(bannerMiddleRow)) + 2
+		if paddedLine := topLine + safeRepeat(" ", versionColumn-lipgloss.Width(topLine)) + progress; lipgloss.Width(paddedLine) <= m.width-4 {
+			topLine = paddedLine
+		}
+	}
 	if message := m.renderActiveMessage(m.width - 4 - lipgloss.Width(topLine) - 4); message != "" {
 		topLine += safeRepeat(" ", m.width-4-lipgloss.Width(topLine)-lipgloss.Width(message)) + message
 	}
