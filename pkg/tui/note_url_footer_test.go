@@ -41,15 +41,33 @@ func notePreviewModel(t *testing.T, source model.Source, body string) Model {
 	return m
 }
 
-func TestEnterOpensPRReviewNoteLink(t *testing.T) {
+func TestEnterEditsPRReviewNoteInsteadOfOpeningTheLink(t *testing.T) {
 	opened := stubOpenURL(t)
 	m := notePreviewModel(t, model.SourcePRReview, "https://github.com/acme/console/pull/19162")
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ViewEdit || len(*opened) != 0 {
+		t.Errorf("mode=%v opened=%v", m.mode, *opened)
+	}
+}
+
+func TestOOpensPRReviewNoteLink(t *testing.T) {
+	opened := stubOpenURL(t)
+	m := notePreviewModel(t, model.SourcePRReview, "https://github.com/acme/console/pull/19162")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
 	if m.mode != ViewPreview {
 		t.Errorf("mode = %v", m.mode)
 	}
 	if len(*opened) != 1 || (*opened)[0] != "https://github.com/acme/console/pull/19162" {
 		t.Errorf("opened %v", *opened)
+	}
+}
+
+func TestOInManualNotePreviewOpensNothing(t *testing.T) {
+	opened := stubOpenURL(t)
+	m := notePreviewModel(t, model.SourceManual, "https://github.com/o/r/pull/1")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if m.mode != ViewPreview || len(*opened) != 0 {
+		t.Errorf("mode=%v opened=%v", m.mode, *opened)
 	}
 }
 
@@ -81,11 +99,11 @@ func TestEnterInManualNoteEditsInsteadOfOpeningTheLink(t *testing.T) {
 }
 
 func TestPRReviewNoteFooter(t *testing.T) {
-	prNote := notePreviewModel(t, model.SourcePRReview, "https://github.com/o/r/pull/1").View()
-	if !strings.Contains(prNote, "enter") || !strings.Contains(prNote, "Open") || !strings.Contains(prNote, "PR") {
-		t.Errorf("pr-review footer missing enter Open PR")
+	prNote := stripANSI(notePreviewModel(t, model.SourcePRReview, "https://github.com/o/r/pull/1").View())
+	if !strings.Contains(prNote, "enter") || !strings.Contains(prNote, "Edit") || !strings.Contains(prNote, " o ") || !strings.Contains(prNote, "Open") {
+		t.Errorf("pr-review footer should offer enter Edit and o Open PR:\n%s", prNote)
 	}
-	if manual := notePreviewModel(t, model.SourceManual, "x").View(); strings.Contains(manual, "Open") || !strings.Contains(manual, "Edit") {
+	if manual := stripANSI(notePreviewModel(t, model.SourceManual, "x").View()); strings.Contains(manual, "Open") || !strings.Contains(manual, "Edit") {
 		t.Errorf("manual note footer should offer enter Edit, not Open PR")
 	}
 }

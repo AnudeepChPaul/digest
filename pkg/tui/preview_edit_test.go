@@ -35,11 +35,11 @@ func TestLeavingThePreviewEditReturnsToThePreview(t *testing.T) {
 	}
 }
 
-func TestEnterInPRReviewNotePreviewDoesNotEdit(t *testing.T) {
+func TestEnterInPRReviewNotePreviewEdits(t *testing.T) {
 	stubOpenURL(t)
 	m := notePreviewModel(t, model.SourcePRReview, "https://github.com/acme/console/pull/19162")
-	if m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter}); m.mode != ViewPreview {
-		t.Errorf("PR review note should stay in the preview, mode=%v", m.mode)
+	if m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter}); m.mode != ViewEdit {
+		t.Errorf("PR review note should open the editor, mode=%v", m.mode)
 	}
 }
 
