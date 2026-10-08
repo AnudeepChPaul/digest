@@ -10,8 +10,8 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/brag"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -292,7 +292,7 @@ func (m Model) editBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.bragNotice = ""
 	m.mode = ViewBragEdit
-	m.editor.SetValue(m.bragEntry.Body())
+	m.replaceEditorText(m.bragEntry.Body())
 	m.editor.Focus()
 	startEditorAtTop(m.editor)
 	return m, textarea.Blink

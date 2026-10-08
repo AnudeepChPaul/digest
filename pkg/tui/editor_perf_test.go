@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+
 	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -104,5 +105,22 @@ func BenchmarkPulseWhileEditingALongNote(b *testing.B) {
 		next, _ := m.Update(syncPulseTickMsg{})
 		m = next.(Model)
 		_ = m.View()
+	}
+}
+
+func TestOpeningAnotherNoteRedrawsTheEditor(t *testing.T) {
+	m := noteSelectedModel(t)
+	m.width, m.height = 120, 40
+	first := *m.notes[0]
+	first.Summary, first.Body = "alpha summary", "alpha body"
+	second := first
+	second.Summary, second.Body = "bravo summary", "bravo body"
+	next, _ := m.beginNoteEdit(&first, ViewDashboard)
+	m = next.(Model)
+	_ = m.View()
+	next, _ = m.beginNoteEdit(&second, ViewDashboard)
+	m = next.(Model)
+	if view := stripANSI(m.View()); !strings.Contains(view, "bravo summary") {
+		t.Errorf("editor still shows the previous note:\n%s", view)
 	}
 }

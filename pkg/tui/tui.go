@@ -23,10 +23,10 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"

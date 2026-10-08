@@ -94,3 +94,18 @@ tarball_sha=$(curl -fsSL "$tarball_url" | shasum -a 256 | cut -d' ' -f1)
 sed -i '' -E "s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
 printf '\033[32m✓\033[0m formula points at %s (%s)\n' "$release_tag" "$tarball_sha"
 '''
+
+[tasks.bench]
+description = "Print performance benchmarks at 1, 100, 1k and 10k notes"
+quiet = true
+run = "go run ./cmd/bench run"
+
+[tasks."bench:full"]
+description = "Print performance benchmarks up to 100k notes"
+quiet = true
+run = "go run ./cmd/bench run --sizes 1,100,1000,10000,100000"
+
+[tasks."bench:record"]
+description = "Measure benchmarks and record them in BENCHMARK.md (used by the release workflow)"
+quiet = true
+run = "go run ./cmd/bench record"

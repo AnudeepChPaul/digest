@@ -1,7 +1,8 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )

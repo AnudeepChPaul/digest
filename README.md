@@ -72,6 +72,12 @@ Inside the dashboard, `,` opens settings and the footer lists the keys for the c
 
 macOS, git and the GitHub CLI (`gh`). Optional: tmux, Neovim, terminal-notifier and Claude Code for AI reviews and brag summaries.
 
+## Performance
+
+Every release records how fast digest starts, loads notes, redraws, searches and saves, at 1 to 10k notes. [BENCHMARK.md](BENCHMARK.md) has the latest numbers and their history.
+
+`mise run bench` measures locally without recording, and `mise run bench:full` adds 100k notes.
+
 ## Releases
 
 digest follows [Semantic Versioning](https://semver.org), and the commit messages since the last release decide the next version, following [Conventional Commits](https://www.conventionalcommits.org):

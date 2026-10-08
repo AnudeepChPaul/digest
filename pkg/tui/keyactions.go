@@ -9,9 +9,9 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -396,6 +396,7 @@ func (m Model) newNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		Created: m.currentDate,
 	}
 	m.editor.Reset()
+	m.editorRevision++
 	m.editor.Focus()
 	return m, textarea.Blink
 }
@@ -1156,7 +1157,7 @@ func (m Model) beginNoteEdit(note *model.Note, returnMode ViewMode) (tea.Model, 
 	m.currentNote = note
 	m.editReturnMode = returnMode
 	m.mode = ViewEdit
-	m.editor.SetValue(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
+	m.replaceEditorText(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
 	m.editor.Focus()
 	startEditorAtTop(m.editor)
 	return m, textarea.Blink

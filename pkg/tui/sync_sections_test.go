@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 	copyToClipboard = func(string) error { return nil }
 	notify.Send = func(notify.Notification) error { return nil }
 	code := m.Run()
+	removeBenchFixtures()
 	os.RemoveAll(cacheDir)
 	os.Exit(code)
 }

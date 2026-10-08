@@ -31,6 +31,14 @@ func benchModel(b *testing.B) Model {
 		notes = append(notes, &model.Note{ID: fmt.Sprint(i), Summary: fmt.Sprintf("note summary number %d with some text", i), Status: status, Source: model.SourceManual, Created: created, Updated: created.Add(time.Hour)})
 	}
 	m.notes = notes
+	addBenchGitData(&m)
+	m.mode = ViewDashboard
+	m.selected = 5
+	return m
+}
+
+func addBenchGitData(m *Model) {
+	now := time.Now()
 	var pending []GitPRItem
 	for i := 1; i <= 40; i++ {
 		ref := review.PRRef{Host: "github.com", Owner: "o", Repo: fmt.Sprintf("repo%d", i%6), Number: i, URL: fmt.Sprintf("https://github.com/o/repo%d/pull/%d", i%6, i)}
@@ -46,9 +54,6 @@ func benchModel(b *testing.B) Model {
 		m.myPRs = append(m.myPRs, review.QueuedPR{Ref: review.PRRef{Repo: "mine", Number: i}, HeadRef: "feature/x", CreatedAt: now})
 	}
 	m.refreshLocalReviews()
-	m.mode = ViewDashboard
-	m.selected = 5
-	return m
 }
 
 func BenchmarkKeyDownPlusView(b *testing.B) {

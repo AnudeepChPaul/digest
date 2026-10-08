@@ -10,8 +10,8 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/automation"
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"gopkg.in/yaml.v3"
@@ -346,7 +346,7 @@ func (m Model) editAutomationDraft(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	run, _ := m.noteRun(note)
 	m.automationNoteID, m.automationName, m.automationNotice = note.ID, run.Meta.Automation, ""
-	m.editor.SetValue(draft)
+	m.replaceEditorText(draft)
 	m.editor.Focus()
 	startEditorAtTop(m.editor)
 	m.mode = ViewAutomationEdit

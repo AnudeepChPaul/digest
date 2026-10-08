@@ -55,3 +55,35 @@ jobs:
           fi
           git commit -am "digest ${{ steps.tag.outputs.name }}"
           git push origin HEAD:main
+
+  benchmark:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DIGEST_DEPLOY_KEY }}
+      - id: touched
+        run: |
+          if git diff-tree --no-commit-id --name-only -r HEAD | grep -qx 'BENCHMARK.md'; then
+            echo "benchmark=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "benchmark=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.touched.outputs.benchmark == 'false'
+        uses: jdx/mise-action@v5
+      - if: steps.touched.outputs.benchmark == 'false'
+        run: |
+          release_version="v$(cat .version)"
+          mise run bench:record -- --version "$release_version" --commit "$(git rev-parse --short HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BENCHMARK.md
+          git commit -m "chore: benchmark $release_version"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git pull --rebase --no-tags origin main
+          done
+          exit 1
