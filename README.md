@@ -74,7 +74,16 @@ macOS, git and the GitHub CLI (`gh`). Optional: tmux, Neovim, terminal-notifier 
 
 ## Releases
 
-Every push to `main` passes vet and tests, then GitHub Actions bumps the patch version in `.version`. That commit tags the release, publishes the binaries and updates the Homebrew formula. For a minor or major release, change `.version` yourself in the commit.
+digest follows [Semantic Versioning](https://semver.org), and the commit messages since the last release decide the next version, following [Conventional Commits](https://www.conventionalcommits.org):
+
+| Commits since the last release | Release |
+|---|---|
+| `feat!:`, `fix(scope)!:` or a `BREAKING CHANGE:` line in the body | major |
+| `feat:` | minor |
+| `fix:` or `perf:` | patch |
+| only `docs:`, `ci:`, `chore:`, `test:` and the like | none |
+
+On every push to `main`, GitHub Actions runs vet and tests and works out that level. It then bumps `.version` and adds a section to [CHANGELOG.md](CHANGELOG.md). That commit tags the release, publishes the binaries with the changelog section as release notes, and updates the Homebrew formula. Don't edit `.version` by hand.
 
 ## Licence
 

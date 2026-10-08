@@ -31,11 +31,16 @@ jobs:
       - if: steps.changed.outputs.version == 'false'
         uses: jdx/mise-action@v5
       - if: steps.changed.outputs.version == 'false'
+        id: level
+        run: echo "name=$(mise run release-level)" >> "$GITHUB_OUTPUT"
+      - if: steps.changed.outputs.version == 'false' && steps.level.outputs.name != 'none'
         run: |
           mise run vet
           mise run test
-          mise run bump patch
+          mise run bump "${{ steps.level.outputs.name }}"
+          mise run changelog
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore: release v$(cat .version)"
+          git add .version CHANGELOG.md
+          git commit -m "chore: release v$(cat .version)"
           git push origin HEAD:main

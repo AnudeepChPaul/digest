@@ -34,7 +34,9 @@ jobs:
       - run: mise run dist
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ steps.tag.outputs.name }}" dist/*.tar.gz dist/checksums.txt --title "digest ${{ steps.tag.outputs.name }}" --generate-notes
+        run: |
+          mise run release-notes > dist/release-notes.md
+          gh release create "${{ steps.tag.outputs.name }}" dist/*.tar.gz dist/checksums.txt --title "digest ${{ steps.tag.outputs.name }}" --notes-file dist/release-notes.md
       - uses: actions/checkout@v7
         with:
           repository: AnudeepChPaul/homebrew-tap
@@ -47,5 +49,9 @@ jobs:
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "formula already points at ${{ steps.tag.outputs.name }}"
+            exit 0
+          fi
           git commit -am "digest ${{ steps.tag.outputs.name }}"
           git push origin HEAD:main

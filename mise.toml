@@ -24,6 +24,21 @@ printf '%s\n' "$next_version" > .version
 printf '\033[33m↑\033[0m version \033[2m%s\033[0m → \033[1m%s\033[0m\n' "$current_version" "$next_version"
 '''
 
+[tasks.release-level]
+description = "Print the release level the commits since the last tag call for (major, minor, patch or none)"
+quiet = true
+run = "go run ./cmd/release level"
+
+[tasks.changelog]
+description = "Add the current .version section to CHANGELOG.md from the commits since the last tag"
+quiet = true
+run = "go run ./cmd/release changelog \"$(cat .version)\""
+
+[tasks.release-notes]
+description = "Print the latest CHANGELOG.md section"
+quiet = true
+run = "go run ./cmd/release notes"
+
 [tasks.test]
 description = "Run tests"
 quiet = true
