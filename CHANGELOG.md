@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.0 — 2026-10-08
+
+### Features
+- status in note file names, faster saves, digest migrate, no pulse dot
+- adding benchmark and make textarea rendering 28x faster
+
 ## v1.2.5 — 2026-10-08
 
 ### Fixes
