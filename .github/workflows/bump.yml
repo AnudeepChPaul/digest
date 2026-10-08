@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: release
+  group: bump
   cancel-in-progress: false
 
 permissions:
