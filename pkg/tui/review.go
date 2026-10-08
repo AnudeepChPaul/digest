@@ -210,7 +210,9 @@ func readLocalReviews(root string, refs []review.PRRef, previous map[string]loca
 	for _, ref := range refs {
 		stateDir := review.StateDir(root, ref)
 		if _, seen := states[stateDir]; !seen {
-			states[stateDir] = withRecommendation(stateDir, readLocalReview(stateDir), previous)
+			state := withRecommendation(stateDir, readLocalReview(stateDir), previous)
+			state.cloned = review.CloneExists(root, ref)
+			states[stateDir] = state
 		}
 	}
 	return states
@@ -1160,6 +1162,11 @@ func (m Model) refFor(item *GitPRItem) review.PRRef {
 		return review.PRRef{}
 	}
 	return queued.Ref
+}
+
+func (m Model) cloneReady(item *GitPRItem) bool {
+	ref := m.refFor(item)
+	return ref.URL != "" && m.localReviews[review.StateDir(m.reviewRoot(), ref)].cloned
 }
 
 func (m Model) reviewPIDFor(item *GitPRItem) (int, bool) {

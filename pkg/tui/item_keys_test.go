@@ -267,18 +267,52 @@ func TestSpaceAndActionsWorkInNotePreview(t *testing.T) {
 	}
 }
 
-func TestPRRowOffersNvimAndStopLabel(t *testing.T) {
+func TestPRRowOffersStopLabel(t *testing.T) {
 	m := reviewTestModel(t)
 	m.cfg.ShowKeyHints = true
-	if hint := hintText(m); !strings.Contains(hint, "(d)reject") || !strings.Contains(hint, "(o)nvim") {
+	if hint := hintText(m); !strings.Contains(hint, "(d)reject") {
 		t.Errorf("idle PR hint = %q", hint)
 	}
 	markRunning(t, m, m.currentPRItem().PR.Ref)
 	if hint := hintText(m); !strings.Contains(hint, "(d)stop") {
 		t.Errorf("reviewing PR hint = %q", hint)
 	}
-	if binding, found := m.resolveKey(runes("o")); !found || binding.action != actionOpenClone {
-		t.Errorf("o on the PR row resolves to %v", binding.action)
+}
+
+func TestPRRowOffersNvimOnlyOnceTheCloneExists(t *testing.T) {
+	m := reviewTestModel(t)
+	m.cfg.ShowKeyHints = true
+	ref := m.currentPRItem().PR.Ref
+	cloneDir := review.CloneDir(m.reviewRoot(), ref)
+	offersNvim := func() bool {
+		binding, found := m.resolveKey(runes("o"))
+		return strings.Contains(hintText(m), "(o)nvim") || (found && binding.action == actionOpenClone)
+	}
+	m.refreshLocalReviews()
+	if offersNvim() {
+		t.Errorf("o nvim offered before any clone: %q", hintText(m))
+	}
+	if err := os.MkdirAll(filepath.Join(cloneDir+".partial", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshLocalReviews()
+	if offersNvim() {
+		t.Errorf("o nvim offered while the clone is still partial")
+	}
+	if err := os.MkdirAll(filepath.Join(cloneDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if offersNvim() {
+		t.Errorf("a redraw should use the cached clone state, not read the disk")
+	}
+	m.refreshLocalReviews()
+	if !offersNvim() {
+		t.Errorf("o nvim should show once the clone exists: %q", hintText(m))
+	}
+	markRunning(t, m, ref)
+	m.refreshLocalReviews()
+	if !offersNvim() {
+		t.Errorf("o nvim should stay during a re-review")
 	}
 }
 

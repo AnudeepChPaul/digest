@@ -39,12 +39,15 @@ func (m Model) itemBindings(item NavItem, onDashboard bool) []keyBinding {
 		if _, running := m.reviewPIDFor(item.PendingGitPR); running {
 			rejectLabel = "stop"
 		}
-		return []keyBinding{
+		bindings := []keyBinding{
 			newKeyBinding(approve, []string{"y"}, "y", "approve"),
 			newKeyBinding(reject, []string{"d"}, "d", rejectLabel).warning(),
 			newKeyBinding(actionStartReview, []string{"r"}, "r", "review"),
-			newKeyBinding(actionOpenClone, []string{"o"}, "o", "nvim"),
 		}
+		if m.cloneReady(item.PendingGitPR) {
+			bindings = append(bindings, newKeyBinding(actionOpenClone, []string{"o"}, "o", "nvim"))
+		}
+		return bindings
 	case KindTodayNote, KindCarriedNote, KindYesterdayDone, KindTodayDone:
 		if item.Note == nil {
 			return nil

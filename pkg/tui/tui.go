@@ -138,6 +138,7 @@ type localReviewState struct {
 	finished       bool
 	pid            int
 	recommendation string
+	cloned         bool
 }
 
 type jobAbortedMsg struct {

@@ -20,7 +20,7 @@ var prepareClone = review.PrepareTo
 func ClonePR(ctx context.Context, root string, pr review.QueuedPR) (string, error) {
 	ref := pr.Ref
 	dir := review.CloneDir(root, ref)
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+	if review.CloneExists(root, ref) {
 		return dir, nil
 	}
 	stateDir := review.StateDir(root, ref)
