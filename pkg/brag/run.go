@@ -2,7 +2,6 @@ package brag
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,7 +16,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
@@ -50,6 +49,8 @@ type Run struct {
 
 var ErrBragRunning = errors.New("a brag is already being generated for this period")
 
+var executablePath = os.Executable
+
 func StateDir(root, id string) string {
 	return filepath.Join(root, stateDirName, id)
 }
@@ -66,7 +67,7 @@ func processAlive(pid int) bool {
 }
 
 func readInt(path string) (int, bool) {
-	data, err := os.ReadFile(path)
+	data, err := system.Read(path)
 	if err != nil {
 		return 0, false
 	}
@@ -81,20 +82,24 @@ func runningPID(root, id string) (int, bool) {
 		return 0, false
 	}
 	if !processAlive(pid) {
-		_ = os.Remove(pidPath)
+		_ = system.Remove(pidPath)
 		return 0, false
 	}
 	return pid, true
 }
 
-func backgroundScript(runCommand string) string {
-	return runCommand + `; echo $? > "$1"; rm -f "$2"`
-}
-
 func clearExitedPID(pidPath string) {
 	if pid, ok := readInt(pidPath); ok && !processAlive(pid) {
-		_ = os.Remove(pidPath)
+		_ = system.Remove(pidPath)
 	}
+}
+
+func recordUnreportedExit(dir string, state *os.ProcessState) {
+	exitPath := filepath.Join(dir, runExitFile)
+	if state == nil || !state.Exited() || system.Exists(exitPath) {
+		return
+	}
+	_ = system.Write(exitPath, []byte(strconv.Itoa(state.ExitCode())))
 }
 
 var stopGracePeriod = 3 * time.Second
@@ -128,7 +133,7 @@ func Status(root, id string) RunStatus {
 	exitPath := filepath.Join(StateDir(root, id), runExitFile)
 	exitCode, ok := readInt(exitPath)
 	if !ok {
-		if _, err := os.Stat(exitPath); err == nil {
+		if system.Exists(exitPath) {
 			return RunFailed
 		}
 		return RunIdle
@@ -140,11 +145,7 @@ func Status(root, id string) RunStatus {
 }
 
 func writeMeta(dir string, meta RunMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, runMetaFile), data, paths.PrivateFileMode)
+	return system.WriteJSON(filepath.Join(dir, runMetaFile), meta)
 }
 
 func StartBackground(root string, period Period, regenerate bool) error {
@@ -153,43 +154,40 @@ func StartBackground(root string, period Period, regenerate bool) error {
 		return ErrBragRunning
 	}
 	dir := StateDir(root, id)
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(dir); err != nil {
 		return err
 	}
 	for _, stale := range []string{runExitFile, runPIDFile} {
-		_ = os.Remove(filepath.Join(dir, stale))
+		_ = system.Remove(filepath.Join(dir, stale))
 	}
 	if err := writeMeta(dir, RunMeta{ID: id, Regenerate: regenerate}); err != nil {
 		return err
 	}
-	executable, err := os.Executable()
+	executable, err := executablePath()
 	if err != nil {
 		return fmt.Errorf("locate digest binary: %w", err)
 	}
-	logOutput, err := paths.CreatePrivate(filepath.Join(dir, RunLogFile))
+	logFile, err := system.OpenLog(filepath.Join(dir, RunLogFile))
 	if err != nil {
 		return err
 	}
+	defer logFile.Close()
 	regenerateFlag := "--regenerate=false"
 	if regenerate {
 		regenerateFlag = "--regenerate"
 	}
 	pidPath := filepath.Join(dir, runPIDFile)
-	script := backgroundScript(`"$3" brag "$4" "$5" "$6"`)
-	cmd := exec.Command("sh", "-c", script, "digest-brag", filepath.Join(dir, runExitFile), pidPath, executable, "--"+string(period.Kind()), id, regenerateFlag)
+	cmd := exec.Command(executable, "brag", "--"+string(period.Kind()), id, regenerateFlag)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = os.Environ()
+	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.Dir = root
-	cmd.Stdout = logOutput
-	cmd.Stderr = logOutput
 	if err := cmd.Start(); err != nil {
-		logOutput.Close()
 		return err
 	}
-	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), paths.PrivateFileMode)
+	pidErr := system.Write(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)))
 	go func() {
 		_ = cmd.Wait()
-		_ = logOutput.Close()
+		recordUnreportedExit(dir, cmd.ProcessState)
 		clearExitedPID(pidPath)
 	}()
 	if pidErr != nil {
@@ -199,7 +197,7 @@ func StartBackground(root string, period Period, regenerate bool) error {
 }
 
 func ListRuns(root string) []Run {
-	entries, err := os.ReadDir(filepath.Join(root, stateDirName))
+	entries, err := system.List(filepath.Join(root, stateDirName))
 	if err != nil {
 		return nil
 	}
@@ -214,10 +212,8 @@ func ListRuns(root string) []Run {
 			continue
 		}
 		run := Run{Meta: RunMeta{ID: id}, Status: status}
-		if data, err := os.ReadFile(filepath.Join(StateDir(root, id), runMetaFile)); err == nil {
-			_ = json.Unmarshal(data, &run.Meta)
-		}
-		if info, err := os.Stat(filepath.Join(StateDir(root, id), runMetaFile)); err == nil {
+		_, _ = system.ReadJSON(filepath.Join(StateDir(root, id), runMetaFile), &run.Meta)
+		if info, err := system.Stat(filepath.Join(StateDir(root, id), runMetaFile)); err == nil {
 			run.StartedAt = info.ModTime()
 		}
 		runs = append(runs, run)
@@ -242,50 +238,39 @@ func Stop(root, id string) error {
 			return fmt.Errorf("stop brag %s: %w", id, err)
 		}
 	}
-	if err := os.Remove(filepath.Join(dir, runPIDFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := system.Remove(filepath.Join(dir, runPIDFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runExitFile), []byte("143"), paths.PrivateFileMode)
+	return system.Write(filepath.Join(dir, runExitFile), []byte("143"))
 }
 
 func Dismiss(root, id string) error {
 	if IsRunning(root, id) {
 		return ErrBragRunning
 	}
-	return os.RemoveAll(StateDir(root, id))
+	return system.RemoveAll(StateDir(root, id))
 }
-
-var parentPID = os.Getppid
 
 func claimRun(root, id string) (func(runErr error), error) {
 	dir := StateDir(root, id)
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(dir); err != nil {
 		return nil, err
 	}
 	pidPath := filepath.Join(dir, runPIDFile)
-	wrapped := false
-	if pid, ok := readInt(pidPath); ok && processAlive(pid) {
-		if pid != parentPID() {
-			return nil, ErrBragRunning
-		}
-		wrapped = true
+	if pid, ok := readInt(pidPath); ok && processAlive(pid) && pid != os.Getpid() {
+		return nil, ErrBragRunning
 	}
-	if !wrapped {
-		_ = os.Remove(filepath.Join(dir, runExitFile))
-	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), paths.PrivateFileMode); err != nil {
+	_ = system.Remove(filepath.Join(dir, runExitFile))
+	if err := system.Write(pidPath, []byte(strconv.Itoa(os.Getpid()))); err != nil {
 		return nil, err
 	}
 	return func(runErr error) {
-		if wrapped {
-			return
-		}
 		exitCode := "0"
 		if runErr != nil {
 			exitCode = "1"
 		}
-		_ = os.WriteFile(filepath.Join(dir, runExitFile), []byte(exitCode), paths.PrivateFileMode)
-		_ = os.Remove(pidPath)
+		_ = system.Write(filepath.Join(dir, runExitFile), []byte(exitCode))
+		_ = system.Remove(pidPath)
 	}, nil
 }
 

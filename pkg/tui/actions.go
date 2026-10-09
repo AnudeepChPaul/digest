@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -14,7 +13,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/automation"
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,23 +46,14 @@ func actionUsagePath(cacheDir string) string {
 
 func loadActionUsage(cacheDir string) map[string]int {
 	usage := map[string]int{}
-	if data, err := os.ReadFile(actionUsagePath(cacheDir)); err == nil {
-		_ = json.Unmarshal(data, &usage)
-	}
+	_, _ = system.ReadJSON(actionUsagePath(cacheDir), &usage)
 	return usage
 }
 
 func saveActionUsageCmd(cacheDir string, usage map[string]int) tea.Cmd {
 	snapshot := maps.Clone(usage)
 	return func() tea.Msg {
-		data, err := json.MarshalIndent(snapshot, "", "  ")
-		if err == nil {
-			err = os.MkdirAll(cacheDir, paths.PrivateDirMode)
-		}
-		if err == nil {
-			err = os.WriteFile(actionUsagePath(cacheDir), data, paths.PrivateFileMode)
-		}
-		return actionUsageSavedMsg{err: err}
+		return actionUsageSavedMsg{err: system.WriteJSON(actionUsagePath(cacheDir), snapshot)}
 	}
 }
 

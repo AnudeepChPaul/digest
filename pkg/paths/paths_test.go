@@ -1,19 +1,20 @@
-package paths
+package paths_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
-func TestCreatePrivateIsOwnerOnly(t *testing.T) {
+func TestPrivateLogIsOwnerOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")
-	file, err := CreatePrivate(path)
-	if err != nil {
+	if err := system.Write(path, nil); err != nil {
 		t.Fatal(err)
 	}
-	file.Close()
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != PrivateFileMode {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != paths.PrivateFileMode {
 		t.Errorf("mode = %v %v", info, err)
 	}
 }

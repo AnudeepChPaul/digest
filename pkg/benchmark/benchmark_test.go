@@ -269,7 +269,7 @@ func TestRecordWritesTheDocsFileAndAddsEachRunAsANewColumn(t *testing.T) {
 	if err := Record(root, sampleRun("v1.2.6", "def5678", 700e6)); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "docs", "benchmark", "BENCHMARK.md"))
+	data, err := os.ReadFile(filepath.Join(root, "docs", "benchmark", "benchmark.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,6 +281,34 @@ func TestRecordWritesTheDocsFileAndAddsEachRunAsANewColumn(t *testing.T) {
 	latest := markdown[:strings.Index(markdown, "## History")]
 	if !strings.Contains(latest, "700 ms") || strings.Contains(latest, "812 ms") {
 		t.Errorf("latest tables should show only the newest run:\n%s", latest)
+	}
+}
+
+func TestRecordIntoAPageWithoutHistoryStartsAFreshColumn(t *testing.T) {
+	root := t.TempDir()
+	pagePath := filepath.Join(root, "docs", "benchmark", "benchmark.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, []byte("# Benchmarks\n\nNo release recorded yet.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Record(root, sampleRun("v1.4.1", "abc1234", 700e6)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns := historyTables(string(data))["10k notes"].columns
+	if len(columns) != 1 || columns[0].commit != "abc1234" {
+		t.Fatalf("columns = %+v", columns)
+	}
+	if strings.Contains(string(data), "No release recorded yet.") {
+		t.Errorf("the placeholder should be replaced by the recorded page:\n%s", data)
+	}
+	if !strings.Contains(string(data), "every version bump you push") {
+		t.Errorf("intro should describe the pushed version bump releases:\n%s", data)
 	}
 }
 

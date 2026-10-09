@@ -12,6 +12,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/aitool"
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -385,7 +386,7 @@ func resolveConfigPath(path string) string {
 
 	candidates := configCandidates()
 	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
+		if system.Exists(candidate) {
 			return candidate
 		}
 	}
@@ -393,7 +394,7 @@ func resolveConfigPath(path string) string {
 }
 
 func Load(resolvedPath string) (*Config, error) {
-	data, err := os.ReadFile(resolvedPath)
+	data, err := system.Read(resolvedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -425,10 +426,7 @@ func LoadOrCreate(path string) (*Config, error) {
 }
 
 func writeDefaultConfig(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
-		return fmt.Errorf("failed to create config directory for %s: %w", path, err)
-	}
-	if err := os.WriteFile(path, []byte(DefaultConfigYAML), paths.PrivateFileMode); err != nil {
+	if err := system.Write(path, []byte(DefaultConfigYAML)); err != nil {
 		return fmt.Errorf("failed to write default config %s: %w", path, err)
 	}
 	return nil
@@ -436,9 +434,9 @@ func writeDefaultConfig(path string) error {
 
 func Export(path string) (written, backup string, err error) {
 	written = resolveConfigPath(path)
-	if _, statErr := os.Stat(written); statErr == nil {
+	if system.Exists(written) {
 		backup = written + ".bak"
-		if err := os.Rename(written, backup); err != nil {
+		if err := system.Rename(written, backup); err != nil {
 			return written, "", fmt.Errorf("back up %s: %w", written, err)
 		}
 	}
@@ -459,12 +457,12 @@ func (c *Config) TightenPermissions(configPath string) error {
 	}
 	var failures []error
 	for path, mode := range targets {
-		info, err := os.Stat(path)
+		info, err := system.Stat(path)
 		if errors.Is(err, fs.ErrNotExist) || (err == nil && info.Mode().Perm() == mode) {
 			continue
 		}
 		if err == nil {
-			err = os.Chmod(path, mode)
+			err = system.Chmod(path, mode)
 		}
 		if err != nil {
 			failures = append(failures, err)

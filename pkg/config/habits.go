@@ -2,10 +2,11 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 type DigestNotifications struct {
@@ -42,8 +43,7 @@ func (c *Config) IsWorkDay(day time.Weekday) bool {
 }
 
 func Exists(path string) bool {
-	_, err := os.Stat(resolveConfigPath(path))
-	return err == nil
+	return system.Exists(resolveConfigPath(path))
 }
 
 func Path(path string) string {

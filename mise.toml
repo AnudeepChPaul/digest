@@ -24,20 +24,35 @@ printf '%s\n' "$next_version" > .version
 printf '\033[33m↑\033[0m version \033[2m%s\033[0m → \033[1m%s\033[0m\n' "$current_version" "$next_version"
 '''
 
-[tasks.release-level]
-description = "Print the release level the commits since the last tag call for (major, minor, patch or none)"
+[tasks."release:level"]
+description = "Print the release level the commits since the last release call for (major, minor, patch or none)"
 quiet = true
 run = "go run ./cmd/release level"
 
 [tasks.changelog]
-description = "Add the current .version section to CHANGELOG.md from the commits since the last tag"
+description = "Add the current .version section to CHANGELOG.md from the commits since the last release (run by the release workflow)"
 quiet = true
 run = "go run ./cmd/release changelog \"$(cat .version)\""
 
-[tasks.release-notes]
+[tasks."release:notes"]
 description = "Print the latest CHANGELOG.md section"
 quiet = true
 run = "go run ./cmd/release notes"
+
+[tasks."release:commit"]
+description = "Bump .version and commit it as a release; pushing it releases"
+quiet = true
+usage = 'arg "[level]" help="patch, minor or major; defaults to what release:level prints" { choices "patch" "minor" "major" }'
+run = '''
+release_level="${usage_level:-$(mise run release:level)}"
+if [ "$release_level" = "none" ]; then
+  echo "no feat, fix or perf commits since the last release" >&2
+  exit 1
+fi
+mise run bump "$release_level"
+git commit -q -m "chore: release v$(cat .version)" -- .version
+printf '\033[32m✓\033[0m committed \033[1mv%s\033[0m; git push to release\n' "$(cat .version)"
+'''
 
 [tasks.test]
 description = "Run tests"
@@ -106,6 +121,6 @@ quiet = true
 run = "go run ./cmd/bench run --sizes 1,100,1000,10000,100000"
 
 [tasks."bench:record"]
-description = "Measure benchmarks and record them in docs/benchmark/BENCHMARK.md (used by the release workflow)"
+description = "Measure benchmarks and record them in docs/benchmark/benchmark.md (used by the release workflow)"
 quiet = true
 run = "go run ./cmd/bench record"

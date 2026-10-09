@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -49,11 +50,11 @@ func DiscoverRepos(roots []string) ([]string, error) {
 	var repos []string
 	for _, root := range roots {
 		expanded := paths.Expand(root)
-		if _, err := os.Stat(expanded); os.IsNotExist(err) {
+		if _, err := system.Stat(expanded); os.IsNotExist(err) {
 			continue
 		}
 
-		_ = filepath.WalkDir(expanded, func(path string, d os.DirEntry, err error) error {
+		_ = system.Walk(expanded, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -63,7 +64,7 @@ func DiscoverRepos(roots []string) ([]string, error) {
 				}
 
 				gitDir := filepath.Join(path, ".git")
-				if _, err := os.Stat(gitDir); err == nil {
+				if system.Exists(gitDir) {
 					repos = append(repos, path)
 					return filepath.SkipDir // Stop traversing deeper into this repository
 				}

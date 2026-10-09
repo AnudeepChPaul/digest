@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/release"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const changelogPath = "CHANGELOG.md"
@@ -26,7 +27,7 @@ func run(args []string) error {
 	}
 	switch args[0] {
 	case "level":
-		commits, err := commitsSinceLastTag()
+		commits, err := commitsSinceLastRelease(".")
 		if err != nil {
 			return err
 		}
@@ -36,18 +37,18 @@ func run(args []string) error {
 		if len(args) != 2 {
 			return errors.New("usage: release changelog <version>")
 		}
-		commits, err := commitsSinceLastTag()
+		commits, err := commitsSinceLastRelease(".")
 		if err != nil {
 			return err
 		}
-		existing, err := os.ReadFile(changelogPath)
+		existing, err := system.Read(changelogPath)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		section := release.Changelog(args[1], time.Now().UTC(), commits)
-		return os.WriteFile(changelogPath, []byte(release.Prepend(string(existing), section)), 0o644)
+		return system.WriteWithMode(changelogPath, []byte(release.Prepend(string(existing), section)), 0o644)
 	case "notes":
-		changelog, err := os.ReadFile(changelogPath)
+		changelog, err := system.Read(changelogPath)
 		if err != nil {
 			return err
 		}
@@ -57,12 +58,31 @@ func run(args []string) error {
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
-func commitsSinceLastTag() ([]release.Commit, error) {
-	logArgs := []string{"log", "--format=%s%x1f%b%x1e"}
-	if lastTag, err := exec.Command("git", "describe", "--tags", "--abbrev=0", "--match", "v*").Output(); err == nil {
-		logArgs = append(logArgs, strings.TrimSpace(string(lastTag))+"..HEAD")
+func lastReleaseCommit(repoDir string) (string, bool) {
+	gitOutput := func(args ...string) string {
+		command := exec.Command("git", args...)
+		command.Dir = repoDir
+		output, _ := command.Output()
+		return strings.TrimSpace(string(output))
 	}
-	output, err := exec.Command("git", logArgs...).Output()
+	versionCommits := strings.Fields(gitOutput("log", "-2", "--format=%H", "--", ".version"))
+	if len(versionCommits) > 0 && versionCommits[0] == gitOutput("rev-parse", "HEAD") {
+		versionCommits = versionCommits[1:]
+	}
+	if len(versionCommits) == 0 {
+		return "", false
+	}
+	return versionCommits[0], true
+}
+
+func commitsSinceLastRelease(repoDir string) ([]release.Commit, error) {
+	logArgs := []string{"log", "--format=%s%x1f%b%x1e"}
+	if releaseCommit, found := lastReleaseCommit(repoDir); found {
+		logArgs = append(logArgs, releaseCommit+"..HEAD")
+	}
+	command := exec.Command("git", logArgs...)
+	command.Dir = repoDir
+	output, err := command.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log: %w", err)
 	}

@@ -2,26 +2,22 @@ package running
 
 import (
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 func Mark(marker string) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(marker), paths.PrivateDirMode); err != nil {
+	if err := system.Write(marker, []byte(strconv.Itoa(os.Getpid()))); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), paths.PrivateFileMode); err != nil {
-		return nil, err
-	}
-	return func() { os.Remove(marker) }, nil
+	return func() { _ = system.Remove(marker) }, nil
 }
 
 func Alive(marker string) bool {
-	data, err := os.ReadFile(marker)
+	data, err := system.Read(marker)
 	if err != nil {
 		return false
 	}

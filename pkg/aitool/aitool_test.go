@@ -66,8 +66,8 @@ func TestAutomationCommandAllowsOnlyItsPlugins(t *testing.T) {
 
 func TestReviewCommandPutsThePromptRightAfterP(t *testing.T) {
 	fakePluginCache(t, map[string][]string{"review-toolkit": {"0.18.0"}})
-	command := ReviewCommand("/review-toolkit:review {url} --emit-to {findings}", []string{"review-toolkit"})
-	if !strings.HasPrefix(command, "claude -p '/review-toolkit:review {url} --emit-to {findings}' ") || !strings.HasSuffix(command, "--allowedTools 'Skill(review-toolkit:*)' 'mcp__plugin_review-toolkit_*'") {
+	command := ReviewCommand("/review-toolkit:review {url} --emit findings-json", []string{"review-toolkit"})
+	if !strings.HasPrefix(command, "claude -p '/review-toolkit:review {url} --emit findings-json' ") || !strings.HasSuffix(command, "--allowedTools 'Skill(review-toolkit:*)' 'mcp__plugin_review-toolkit_*'") {
 		t.Errorf("review command = %q", command)
 	}
 	if !strings.Contains(command, " --setting-sources user ") {

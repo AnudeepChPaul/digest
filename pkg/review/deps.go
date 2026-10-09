@@ -1,15 +1,15 @@
 package review
 
 import (
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 func fileExists(dir, name string) bool {
-	_, err := os.Stat(filepath.Join(dir, name))
-	return err == nil
+	return system.Exists(filepath.Join(dir, name))
 }
 
 func InstallCommand(dir string) []string {
@@ -31,11 +31,11 @@ func InstallCommand(dir string) []string {
 var riskyYarnSettings = regexp.MustCompile(`(?m)^\s*(yarnPath|plugins|npmAuthToken|npmAuthIdent)\s*:|^\s*yarn-path\b`)
 
 func riskyInstallConfig(dir string) string {
-	if content, err := os.ReadFile(filepath.Join(dir, ".npmrc")); err == nil && strings.Contains(string(content), "${") {
+	if content, err := system.Read(filepath.Join(dir, ".npmrc")); err == nil && strings.Contains(string(content), "${") {
 		return ".npmrc expands environment variables"
 	}
 	for _, name := range []string{".yarnrc.yml", ".yarnrc"} {
-		if content, err := os.ReadFile(filepath.Join(dir, name)); err == nil && riskyYarnSettings.Match(content) {
+		if content, err := system.Read(filepath.Join(dir, name)); err == nil && riskyYarnSettings.Match(content) {
 			return name + " sets a yarn binary, plugins or auth"
 		}
 	}

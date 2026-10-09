@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/AnudeepChPaul/digest/pkg/appstate"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -196,6 +197,8 @@ type Model struct {
 
 	sessionCtx       context.Context
 	startupNotesErr  error
+	appState         appstate.State
+	appStateKnown    bool
 	cancelSession    context.CancelFunc
 	searchCache      *searchMemo
 	reviewReports    *reviewReportMemo
@@ -397,6 +400,7 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	}
 	m.sessionCtx, m.cancelSession = context.WithCancel(context.Background())
 	m.notes, m.startupNotesErr = m.store.ListDashboard(m.currentDate)
+	m.loadAppState()
 	m.loadingAllNotes = true
 	m.actionUsage = loadActionUsage(cfg.CacheDir())
 	m.notifyEntries = listNotifyEntries(cfg.Root()).entries
@@ -704,8 +708,13 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadNotesMsg:
 		notesSection{}.storeLoadedNotes(&m, msg)
+		var saveAppState tea.Cmd
+		if msg.complete && msg.err == nil {
+			saveAppState = m.appStateFromAllNotes()
+		}
 		refetchPreviousDay := gitSection{}.refreshPreviousDay(&m)
-		return notesSection{}.finishLoadedNotes(m, msg, refetchPreviousDay)
+		next, cmd := notesSection{}.finishLoadedNotes(m, msg, refetchPreviousDay)
+		return next, tea.Batch(cmd, saveAppState)
 
 	case tea.KeyMsg:
 		next, cmd := m.handleKey(msg)

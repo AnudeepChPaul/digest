@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const shortcutTag = "# digest shortcut"
@@ -111,7 +113,7 @@ func (installer *Installer) captureShortcut() (Shortcut, error) {
 }
 
 func replaceTaggedLines(path string, taggedLines []string) error {
-	existing, err := os.ReadFile(path)
+	existing, err := system.Read(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -124,5 +126,5 @@ func replaceTaggedLines(path string, taggedLines []string) error {
 		}
 	}
 	content := strings.Join(append(kept, taggedLines...), "\n") + "\n"
-	return os.WriteFile(path, []byte(content), 0o644)
+	return system.WriteWithMode(path, []byte(content), 0o644)
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -44,14 +45,14 @@ func reviewRunning(stateDir string) bool {
 
 func (folders reviewFolders) lastTouched() time.Time {
 	candidates := []string{folders.stateDir, folders.cloneDir, filepath.Join(folders.cloneDir, ".git")}
-	if entries, err := os.ReadDir(folders.stateDir); err == nil {
+	if entries, err := system.List(folders.stateDir); err == nil {
 		for _, entry := range entries {
 			candidates = append(candidates, filepath.Join(folders.stateDir, entry.Name()))
 		}
 	}
 	var latest time.Time
 	for _, path := range candidates {
-		if info, err := os.Stat(path); err == nil && info.ModTime().After(latest) {
+		if info, err := system.Stat(path); err == nil && info.ModTime().After(latest) {
 			latest = info.ModTime()
 		}
 	}
@@ -63,18 +64,18 @@ func (folders reviewFolders) remove(reason string, dryRun bool) (string, string)
 		return fmt.Sprintf("would remove review clone %s (%s)", folders.cloneDir, reason), ""
 	}
 	for _, dir := range []string{folders.cloneDir, folders.cloneDir + review.PartialCloneSuffix} {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := system.RemoveAll(dir); err != nil {
 			return "", fmt.Sprintf("remove %s: %v", dir, err)
 		}
 	}
-	if err := os.RemoveAll(folders.stateDir); err != nil {
+	if err := system.RemoveAll(folders.stateDir); err != nil {
 		return "", fmt.Sprintf("remove state %s: %v", folders.stateDir, err)
 	}
 	return fmt.Sprintf("removed review clone %s (%s)", folders.cloneDir, reason), ""
 }
 
 func reapPartialClones(root, stateRoot string, dryRun bool, record func(action, failure string)) {
-	entries, err := os.ReadDir(root)
+	entries, err := system.List(root)
 	if err != nil {
 		return
 	}
@@ -88,7 +89,7 @@ func reapPartialClones(root, stateRoot string, dryRun bool, record func(action, 
 			record(fmt.Sprintf("would remove partial clone %s", partialDir), "")
 			continue
 		}
-		if err := os.RemoveAll(partialDir); err != nil {
+		if err := system.RemoveAll(partialDir); err != nil {
 			record("", fmt.Sprintf("remove %s: %v", partialDir, err))
 			continue
 		}
@@ -108,7 +109,7 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 	}
 	stateRoot := filepath.Join(root, ".state")
 	reapPartialClones(root, stateRoot, dryRun, record)
-	entries, err := os.ReadDir(stateRoot)
+	entries, err := system.List(stateRoot)
 	if err != nil {
 		return actions, failures
 	}
@@ -178,7 +179,7 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 
 	for _, root := range j.Roots {
 		expanded := paths.Expand(root)
-		entries, err := os.ReadDir(expanded)
+		entries, err := system.List(expanded)
 		if err != nil {
 			continue
 		}
@@ -206,12 +207,12 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 				if dryRun {
 					logger.Warn("Would quarantine", "file", entry.Name(), "size_bytes", info.Size())
 				} else {
-					if err := os.MkdirAll(dateDir, paths.PrivateDirMode); err != nil {
+					if err := system.MkdirAll(dateDir); err != nil {
 						logger.Error("Failed to create quarantine directory", "dir", dateDir, "err", err)
 						failures = append(failures, fmt.Sprintf("mkdir %s: %v", dateDir, err))
 						break
 					}
-					if err := os.Rename(src, dest); err != nil {
+					if err := system.Rename(src, dest); err != nil {
 						logger.Error("Failed to quarantine file", "file", src, "err", err)
 						failures = append(failures, fmt.Sprintf("move %s: %v", src, err))
 						break
@@ -228,7 +229,7 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 	var purged []string
 	cutoff := now.AddDate(0, 0, -j.RetentionDays)
 
-	qEntries, _ := os.ReadDir(quarantineRoot)
+	qEntries, _ := system.List(quarantineRoot)
 	for _, qe := range qEntries {
 		if !qe.IsDir() {
 			continue
@@ -240,7 +241,7 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 			if dryRun {
 				logger.Warn("Would purge expired quarantine", "batch", qe.Name())
 			} else {
-				_ = os.RemoveAll(targetDir)
+				_ = system.RemoveAll(targetDir)
 				logger.Info("Purged expired quarantine", "batch", qe.Name())
 			}
 		}

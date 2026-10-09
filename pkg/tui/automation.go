@@ -470,14 +470,6 @@ func (m Model) automationJobRunning(run *automation.Run) bool {
 	return m.automationRuns[run.Meta.NoteID].Status == automation.RunRunning
 }
 
-func (m Model) renderAutomationRunRow(run automation.Run, selected bool, width int) string {
-	label := "running..."
-	if run.Meta.Phase == automation.PhaseDraft {
-		label = "drafting..."
-	}
-	return renderJobStyleRow(amberDiamond.Render(), m.automationJobLabel(run), m.renderPulseIndicator(label), selected, width)
-}
-
 func (m Model) automationRunPreview(run automation.Run) runPreview {
 	status := "FAILED"
 	if m.automationJobRunning(&run) {

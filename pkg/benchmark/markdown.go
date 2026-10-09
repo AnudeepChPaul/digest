@@ -60,7 +60,7 @@ func Markdown(latest Run, previous string) string {
 	var page strings.Builder
 	page.WriteString(`# Benchmarks
 
-How fast digest is, measured in CI on every release, beside the release build. Each cell is time per operation · memory allocated per operation, so lower is better. A 60 fps frame is 16.7 ms.
+How fast digest is, measured in CI on every version bump you push, beside the release build. Each cell is time per operation · memory allocated per operation, so lower is better. A 60 fps frame is 16.7 ms.
 
 - The release workflow records each run here in its own ` + "`chore: benchmark`" + ` commit.
 - ` + "`mise run bench`" + ` prints the same tables locally without recording them; ` + "`mise run bench:full`" + ` adds 100k notes.

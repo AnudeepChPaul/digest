@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -30,7 +30,7 @@ var createdLogsDirs sync.Map
 func getLogsDir() string {
 	dir := filepath.Join(digestRoot, "logs")
 	if _, created := createdLogsDirs.Load(dir); !created {
-		if os.MkdirAll(dir, paths.PrivateDirMode) == nil {
+		if system.MkdirAll(dir) == nil {
 			createdLogsDirs.Store(dir, true)
 		}
 	}
@@ -57,7 +57,7 @@ func isProcessAlive(pid int) bool {
 }
 
 func runningJobPID(jobName string) (int, bool) {
-	data, err := os.ReadFile(filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName)))
+	data, err := system.Read(filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName)))
 	if err != nil {
 		return 0, false
 	}
@@ -70,7 +70,7 @@ func runningJobPID(jobName string) (int, bool) {
 
 func isJobRunning(jobName string) bool {
 	pidFile := filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName))
-	data, err := os.ReadFile(pidFile)
+	data, err := system.Read(pidFile)
 	if err != nil {
 		return false
 	}
@@ -87,7 +87,7 @@ func dryRunFilePath(jobName string, suffix string) string {
 
 func isDryRunInFlight(jobName string) bool {
 	pidFile := dryRunFilePath(jobName, "pid")
-	data, err := os.ReadFile(pidFile)
+	data, err := system.Read(pidFile)
 	if err != nil {
 		return false
 	}
@@ -95,12 +95,12 @@ func isDryRunInFlight(jobName string) bool {
 	if err == nil && isProcessAlive(pid) {
 		return true
 	}
-	_ = os.Remove(pidFile)
+	_ = system.Remove(pidFile)
 	return false
 }
 
 func loadDryRunResult(jobName string) (string, int, bool) {
-	exitData, err := os.ReadFile(dryRunFilePath(jobName, "exit"))
+	exitData, err := system.Read(dryRunFilePath(jobName, "exit"))
 	if err != nil {
 		return "", 0, false
 	}
@@ -119,7 +119,7 @@ var readDryRunLog = func(path string) ([]byte, error) {
 func dryRunStamp(jobName string) string {
 	var stamp strings.Builder
 	for _, suffix := range []string{"exit", "log"} {
-		if info, err := os.Stat(dryRunFilePath(jobName, suffix)); err == nil {
+		if info, err := system.Stat(dryRunFilePath(jobName, suffix)); err == nil {
 			fmt.Fprintf(&stamp, "%s:%d:%d|", suffix, info.Size(), info.ModTime().UnixNano())
 		}
 	}
@@ -127,8 +127,8 @@ func dryRunStamp(jobName string) string {
 }
 
 func writeDryRunFailure(jobName string, failure error) {
-	_ = os.WriteFile(dryRunFilePath(jobName, "log"), []byte(failure.Error()+"\n"), paths.PrivateFileMode)
-	_ = os.WriteFile(dryRunFilePath(jobName, "exit"), []byte("1"), paths.PrivateFileMode)
+	_ = system.Write(dryRunFilePath(jobName, "log"), []byte(failure.Error()+"\n"))
+	_ = system.Write(dryRunFilePath(jobName, "exit"), []byte("1"))
 }
 
 var startDryRunBackground = func(spec config.JobSpec) error {
@@ -141,13 +141,14 @@ var startDryRunBackground = func(spec config.JobSpec) error {
 	logPath := dryRunFilePath(spec.Name, "log")
 	pidPath := dryRunFilePath(spec.Name, "pid")
 	exitPath := dryRunFilePath(spec.Name, "exit")
-	_ = os.Remove(exitPath)
+	_ = system.Remove(exitPath)
 
-	f, err := paths.CreatePrivate(logPath)
+	logFile, err := system.OpenLog(logPath)
 	if err != nil {
 		writeDryRunFailure(spec.Name, err)
 		return err
 	}
+	defer logFile.Close()
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -162,32 +163,24 @@ var startDryRunBackground = func(spec config.JobSpec) error {
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}
-	cmd.Stdout = f
-	cmd.Stderr = f
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
-		f.Close()
 		writeDryRunFailure(spec.Name, err)
 		return err
 	}
 
 	ownPid := strconv.Itoa(cmd.Process.Pid)
-	pidWriteErr := os.WriteFile(pidPath, []byte(ownPid), paths.PrivateFileMode)
+	pidWriteErr := system.Write(pidPath, []byte(ownPid))
 
 	go func() {
 		waitErr := cmd.Wait()
-		_ = f.Close()
 		if runtime.GOOS == "windows" {
-			exitCode := 0
-			if exitErr, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else if waitErr != nil {
-				exitCode = 1
-			}
-			_ = os.WriteFile(exitPath, []byte(strconv.Itoa(exitCode)), paths.PrivateFileMode)
+			_ = system.Write(exitPath, []byte(strconv.Itoa(commandExitCode(cmd.ProcessState, waitErr))))
 		}
-		if data, err := os.ReadFile(pidPath); err == nil && strings.TrimSpace(string(data)) == ownPid {
-			_ = os.Remove(pidPath)
+		if data, err := system.Read(pidPath); err == nil && strings.TrimSpace(string(data)) == ownPid {
+			_ = system.Remove(pidPath)
 		}
 	}()
 
@@ -195,6 +188,19 @@ var startDryRunBackground = func(spec config.JobSpec) error {
 		return fmt.Errorf("dry run for %q started but its pid file could not be written: %w", spec.Name, pidWriteErr)
 	}
 	return nil
+}
+
+func commandExitCode(state *os.ProcessState, waitErr error) int {
+	if state == nil {
+		if waitErr != nil {
+			return 1
+		}
+		return 0
+	}
+	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return state.ExitCode()
 }
 
 func (m Model) jobRunning(jobName string) bool {
@@ -298,15 +304,15 @@ func findJobSpec(cfg *config.Config, jobName string) config.JobSpec {
 const jobLogArchiveFormat = "20060102-150405"
 
 func pruneJobLogArchives(logsDir, jobName string, retentionDays int, now time.Time) {
-	archives, _ := filepath.Glob(filepath.Join(logsDir, jobName+"-*.log"))
+	archives, _ := system.Glob(filepath.Join(logsDir, jobName+"-*.log"))
 	cutoff := now.AddDate(0, 0, -retentionDays)
 	for _, archive := range archives {
 		stamp := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(archive), jobName+"-"), ".log")
 		if _, err := time.Parse(jobLogArchiveFormat, stamp); err != nil {
 			continue
 		}
-		if info, err := os.Stat(archive); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(archive)
+		if info, err := system.Stat(archive); err == nil && info.ModTime().Before(cutoff) {
+			_ = system.Remove(archive)
 		}
 	}
 }
@@ -321,17 +327,18 @@ var executeJobBackground = func(cfg *config.Config, jobName string) error {
 	activeLog := filepath.Join(logsDir, fmt.Sprintf("%s.log", jobName))
 	pidFile := filepath.Join(logsDir, fmt.Sprintf("%s.pid", jobName))
 
-	if _, err := os.Stat(activeLog); err == nil {
+	if system.Exists(activeLog) {
 		timestamp := time.Now().Format(jobLogArchiveFormat)
 		archivedLog := filepath.Join(logsDir, fmt.Sprintf("%s-%s.log", jobName, timestamp))
-		_ = os.Rename(activeLog, archivedLog)
+		_ = system.Rename(activeLog, archivedLog)
 	}
 	pruneJobLogArchives(logsDir, jobName, cfg.Retention(), time.Now())
 
-	f, err := paths.CreatePrivate(activeLog)
+	logFile, err := system.OpenLog(activeLog)
 	if err != nil {
 		return err
 	}
+	defer logFile.Close()
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -352,22 +359,20 @@ var executeJobBackground = func(cfg *config.Config, jobName string) error {
 		cmd.Dir = cfg.NotesDir()
 	}
 
-	cmd.Stdout = f
-	cmd.Stderr = f
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
-		f.Close()
 		return err
 	}
 
 	ownPid := strconv.Itoa(cmd.Process.Pid)
-	pidWriteErr := os.WriteFile(pidFile, []byte(ownPid), paths.PrivateFileMode)
+	pidWriteErr := system.Write(pidFile, []byte(ownPid))
 
 	go func() {
 		_ = cmd.Wait()
-		_ = f.Close()
-		if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) == ownPid {
-			_ = os.Remove(pidFile)
+		if data, err := system.Read(pidFile); err == nil && strings.TrimSpace(string(data)) == ownPid {
+			_ = system.Remove(pidFile)
 		}
 	}()
 
@@ -387,7 +392,7 @@ func signalJobGroup(pid int, sig syscall.Signal) error {
 func abortJobCmd(jobName string) tea.Cmd {
 	return func() tea.Msg {
 		pidFile := filepath.Join(getLogsDir(), fmt.Sprintf("%s.pid", jobName))
-		data, err := os.ReadFile(pidFile)
+		data, err := system.Read(pidFile)
 		if err != nil {
 			return jobAbortedMsg{jobName: jobName, err: fmt.Errorf("failed to read pid file for %q: %w", jobName, err)}
 		}
@@ -413,13 +418,12 @@ func abortJobCmd(jobName string) tea.Cmd {
 		}
 
 		activeLog := filepath.Join(getLogsDir(), fmt.Sprintf("%s.log", jobName))
-		if f, err := os.OpenFile(activeLog, os.O_WRONLY|os.O_APPEND, paths.PrivateFileMode); err == nil {
-			_, _ = f.WriteString("\n[JOB ABORTED BY USER]\n")
-			f.Close()
+		if system.Exists(activeLog) {
+			_ = system.Append(activeLog, []byte("\n[JOB ABORTED BY USER]\n"))
 		}
 
-		if current, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(current)) == strconv.Itoa(pid) {
-			_ = os.Remove(pidFile)
+		if current, err := system.Read(pidFile); err == nil && strings.TrimSpace(string(current)) == strconv.Itoa(pid) {
+			_ = system.Remove(pidFile)
 		}
 		return jobAbortedMsg{jobName: jobName, err: abortErr}
 	}
@@ -431,7 +435,7 @@ const (
 )
 
 func readFileTail(path string, maxBytes int64) string {
-	file, err := os.Open(path)
+	file, err := system.Open(path)
 	if err != nil {
 		return ""
 	}
@@ -458,7 +462,7 @@ func readJobLog(jobName string) string {
 }
 
 func jobLogModTime(path string) time.Time {
-	info, err := os.Stat(path)
+	info, err := system.Stat(path)
 	if err != nil {
 		return time.Time{}
 	}
@@ -497,7 +501,7 @@ func tickCtrlCResetCmd() tea.Cmd {
 func jobLogStampFor(jobName string, running bool) string {
 	stamp := strconv.FormatBool(running)
 	for _, path := range []string{filepath.Join(getLogsDir(), jobName+".log"), dryRunFilePath(jobName, "log")} {
-		if info, err := os.Stat(path); err == nil {
+		if info, err := system.Stat(path); err == nil {
 			stamp += fmt.Sprintf("|%d:%d", info.Size(), info.ModTime().UnixNano())
 		}
 	}

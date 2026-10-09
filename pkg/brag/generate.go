@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 var commandWaitDelay = 2 * time.Second
@@ -61,10 +64,19 @@ func Create(ctx context.Context, root, command, prompt string, period Period, fa
 	if summaryErr == nil {
 		entry.Summary, entry.SummarizedAt = summary, now
 	}
-	if err := entry.Save(root); err != nil {
+	if err := saveReportingLock(entry, root); err != nil {
 		return nil, err
 	}
 	return entry, summaryErr
+}
+
+func saveReportingLock(entry *Brag, root string) error {
+	err := entry.Save(root)
+	if errors.Is(err, system.ErrLock) {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", entry.Period.Path(root), err)
+		return nil
+	}
+	return err
 }
 
 func Regenerate(ctx context.Context, root, command, prompt string, period Period) (*Brag, error) {
@@ -78,5 +90,5 @@ func Regenerate(ctx context.Context, root, command, prompt string, period Period
 	}
 	now := time.Now()
 	entry.Summary, entry.Updated, entry.SummarizedAt = summary, now, now
-	return entry, entry.Save(root)
+	return entry, saveReportingLock(entry, root)
 }

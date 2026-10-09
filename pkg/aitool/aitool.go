@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
@@ -35,10 +37,10 @@ func versionParts(version string) []int {
 }
 
 func PluginDir(name string) (string, bool) {
-	versionDirs, _ := filepath.Glob(filepath.Join(pluginCacheRoot(), "*", name, "*"))
+	versionDirs, _ := system.Glob(filepath.Join(pluginCacheRoot(), "*", name, "*"))
 	var installed []string
 	for _, dir := range versionDirs {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		if info, err := system.Stat(dir); err == nil && info.IsDir() {
 			installed = append(installed, dir)
 		}
 	}
@@ -113,7 +115,7 @@ func TokenChecks(plugins []string) []TokenCheck {
 		if !installed || IsConnector(plugin) {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(dir, "scripts", tokenCheckScript)); err != nil {
+		if !system.Exists(filepath.Join(dir, "scripts", tokenCheckScript)) {
 			continue
 		}
 		runner := `uv run "` + filepath.Join(dir, "scripts", pluginSkillRunner) + `"`

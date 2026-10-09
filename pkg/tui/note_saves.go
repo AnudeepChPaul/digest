@@ -37,9 +37,10 @@ type failedNoteSave struct {
 }
 
 type notesSavedMsg struct {
-	saved  []savedNoteResult
-	failed []failedNoteSave
-	origin noteSaveOrigin
+	saved    []savedNoteResult
+	failed   []failedNoteSave
+	unlocked []string
+	origin   noteSaveOrigin
 }
 
 type notesDeletedMsg struct {
@@ -68,7 +69,12 @@ func (m Model) saveNotesWithOrigin(origin noteSaveOrigin, notes []*model.Note) t
 		msg := notesSavedMsg{origin: origin}
 		for index, before := range snapshots {
 			after := before
-			if err := noteStore.Save(&after); err != nil {
+			err := noteStore.Save(&after)
+			if errors.Is(err, store.ErrLockNote) {
+				msg.unlocked = append(msg.unlocked, fmt.Sprintf("%q: %v", before.Summary, err))
+				err = nil
+			}
+			if err != nil {
 				failed := failedNoteSave{target: targets[index], attempted: before, err: err}
 				if before.FilePath != "" {
 					if onDisk, loadErr := store.Load(before.FilePath); loadErr == nil {
@@ -173,6 +179,7 @@ func (m Model) applySavedNotes(msg notesSavedMsg) (tea.Model, tea.Cmd) {
 		errorTexts = append(errorTexts, fmt.Sprintf("%q: %v", failed.attempted.Summary, failed.err))
 		index := m.noteIndex(failed.target, failed.attempted)
 		switch {
+		case failed.onDisk != nil && index >= 0 && keepsTypedText(failed):
 		case failed.onDisk != nil && index >= 0:
 			*m.notes[index] = *failed.onDisk
 		case errors.Is(failed.err, store.ErrNoteFileMissing) && m.missingSave == nil:
@@ -186,11 +193,17 @@ func (m Model) applySavedNotes(msg notesSavedMsg) (tea.Model, tea.Cmd) {
 	}
 	if len(errorTexts) > 0 {
 		m.postMessage(messageSourceNotes, messageError, "save failed · "+strings.Join(errorTexts, " · "))
+	} else if len(msg.unlocked) > 0 {
+		m.postMessage(messageSourceNotes, messageError, strings.Join(msg.unlocked, " · "))
 	}
 	if m.mode == ViewArchived {
 		m.refreshArchivedViewport()
 	}
-	return m, refreshNotifyCmd(m.cfg.Root(), m.notes)
+	return m, tea.Batch(refreshNotifyCmd(m.cfg.Root(), m.notes), m.appStateAfterSaves(msg.saved))
+}
+
+func keepsTypedText(failed failedNoteSave) bool {
+	return failed.attempted.Summary != failed.onDisk.Summary || failed.attempted.Body != failed.onDisk.Body
 }
 
 func (m Model) applyDeletedNotes(msg notesDeletedMsg) (tea.Model, tea.Cmd) {

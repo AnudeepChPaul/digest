@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/automation"
-
 	"github.com/AnudeepChPaul/digest/pkg/brag"
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -434,7 +434,7 @@ func (m *Model) relatedHistoryCmd(item *GitPRItem) tea.Cmd {
 		return nil
 	}
 	dir := review.CloneDir(m.reviewRoot(), pr.Ref)
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil || len(pr.Files) == 0 {
+	if _, err := system.Stat(filepath.Join(dir, ".git")); err != nil || len(pr.Files) == 0 {
 		return nil
 	}
 	files := pr.Files
@@ -887,7 +887,7 @@ func (m Model) previewStamp() previewStamp {
 	default:
 		return previewStamp{}
 	}
-	if info, err := os.Stat(logPath); err == nil {
+	if info, err := system.Stat(logPath); err == nil {
 		stamp.logSize, stamp.logModified = info.Size(), info.ModTime()
 	}
 	return stamp
@@ -956,14 +956,6 @@ func (m Model) renderReviewRunningIndicator() string {
 
 func (m Model) renderPulseIndicator(label string) string {
 	return reviewingStyle.Render(label)
-}
-
-func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int) string {
-	rightBlock := stateStyle(review.StateFailed).Render("failed")
-	if run.Status == review.RunRunning {
-		rightBlock = m.renderReviewRunningIndicator()
-	}
-	return renderJobStyleRow(amberDiamond.Render(), reviewRunLabel(run), rightBlock, selected, width)
 }
 
 func reviewRunPreview(root string, run review.ReviewRun) runPreview {
@@ -1107,7 +1099,9 @@ func knownReviewNotesCmd(noteStore *store.NoteStore, known prNoteIndex, reviews 
 			if note.Ref == "" {
 				note.Ref = ref
 			}
-			if err := noteStore.Save(note); err != nil {
+			if err := noteStore.Save(note); errors.Is(err, store.ErrLockNote) {
+				missing = append(missing, fmt.Errorf("%s: %w", note.Ref, err))
+			} else if err != nil {
 				return notesChangedMsg{notes: changed, err: err}
 			}
 			finder.remember(note)
@@ -1154,7 +1148,9 @@ func knownReopenApprovedNotesCmd(noteStore *store.NoteStore, known prNoteIndex, 
 			}
 			note.Status = model.StatusActive
 			note.Updated = time.Now()
-			if err := noteStore.Save(note); err != nil {
+			if err := noteStore.Save(note); errors.Is(err, store.ErrLockNote) {
+				missing = append(missing, fmt.Errorf("%s: %w", note.Ref, err))
+			} else if err != nil {
 				return notesChangedMsg{notes: reopened, err: err}
 			}
 			reopened = append(reopened, *note)

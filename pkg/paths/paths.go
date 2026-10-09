@@ -25,7 +25,3 @@ const (
 	PrivateFileMode os.FileMode = 0600
 	PrivateDirMode  os.FileMode = 0700
 )
-
-func CreatePrivate(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, PrivateFileMode)
-}

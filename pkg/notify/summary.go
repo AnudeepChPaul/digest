@@ -2,13 +2,12 @@ package notify
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/habit"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,21 +34,18 @@ func summaryStatePath(root string) string {
 
 func loadSummaryState(root string) summaryState {
 	var state summaryState
-	if data, err := os.ReadFile(summaryStatePath(root)); err == nil {
+	if data, err := system.Read(summaryStatePath(root)); err == nil {
 		_ = yaml.Unmarshal(data, &state)
 	}
 	return state
 }
 
 func saveSummaryState(root string, state summaryState) error {
-	if err := os.MkdirAll(Dir(root), paths.PrivateDirMode); err != nil {
-		return err
-	}
 	data, err := yaml.Marshal(state)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(summaryStatePath(root), data, paths.PrivateFileMode)
+	return system.Write(summaryStatePath(root), data)
 }
 
 func slotTime(now time.Time, clock string) (time.Time, bool) {

@@ -1,7 +1,6 @@
 package automation
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
@@ -60,7 +59,7 @@ func LogPath(root, noteID string) string {
 }
 
 func readInt(path string) (int, bool) {
-	data, err := os.ReadFile(path)
+	data, err := system.Read(path)
 	if err != nil {
 		return 0, false
 	}
@@ -82,22 +81,61 @@ func running(root, noteID string) bool {
 }
 
 func writeMeta(dir string, meta RunMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
+	return system.WriteJSON(filepath.Join(dir, runMetaFile), meta)
+}
+
+func exitCodeFor(runErr error) int {
+	switch {
+	case runErr == nil:
+		return 0
+	case errors.Is(runErr, ErrNeedsReauth):
+		return ExitNeedsReauth
+	default:
+		return 1
 	}
-	return os.WriteFile(filepath.Join(dir, runMetaFile), data, paths.PrivateFileMode)
+}
+
+func claimRun(root, noteID string) (func(runErr error), error) {
+	if !validNoteID(root, noteID) {
+		return nil, ErrInvalidNoteID
+	}
+	dir := StateDir(root, noteID)
+	if err := system.MkdirAll(dir); err != nil {
+		return nil, err
+	}
+	pidPath := filepath.Join(dir, runPIDFile)
+	if pid, found := readInt(pidPath); found && processAlive(pid) && pid != os.Getpid() {
+		return nil, ErrRunning
+	}
+	if err := system.Remove(filepath.Join(dir, runExitFile)); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if err := system.Write(pidPath, []byte(strconv.Itoa(os.Getpid()))); err != nil {
+		return nil, err
+	}
+	return func(runErr error) {
+		_ = system.Write(filepath.Join(dir, runExitFile), []byte(strconv.Itoa(exitCodeFor(runErr))))
+		_ = system.Remove(pidPath)
+	}, nil
+}
+
+func recordUnreportedExit(dir string, process *os.Process, state *os.ProcessState) {
+	exitPath := filepath.Join(dir, runExitFile)
+	if state == nil || !state.Exited() || system.Exists(exitPath) {
+		return
+	}
+	_ = system.Write(exitPath, []byte(strconv.Itoa(state.ExitCode())))
+	pidPath := filepath.Join(dir, runPIDFile)
+	if pid, found := readInt(pidPath); found && pid == process.Pid {
+		_ = system.Remove(pidPath)
+	}
 }
 
 func Status(root, noteID string) Run {
 	dir := StateDir(root, noteID)
 	run := Run{Meta: RunMeta{NoteID: noteID}}
-	if data, err := os.ReadFile(filepath.Join(dir, runMetaFile)); err == nil {
-		_ = json.Unmarshal(data, &run.Meta)
-	}
-	if _, err := os.Stat(filepath.Join(dir, draftFile)); err == nil {
-		run.HasDraft = true
-	}
+	_, _ = system.ReadJSON(filepath.Join(dir, runMetaFile), &run.Meta)
+	run.HasDraft = system.Exists(filepath.Join(dir, draftFile))
 	if running(root, noteID) {
 		run.Status = RunRunning
 		return run
@@ -109,7 +147,7 @@ func Status(root, noteID string) Run {
 		if run.HasDraft {
 			run.Status = RunDraftReady
 		}
-		if _, err := os.Stat(filepath.Join(dir, runPIDFile)); err == nil {
+		if system.Exists(filepath.Join(dir, runPIDFile)) {
 			run.Status = RunFailed
 		}
 	case exitCode == ExitNeedsReauth:
@@ -125,7 +163,7 @@ func Status(root, noteID string) Run {
 }
 
 func ListRuns(root string) map[string]Run {
-	entries, err := os.ReadDir(root)
+	entries, err := system.List(root)
 	if err != nil {
 		return nil
 	}
@@ -146,7 +184,7 @@ func StartBackground(root, noteID, automationName string, phase Phase) error {
 		return ErrRunning
 	}
 	dir := StateDir(root, noteID)
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(dir); err != nil {
 		return err
 	}
 	stale := []string{runExitFile, runPIDFile}
@@ -154,7 +192,7 @@ func StartBackground(root, noteID, automationName string, phase Phase) error {
 		stale = append(stale, draftFile)
 	}
 	for _, staleFile := range stale {
-		if err := os.Remove(filepath.Join(dir, staleFile)); err != nil && !os.IsNotExist(err) {
+		if err := system.Remove(filepath.Join(dir, staleFile)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -165,25 +203,23 @@ func StartBackground(root, noteID, automationName string, phase Phase) error {
 	if err != nil {
 		return fmt.Errorf("locate digest binary: %w", err)
 	}
-	logOutput, err := paths.CreatePrivate(LogPath(root, noteID))
+	logFile, err := system.OpenLog(LogPath(root, noteID))
 	if err != nil {
 		return err
 	}
+	defer logFile.Close()
 	pidPath := filepath.Join(dir, runPIDFile)
-	script := `"$3" automation --note "$4" --name "$5" --phase "$6"; echo $? > "$1"; rm -f "$2"`
-	cmd := exec.Command("sh", "-c", script, "digest-automation", filepath.Join(dir, runExitFile), pidPath, executable, noteID, automationName, string(phase))
+	cmd := exec.Command(executable, "automation", "--note", noteID, "--name", automationName, "--phase", string(phase))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.Dir = dir
-	cmd.Stdout = logOutput
-	cmd.Stderr = logOutput
 	if err := cmd.Start(); err != nil {
-		logOutput.Close()
 		return err
 	}
-	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), paths.PrivateFileMode)
+	pidErr := system.Write(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)))
 	go func() {
 		_ = cmd.Wait()
-		_ = logOutput.Close()
+		recordUnreportedExit(dir, cmd.Process, cmd.ProcessState)
 	}()
 	if pidErr != nil {
 		return fmt.Errorf("automation started but its pid file could not be written: %w", pidErr)
@@ -201,26 +237,30 @@ func Stop(root, noteID string) error {
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("stop automation for %s: %w", noteID, err)
 	}
-	if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
+	if err := system.Remove(pidPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, runExitFile), []byte("143"), paths.PrivateFileMode)
+	return system.Write(filepath.Join(dir, runExitFile), []byte("143"))
 }
 
 var ErrInvalidNoteID = errors.New("note id does not name a folder inside the automations root")
 
+func validNoteID(root, noteID string) bool {
+	return noteID != "" && filepath.Dir(StateDir(root, noteID)) == filepath.Clean(root) && filepath.Base(StateDir(root, noteID)) == noteID
+}
+
 func Dismiss(root, noteID string) error {
-	if noteID == "" || filepath.Dir(StateDir(root, noteID)) != filepath.Clean(root) || filepath.Base(StateDir(root, noteID)) != noteID {
+	if !validNoteID(root, noteID) {
 		return ErrInvalidNoteID
 	}
 	if running(root, noteID) {
 		return ErrRunning
 	}
-	return os.RemoveAll(StateDir(root, noteID))
+	return system.RemoveAll(StateDir(root, noteID))
 }
 
 func AnyRunning(root string) bool {
-	entries, err := os.ReadDir(root)
+	entries, err := system.List(root)
 	if err != nil {
 		return false
 	}

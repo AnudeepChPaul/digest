@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,8 +20,8 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/aitool"
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -289,15 +290,11 @@ func SaveDraft(root, noteID, text string) error {
 	if _, err := ParseDraft(text); err != nil {
 		return err
 	}
-	dir := StateDir(root, noteID)
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, draftFile), []byte(text), paths.PrivateFileMode)
+	return system.Write(filepath.Join(StateDir(root, noteID), draftFile), []byte(text))
 }
 
 func LoadDraft(root, noteID string) (string, error) {
-	text, err := os.ReadFile(filepath.Join(StateDir(root, noteID), draftFile))
+	text, err := system.Read(filepath.Join(StateDir(root, noteID), draftFile))
 	return string(text), err
 }
 
@@ -326,7 +323,17 @@ func resultSection(result Result, draftFields map[string]any) string {
 	return section
 }
 
-func RunJob(ctx context.Context, cfg *config.Config, noteID, automationName string, phase Phase) error {
+func RunJob(ctx context.Context, cfg *config.Config, noteID, automationName string, phase Phase) (runErr error) {
+	release, err := claimRun(cfg.AutomationDir(), noteID)
+	if err != nil {
+		return err
+	}
+	defer func() { release(runErr) }()
+	stdout, stderr := io.Writer(os.Stdout), io.Writer(os.Stderr)
+	return runJob(ctx, cfg, noteID, automationName, phase, stdout, stderr)
+}
+
+func runJob(ctx context.Context, cfg *config.Config, noteID, automationName string, phase Phase, stdout, stderr io.Writer) error {
 	spec, found := Find(cfg.AutomationList(), automationName)
 	if !found {
 		return fmt.Errorf("no automation named %q in the config", automationName)
@@ -350,12 +357,14 @@ func RunJob(ctx context.Context, cfg *config.Config, noteID, automationName stri
 	draftFields, _ := ParseDraft(draft)
 	note.Body = strings.TrimSpace(strings.TrimSpace(note.Body) + "\n\n" + resultSection(result, draftFields))
 	note.Automated, note.Updated = result.Kind, time.Now()
-	if err := noteStore.Save(note); err != nil {
+	if err := noteStore.Save(note); errors.Is(err, store.ErrLockNote) {
+		fmt.Fprintf(stderr, "%s created: %v\n", result.Kind, err)
+	} else if err != nil {
 		return fmt.Errorf("%s created but the note could not be saved: %w", result.Kind, err)
 	}
-	if err := os.Remove(filepath.Join(StateDir(cfg.AutomationDir(), noteID), draftFile)); err != nil {
+	if err := system.Remove(filepath.Join(StateDir(cfg.AutomationDir(), noteID), draftFile)); err != nil {
 		return fmt.Errorf("%s created but its draft could not be removed: %w", result.Kind, err)
 	}
-	fmt.Printf("Created %s %s %s\n", result.Kind, result.Key, result.URL)
+	fmt.Fprintf(stdout, "Created %s %s %s\n", result.Kind, result.Key, result.URL)
 	return nil
 }

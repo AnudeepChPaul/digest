@@ -1,19 +1,17 @@
 package tui
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -160,31 +158,19 @@ func changedPRAlerts(previous, current map[string]prStatus) []notify.Notificatio
 }
 
 func sendPRAlerts(path string, current map[string]prStatus) error {
-	data, err := os.ReadFile(path)
-	firstSync := errors.Is(err, os.ErrNotExist)
-	if err != nil && !firstSync {
+	previous := map[string]prStatus{}
+	found, err := system.ReadJSON(path, &previous)
+	if err != nil {
 		return err
 	}
-	previous := map[string]prStatus{}
-	if !firstSync {
-		if err := json.Unmarshal(data, &previous); err != nil {
-			return err
-		}
-	}
+	firstSync := !found
 	var sendErrs []error
 	if !firstSync {
 		for _, alert := range changedPRAlerts(previous, current) {
 			sendErrs = append(sendErrs, notify.Send(alert))
 		}
 	}
-	encoded, err := json.MarshalIndent(current, "", "  ")
-	if err == nil {
-		err = os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode)
-	}
-	if err == nil {
-		err = os.WriteFile(path, encoded, paths.PrivateFileMode)
-	}
-	return errors.Join(append(sendErrs, err)...)
+	return errors.Join(append(sendErrs, system.WriteJSON(path, current))...)
 }
 
 func (m Model) prAlertsCmd() tea.Cmd {

@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,12 +119,12 @@ func TestRunRefusedWhileAnotherRuns(t *testing.T) {
 	stubParentPID(t, 1)
 	originalPrepare := prepareClone
 	cloned := false
-	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger) (string, error) {
+	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger, output io.Writer) (string, error) {
 		cloned = true
 		return "", nil
 	}
 	defer func() { prepareClone = originalPrepare }()
-	if err := run(context.Background(), ref, root, "true", log.New(os.Stderr)); !errors.Is(err, ErrReviewRunning) || cloned {
+	if err := run(context.Background(), ref, root, "true", log.New(os.Stderr), os.Stdout, os.Stderr); !errors.Is(err, ErrReviewRunning) || cloned {
 		t.Errorf("err=%v cloned=%v", err, cloned)
 	}
 }
@@ -199,19 +200,51 @@ func TestStatusClearsAPIDFileOfAnExitedProcess(t *testing.T) {
 	}
 }
 
-func TestBackgroundWrapperRemovesThePIDFileWhenDone(t *testing.T) {
+func TestBackgroundChildClaimsThePIDItsLauncherWrote(t *testing.T) {
 	dir := t.TempDir()
-	script := backgroundScript("true")
 	pidPath := filepath.Join(dir, pidFile)
-	writeFile(t, pidPath, "1")
-	if err := exec.Command("sh", "-c", script, "digest-review", filepath.Join(dir, exitFile), pidPath).Run(); err != nil {
+	writeFile(t, pidPath, strconv.Itoa(os.Getpid()))
+	writeFile(t, filepath.Join(dir, FindingsFile), "{}")
+	stubParentPID(t, 1)
+	release, err := claimRun(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, FindingsFile)); err == nil {
+		t.Errorf("stale findings kept")
+	}
+	release(nil)
 	if _, err := os.Stat(pidPath); err == nil {
-		t.Error("the wrapper should remove the pid file when the review ends")
+		t.Error("the child should remove its pid file when the review ends")
 	}
 	if code, ok := readInt(filepath.Join(dir, exitFile)); !ok || code != 0 {
 		t.Errorf("exit = %d, %v", code, ok)
+	}
+}
+
+func TestStoppedRunLeavesNoExitCode(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 11, URL: "https://github.com/o/console/pull/11"}
+	stubParentPID(t, 1)
+	originalPrepare := prepareClone
+	prepareClone = func(ctx context.Context, ref PRRef, root string, logger *log.Logger, output io.Writer) (string, error) {
+		return root, nil
+	}
+	defer func() { prepareClone = originalPrepare }()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	if err := run(ctx, ref, root, "sleep 30", log.New(io.Discard), io.Discard, io.Discard); err == nil {
+		t.Fatal("expected the stopped review to fail")
+	}
+	dir := StateDir(root, ref)
+	if _, err := os.Stat(filepath.Join(dir, exitFile)); err == nil {
+		t.Error("a stopped review should not write an exit code")
+	}
+	if _, err := os.Stat(filepath.Join(dir, pidFile)); err == nil {
+		t.Error("a stopped review should remove its pid file")
+	}
+	if Status(dir) != RunIdle {
+		t.Errorf("status = %v, want idle", Status(dir))
 	}
 }
 

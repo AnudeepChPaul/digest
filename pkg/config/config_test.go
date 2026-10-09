@@ -23,7 +23,7 @@ func TestReviewSettingsDefaultWhenAbsent(t *testing.T) {
 	if !strings.HasSuffix(cfg.ReviewRootDir(), "/digest/reviews") || !strings.HasSuffix(cfg.NotesDir(), "/digest/notes") {
 		t.Errorf("ReviewRootDir = %q NotesDir = %q", cfg.ReviewRootDir(), cfg.NotesDir())
 	}
-	if !strings.Contains(cfg.ReviewCommandTemplate(), "{url}") || !strings.Contains(cfg.ReviewCommandTemplate(), "{findings}") {
+	if template := cfg.ReviewCommandTemplate(); !strings.Contains(template, "{url}") || !strings.Contains(template, "--emit findings-json") || strings.Contains(template, "{findings}") || strings.Contains(template, "--emit-to") {
 		t.Errorf("ReviewCommandTemplate = %q", cfg.ReviewCommandTemplate())
 	}
 }

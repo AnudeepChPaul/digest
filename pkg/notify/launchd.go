@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const LaunchAgentLabel = "com.digest.notify"
@@ -68,19 +69,19 @@ func Install(executable, logPath string) error {
 		return fmt.Errorf("build the digest notifier: %w", err)
 	}
 	plistPath := LaunchAgentPath()
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
+	if err := system.MkdirAllWithMode(filepath.Dir(plistPath), 0755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(logPath), paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(filepath.Dir(logPath)); err != nil {
 		return err
 	}
 	if err := createPrivateLog(logPath); err != nil {
 		return err
 	}
-	if err := os.WriteFile(plistPath, []byte(LaunchAgentPlist(executable, logPath, os.Getenv("PATH"))), paths.PrivateFileMode); err != nil {
+	if err := system.Write(plistPath, []byte(LaunchAgentPlist(executable, logPath, os.Getenv("PATH")))); err != nil {
 		return err
 	}
-	if err := os.Chmod(plistPath, paths.PrivateFileMode); err != nil {
+	if err := system.Chmod(plistPath, paths.PrivateFileMode); err != nil {
 		return err
 	}
 	_ = launchctl("bootout", launchDomain()+"/"+LaunchAgentLabel)
@@ -88,25 +89,20 @@ func Install(executable, logPath string) error {
 }
 
 func createPrivateLog(logPath string) error {
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, paths.PrivateFileMode)
-	if err != nil {
+	if err := system.Append(logPath, nil); err != nil {
 		return err
 	}
-	if err := logFile.Close(); err != nil {
-		return err
-	}
-	return os.Chmod(logPath, paths.PrivateFileMode)
+	return system.Chmod(logPath, paths.PrivateFileMode)
 }
 
 func Uninstall() error {
 	_ = launchctl("bootout", launchDomain()+"/"+LaunchAgentLabel)
-	if err := os.Remove(LaunchAgentPath()); err != nil && !os.IsNotExist(err) {
+	if err := system.Remove(LaunchAgentPath()); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return os.RemoveAll(NotifierAppPath())
+	return system.RemoveAll(NotifierAppPath())
 }
 
 func Installed() bool {
-	_, err := os.Stat(LaunchAgentPath())
-	return err == nil
+	return system.Exists(LaunchAgentPath())
 }

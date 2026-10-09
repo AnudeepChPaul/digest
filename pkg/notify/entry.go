@@ -2,13 +2,13 @@ package notify
 
 import (
 	"errors"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,22 +33,15 @@ func entryPath(root, noteID string) string {
 }
 
 func Save(root string, entry Entry) error {
-	if err := os.MkdirAll(Dir(root), paths.PrivateDirMode); err != nil {
-		return err
-	}
 	data, err := yaml.Marshal(entry)
 	if err != nil {
 		return err
 	}
-	temporaryPath := entryPath(root, entry.NoteID) + ".tmp"
-	if err := os.WriteFile(temporaryPath, data, paths.PrivateFileMode); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, entryPath(root, entry.NoteID))
+	return system.Write(entryPath(root, entry.NoteID), data)
 }
 
 func Load(root, noteID string) (Entry, bool) {
-	data, err := os.ReadFile(entryPath(root, noteID))
+	data, err := system.Read(entryPath(root, noteID))
 	if err != nil {
 		return Entry{}, false
 	}
@@ -60,15 +53,15 @@ func Load(root, noteID string) (Entry, bool) {
 }
 
 func Remove(root, noteID string) error {
-	if err := os.Remove(entryPath(root, noteID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := system.Remove(entryPath(root, noteID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
 func List(root string) ([]Entry, error) {
-	files, err := os.ReadDir(Dir(root))
-	if errors.Is(err, os.ErrNotExist) {
+	files, err := system.List(Dir(root))
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {

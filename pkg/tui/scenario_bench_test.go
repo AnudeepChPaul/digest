@@ -17,6 +17,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -88,6 +89,7 @@ func benchFixtureRoot(b *testing.B, notes int) string {
 	if err != nil {
 		b.Fatal(err)
 	}
+	system.Protect(root)
 	noteStore := store.New(filepath.Join(root, "notes"))
 	now := time.Now()
 	for index := 0; index < notes; index++ {
@@ -102,7 +104,9 @@ func benchFixtureRoot(b *testing.B, notes int) string {
 func removeBenchFixtures() {
 	benchFixturesMu.Lock()
 	defer benchFixturesMu.Unlock()
+	system.Protect("")
 	for size, root := range benchFixtures {
+		_ = system.UnlockTree(root)
 		os.RemoveAll(root)
 		delete(benchFixtures, size)
 	}
@@ -121,7 +125,9 @@ func startModel(root string) Model {
 
 func scenarioModel(b *testing.B, notes int) Model {
 	b.Helper()
-	m := startModel(benchFixtureRoot(b, notes))
+	root := benchFixtureRoot(b, notes)
+	system.Protect(root)
+	m := startModel(root)
 	b.Cleanup(m.cancelSession)
 	addBenchGitData(&m)
 	m.bannerWaveActive = false

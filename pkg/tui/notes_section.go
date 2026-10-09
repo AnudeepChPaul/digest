@@ -722,6 +722,12 @@ func (notesSection) ApplyMessage(m Model, msg tea.Msg) (tea.Model, tea.Cmd, bool
 			m.showError("ACTION USAGE ERROR", msg.err)
 		}
 		return messageHandled(m, nil)
+
+	case appStateSavedMsg:
+		if msg.err != nil {
+			m.showError("STATE ERROR", msg.err)
+		}
+		return messageHandled(m, nil)
 	}
 	return m, nil, false
 }

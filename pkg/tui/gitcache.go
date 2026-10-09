@@ -3,14 +3,13 @@ package tui
 import (
 	"encoding/json"
 	"maps"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -56,41 +55,13 @@ func fromCachedItems(cached []cachedGitItem) []GitPRItem {
 }
 
 func saveGitCache(cache gitSyncCache) error {
-	cachePath := gitCachePath()
-	if err := os.MkdirAll(filepath.Dir(cachePath), paths.PrivateDirMode); err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(cache)
-	if err != nil {
-		return err
-	}
-	tempFile, err := os.CreateTemp(filepath.Dir(cachePath), ".git-sync-*.json")
-	if err != nil {
-		return err
-	}
-	if _, err := tempFile.Write(encoded); err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-		return err
-	}
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempFile.Name())
-		return err
-	}
-	if err := os.Rename(tempFile.Name(), cachePath); err != nil {
-		os.Remove(tempFile.Name())
-		return err
-	}
-	return nil
+	return system.WriteJSON(gitCachePath(), cache)
 }
 
 func loadGitCache() (gitSyncCache, bool) {
 	var cache gitSyncCache
-	encoded, err := os.ReadFile(gitCachePath())
-	if err != nil {
-		return cache, false
-	}
-	if err := json.Unmarshal(encoded, &cache); err != nil {
+	found, err := system.ReadJSON(gitCachePath(), &cache)
+	if !found || err != nil {
 		return gitSyncCache{}, false
 	}
 	return cache, true

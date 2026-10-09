@@ -8,10 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
-	MarkdownFile   = "docs/benchmark/BENCHMARK.md"
+	MarkdownFile   = "docs/benchmark/benchmark.md"
 	scenarioPrefix = "BenchmarkScenario"
 	historyStart   = "<!-- history:start -->"
 	historyEnd     = "<!-- history:end -->"
@@ -72,12 +74,12 @@ func ParseGoBench(output string) ([]Result, string) {
 
 func Record(root string, run Run) error {
 	path := filepath.Join(root, filepath.FromSlash(MarkdownFile))
-	existing, err := os.ReadFile(path)
+	existing, err := system.Read(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := system.MkdirAllWithMode(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(Markdown(run, string(existing))), 0o644)
+	return system.WriteWithMode(path, []byte(Markdown(run, string(existing))), 0o644)
 }

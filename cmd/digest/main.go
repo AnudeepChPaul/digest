@@ -27,6 +27,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 	"github.com/AnudeepChPaul/digest/pkg/tui"
 
 	"github.com/charmbracelet/log"
@@ -151,6 +152,7 @@ func main() {
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", configErr)
 	}
+	system.Protect(cfg.Root(), cfg.ReviewRootDir(), cfg.LogsDir(), config.Path(*configPath))
 	if !dryRun {
 		if err := cfg.TightenPermissions(*configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -331,6 +333,7 @@ func main() {
 			TUIMarker:     cfg.TUIMarkerPath(),
 			Out:           os.Stdout,
 			PRCreatedAt:   prCreatedAt,
+			IsWorkDay:     cfg.IsWorkDay,
 		})
 		exitForJob("migrate", false, err)
 

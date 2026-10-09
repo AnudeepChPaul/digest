@@ -11,12 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AnudeepChPaul/digest/pkg/appstate"
 	"github.com/AnudeepChPaul/digest/pkg/automation"
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/notify"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/running"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 var (
@@ -37,6 +39,8 @@ type Options struct {
 	TUIMarker     string
 	Out           io.Writer
 	PRCreatedAt   func(url string) (time.Time, error)
+	IsWorkDay     func(time.Weekday) bool
+	Now           func() time.Time
 }
 
 type plannedNote struct {
@@ -115,7 +119,36 @@ func Run(options Options) (int, error) {
 		}
 	}
 	fmt.Fprintf(options.Out, "%d notes migrated\n", changed)
+	if _, found, err := appstate.Load(options.Root); err != nil {
+		return changed, err
+	} else if !found {
+		if err := appstate.Save(options.Root, appstate.FromNotes(notes, options.now(), options.isWorkDay)); err != nil {
+			return changed, fmt.Errorf("save %s: %w", appstate.Path(options.Root), err)
+		}
+	}
+	if system.Protected(options.Root) {
+		fmt.Fprintf(options.Out, "Locking files in %s (reviews, logs, config.yaml and *.log files stay unlocked)…\n", options.Root)
+		locked, err := system.LockTree(options.Root)
+		if err != nil {
+			return changed, fmt.Errorf("lock files: %w", err)
+		}
+		fmt.Fprintf(options.Out, "%d files locked\n", locked)
+	}
 	return changed, nil
+}
+
+func (options Options) now() time.Time {
+	if options.Now == nil {
+		return time.Now()
+	}
+	return options.Now()
+}
+
+func (options Options) isWorkDay(day time.Weekday) bool {
+	if options.IsWorkDay == nil {
+		return day != time.Saturday && day != time.Sunday
+	}
+	return options.IsWorkDay(day)
 }
 
 func isPRNote(note *model.Note) bool {

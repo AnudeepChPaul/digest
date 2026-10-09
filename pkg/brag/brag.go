@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -12,7 +11,7 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -229,13 +228,12 @@ func ParseBody(period Period, body string) (*Brag, error) {
 }
 
 func Exists(root string, period Period) bool {
-	_, err := os.Stat(period.Path(root))
-	return err == nil
+	return system.Exists(period.Path(root))
 }
 
 func Load(root string, period Period) (*Brag, error) {
 	path := period.Path(root)
-	content, err := os.ReadFile(path)
+	content, err := system.Read(path)
 	if err != nil {
 		return nil, err
 	}
@@ -274,13 +272,10 @@ func (b *Brag) Save(root string) error {
 		return err
 	}
 	path := b.Period.Path(root)
-	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
-		return err
-	}
 	var content bytes.Buffer
 	content.WriteString("---\n")
 	content.Write(meta)
 	content.WriteString("---\n")
 	content.WriteString(b.Body())
-	return os.WriteFile(path, content.Bytes(), paths.PrivateFileMode)
+	return system.Write(path, content.Bytes())
 }

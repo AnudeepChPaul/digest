@@ -3,8 +3,9 @@ package review
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
+
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 type Finding struct {
@@ -33,7 +34,7 @@ type SeverityGroup struct {
 var severityOrder = []string{"critical", "high", "medium", "low"}
 
 func Load(dir string) (*Report, error) {
-	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
+	data, err := system.Read(filepath.Join(dir, FindingsFile))
 	if err != nil {
 		return nil, err
 	}

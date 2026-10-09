@@ -3,12 +3,11 @@ package sourcecontrol
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -28,14 +27,11 @@ func ClonePR(ctx context.Context, root string, pr review.QueuedPR) (string, erro
 	if review.Status(stateDir) == review.RunRunning {
 		return "", ErrCloneInProgress
 	}
-	if err := os.MkdirAll(stateDir, paths.PrivateDirMode); err != nil {
+	logPath := filepath.Join(stateDir, "clone.log")
+	if err := system.Write(logPath, nil); err != nil {
 		return "", err
 	}
-	logOutput, err := paths.CreatePrivate(filepath.Join(stateDir, "clone.log"))
-	if err != nil {
-		return "", err
-	}
-	defer logOutput.Close()
+	logOutput := system.LogWriter(logPath)
 	if err := review.WriteMeta(stateDir, review.Meta{Ref: ref, Title: pr.Title, HeadSHA: pr.HeadSHA}); err != nil {
 		return "", err
 	}

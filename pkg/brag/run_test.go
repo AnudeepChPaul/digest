@@ -63,10 +63,7 @@ func TestClaimRunWritesPIDAndExitCode(t *testing.T) {
 
 func TestClaimRunRefusesOtherLiveRun(t *testing.T) {
 	root := t.TempDir()
-	writeState(t, root, "2026-W40", map[string]string{runPIDFile: strconv.Itoa(os.Getpid())})
-	original := parentPID
-	parentPID = func() int { return -1 }
-	defer func() { parentPID = original }()
+	writeState(t, root, "2026-W40", map[string]string{runPIDFile: strconv.Itoa(os.Getppid())})
 	if _, err := claimRun(root, "2026-W40"); !errors.Is(err, ErrBragRunning) {
 		t.Errorf("err = %v", err)
 	}
@@ -165,17 +162,95 @@ func TestStatusClearsAPIDFileOfAnExitedProcess(t *testing.T) {
 	}
 }
 
-func TestBackgroundWrapperRemovesThePIDFileWhenDone(t *testing.T) {
-	dir := t.TempDir()
-	pidPath := filepath.Join(dir, runPIDFile)
-	if err := os.WriteFile(pidPath, []byte("1"), 0644); err != nil {
+func fakeDigest(t *testing.T, body string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-digest")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body+"\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := exec.Command("sh", "-c", backgroundScript("true"), "digest-brag", filepath.Join(dir, runExitFile), pidPath).Run(); err != nil {
+	original := executablePath
+	executablePath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { executablePath = original })
+	return script
+}
+
+func waitForBrag(t *testing.T, root, id string) RunStatus {
+	t.Helper()
+	pidPath := filepath.Join(StateDir(root, id), runPIDFile)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pidPath); err != nil && !IsRunning(root, id) {
+			return Status(root, id)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("background brag did not finish")
+	return RunIdle
+}
+
+func TestBackgroundRunRemovesThePIDFileWhenDone(t *testing.T) {
+	root := t.TempDir()
+	fakeDigest(t, `echo "$@"`)
+	week := WeekOf(localDate(2026, 9, 30))
+	if err := StartBackground(root, week, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(pidPath); err == nil {
-		t.Error("the wrapper should remove the pid file when the brag ends")
+	if status := waitForBrag(t, root, week.ID()); status != RunDone {
+		t.Errorf("status = %v", status)
+	}
+	if _, err := os.Stat(filepath.Join(StateDir(root, week.ID()), runPIDFile)); err == nil {
+		t.Error("the pid file should be removed when the brag ends")
+	}
+	logText, _ := os.ReadFile(filepath.Join(StateDir(root, week.ID()), RunLogFile))
+	if !strings.Contains(string(logText), "brag --week "+week.ID()+" --regenerate=false") {
+		t.Errorf("log = %q", logText)
+	}
+}
+
+func TestBackgroundRunRecordsAnUnreportedExitCode(t *testing.T) {
+	root := t.TempDir()
+	fakeDigest(t, "exit 2")
+	week := WeekOf(localDate(2026, 9, 30))
+	if err := StartBackground(root, week, false); err != nil {
+		t.Fatal(err)
+	}
+	if status := waitForBrag(t, root, week.ID()); status != RunFailed {
+		t.Errorf("status = %v", status)
+	}
+	if code, _ := readInt(filepath.Join(StateDir(root, week.ID()), runExitFile)); code != 2 {
+		t.Errorf("exit = %d", code)
+	}
+}
+
+func TestBackgroundRunKeepsTheExitCodeTheChildWrote(t *testing.T) {
+	root := t.TempDir()
+	week := WeekOf(localDate(2026, 9, 30))
+	exitPath := filepath.Join(StateDir(root, week.ID()), runExitFile)
+	fakeDigest(t, `printf 1 > "`+exitPath+`"; exit 0`)
+	if err := StartBackground(root, week, false); err != nil {
+		t.Fatal(err)
+	}
+	if status := waitForBrag(t, root, week.ID()); status != RunFailed {
+		t.Errorf("status = %v", status)
+	}
+}
+
+func TestClaimRunAcceptsThePIDItsLauncherWrote(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, "2026-W40", map[string]string{runPIDFile: strconv.Itoa(os.Getpid()), runExitFile: "1"})
+	release, err := claimRun(root, "2026-W40")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Status(root, "2026-W40") != RunRunning {
+		t.Errorf("status = %v", Status(root, "2026-W40"))
+	}
+	release(nil)
+	if Status(root, "2026-W40") != RunDone {
+		t.Errorf("status = %v", Status(root, "2026-W40"))
+	}
+	if _, err := os.Stat(filepath.Join(StateDir(root, "2026-W40"), runPIDFile)); err == nil {
+		t.Error("release should remove the pid file")
 	}
 }
 
@@ -201,5 +276,19 @@ func TestStopKillsAGroupThatIgnoresTerm(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		_ = syscall.Kill(-stubborn.Process.Pid, syscall.SIGKILL)
 		t.Fatal("stop should escalate to SIGKILL")
+	}
+}
+
+func TestChildOutputAndCrashesLandInTheRunLog(t *testing.T) {
+	root := t.TempDir()
+	fakeDigest(t, `echo out; echo "panic: boom" >&2; exit 2`)
+	week := WeekOf(localDate(2026, 9, 30))
+	if err := StartBackground(root, week, false); err != nil {
+		t.Fatal(err)
+	}
+	waitForBrag(t, root, week.ID())
+	logText, _ := os.ReadFile(filepath.Join(StateDir(root, week.ID()), RunLogFile))
+	if !strings.Contains(string(logText), "out\n") || !strings.Contains(string(logText), "panic: boom") {
+		t.Errorf("stdout and stderr of the child should land in the run log: %q", logText)
 	}
 }

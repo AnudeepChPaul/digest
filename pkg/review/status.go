@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
 
 	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 type PRState string
@@ -46,7 +44,7 @@ var sendNotification = func(title, message, openURL string) error {
 
 func NotifyTransitions(prs []QueuedPR, root, statePath string) error {
 	seen := map[string]bool{}
-	data, err := os.ReadFile(statePath)
+	data, err := system.Read(statePath)
 	firstRun := errors.Is(err, fs.ErrNotExist)
 	if err == nil {
 		if err := json.Unmarshal(data, &seen); err != nil {
@@ -71,33 +69,12 @@ func NotifyTransitions(prs []QueuedPR, root, statePath string) error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(statePath), paths.PrivateDirMode); err != nil {
-		return err
-	}
 	encoded, err := json.Marshal(seen)
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomically(statePath, encoded); err != nil {
+	if err := system.Write(statePath, encoded); err != nil {
 		return err
 	}
 	return notifyErr
-}
-
-func writeFileAtomically(path string, data []byte) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
-	if err != nil {
-		return err
-	}
-	_, writeErr := temporary.Write(data)
-	closeErr := temporary.Close()
-	if err := errors.Join(writeErr, closeErr); err != nil {
-		_ = os.Remove(temporary.Name())
-		return err
-	}
-	if err := os.Rename(temporary.Name(), path); err != nil {
-		_ = os.Remove(temporary.Name())
-		return err
-	}
-	return nil
 }

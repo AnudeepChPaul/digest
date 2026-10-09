@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,9 +12,9 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -61,7 +60,7 @@ func myPRsSeenPath(root string) string {
 
 func loadMyPRsSeen(path string) (map[string]myPRSeen, error) {
 	seen := map[string]myPRSeen{}
-	encoded, err := os.ReadFile(path)
+	encoded, err := system.Read(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return seen, nil
 	}
@@ -75,31 +74,7 @@ func loadMyPRsSeen(path string) (map[string]myPRSeen, error) {
 }
 
 func saveMyPRsSeen(path string, seen map[string]myPRSeen) error {
-	if err := os.MkdirAll(filepath.Dir(path), paths.PrivateDirMode); err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(seen)
-	if err != nil {
-		return err
-	}
-	tempFile, err := os.CreateTemp(filepath.Dir(path), ".my-prs-seen-*.json")
-	if err != nil {
-		return err
-	}
-	if _, err := tempFile.Write(encoded); err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
-		return err
-	}
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempFile.Name())
-		return err
-	}
-	if err := os.Rename(tempFile.Name(), path); err != nil {
-		os.Remove(tempFile.Name())
-		return err
-	}
-	return nil
+	return system.WriteJSON(path, seen)
 }
 
 func knownMyPRRefs(seen map[string]myPRSeen) []review.PRRef {
@@ -220,7 +195,9 @@ func knownMyPRNotesCmd(noteStore *store.NoteStore, known prNoteIndex, seenPath s
 		var missing []error
 		seenChanged := false
 		save := func(note *model.Note) error {
-			if err := noteStore.Save(note); err != nil {
+			if err := noteStore.Save(note); errors.Is(err, store.ErrLockNote) {
+				missing = append(missing, fmt.Errorf("%s: %w", note.Ref, err))
+			} else if err != nil {
 				return err
 			}
 			changed = append(changed, *note)

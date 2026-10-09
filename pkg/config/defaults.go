@@ -56,7 +56,7 @@ const (
 	AutomationPRReview   = "pr review"
 )
 
-const DefaultReviewPrompt = "/review-toolkit:review {url} --emit findings-json --emit-to {findings}"
+const DefaultReviewPrompt = "/review-toolkit:review {url} --emit findings-json"
 
 const noInventionRule = "The note is the only source of truth; never invent people, dates or numbers."
 

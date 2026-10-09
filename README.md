@@ -68,9 +68,38 @@ digest --help     # every command and flag
 
 Inside the dashboard, `,` opens settings and the footer lists the keys for the current screen.
 
-### Upgrading notes
+## Migrate
 
-Notes are named after their id and status: `<id>.md` while active, `<id>-<finished>.done.md` once done and `<id>-<archived>.archived.md` once archived, so the dashboard only opens the files it shows. Quit the TUI and run `digest migrate` once to rename older notes, give old and PR notes timestamp ids, and move their reminders with them. Running it again changes nothing.
+Quit the dashboard and run this after every version update to keep your notes safe:
+
+```sh
+digest migrate
+```
+
+Notes are named after their id and status: `<id>.md` while active, `<id>-<finished>.done.md` once done and `<id>-<archived>.archived.md` once archived, so the dashboard only opens the files it shows. Migrate renames older notes, gives old and PR notes timestamp ids, and moves their reminders with them. Running it again changes nothing.
+
+Digest locks every file it writes under the digest root (the macOS `uchg` flag), so other programs can read them but can't edit, rename or delete them; digest unlocks a file only while it changes it. `reviews/`, `logs/`, `*.log` files and `config.yaml` stay unlocked because other tools use them. Migrate locks existing files and creates `.app.state.json` (your first note's date and your streak) if it doesn't exist yet, so the brag list and header are right from the first frame. To unlock by hand: `chflags -R nouchg ~/digest`.
+
+## Pre-defined jobs
+
+Jobs are shell commands listed under `jobs:` in `config.yaml`, each with a `command` and an optional `dry-run-command`. `branch-reaper` and `janitor` come by default:
+
+```yaml
+jobs:
+  - name: branch-reaper
+    dry-run-command: "digest branch-reaper --root ~/Projects --dry-run"
+    command: "digest branch-reaper --root ~/Projects"
+```
+
+On the dashboard they sit under Jobs below today's notes. Select one and press `r` to run it after a confirm, `d` to dry-run it, or Enter to open its log. Pressing `d` on a running job asks before stopping it. A job keeps running after you quit digest, and the row shows `done` after a passing dry run and `act` otherwise.
+
+The built-in jobs also run from the shell. `--root` can be repeated, `--dry-run` changes nothing, and each exits 1 when something needs your action:
+
+```sh
+digest repo-sync --root ~/Projects [--dry-run]       # fast-forwards clean repos to their upstream
+digest janitor --root ~ [--dry-run]                  # quarantines crash dumps, removes stale review clones
+digest branch-reaper --root ~/Projects [--dry-run]   # deletes local branches whose PRs merged
+```
 
 ## Requirements
 
@@ -78,22 +107,7 @@ macOS, git and the GitHub CLI (`gh`). Optional: tmux, Neovim, terminal-notifier 
 
 ## Performance
 
-Every release records how fast digest starts, loads notes, redraws, searches and saves, at 1 to 10k notes. [BENCHMARK.md](docs/benchmark/BENCHMARK.md) has the latest numbers and their history.
-
-`mise run bench` measures locally without recording, and `mise run bench:full` adds 100k notes.
-
-## Releases
-
-digest follows [Semantic Versioning](https://semver.org), and the commit messages since the last release decide the next version, following [Conventional Commits](https://www.conventionalcommits.org):
-
-| Commits since the last release | Release |
-|---|---|
-| `feat!:`, `fix(scope)!:` or a `BREAKING CHANGE:` line in the body | major |
-| `feat:` | minor |
-| `fix:` or `perf:` | patch |
-| only `docs:`, `ci:`, `chore:`, `test:` and the like | none |
-
-On every push to `main`, GitHub Actions runs vet and tests and works out that level. It then bumps `.version` and adds a section to [CHANGELOG.md](CHANGELOG.md). That commit tags the release, publishes the binaries with the changelog section as release notes, and updates the Homebrew formula. Don't edit `.version` by hand.
+Benchmarks for every release are in [benchmark.md](docs/benchmark/benchmark.md); how releases and benchmarks are recorded is in [release.md](docs/release.md).
 
 ## Licence
 

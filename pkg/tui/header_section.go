@@ -18,6 +18,9 @@ var gatherHabits = habit.Gather
 
 func (m Model) progressText() string {
 	facts := gatherHabits(m.notes, time.Now(), m.cfg.IsWorkDay)
+	if m.appStateKnown {
+		facts.Streak = m.appState.CurrentStreak(time.Now(), m.cfg.IsWorkDay)
+	}
 	var parts []string
 	if facts.Streak > 0 {
 		parts = append(parts, yellowBadgeStyle.Render(fmt.Sprintf("🔥 %d-day streak", facts.Streak)))

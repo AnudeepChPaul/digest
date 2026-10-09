@@ -6,6 +6,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/automation"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m *Model) updateScrollOffset() {
@@ -182,4 +183,25 @@ func (m Model) dashboardData() dashboardData {
 	}
 	data.jobsEnd = data.pendingEnd + data.jobsCount
 	return data
+}
+
+const tagGap = "  "
+
+func alignRight(left string, tags []string, width int, selected bool) string {
+	tagBlock := joinTags(tags)
+	room := width - lipgloss.Width(tagBlock) - 1
+	if lipgloss.Width(left) > room {
+		left = ansi.Truncate(left, max(room, 0), "…")
+	}
+	return left + safeRepeat(" ", width-lipgloss.Width(left)-lipgloss.Width(tagBlock)) + underlinedWhen(selected, tagBlock)
+}
+
+func joinTags(tags []string) string {
+	var shown []string
+	for _, tag := range tags {
+		if tag != "" {
+			shown = append(shown, tag)
+		}
+	}
+	return strings.Join(shown, tagGap)
 }

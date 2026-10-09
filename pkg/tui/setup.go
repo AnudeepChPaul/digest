@@ -12,7 +12,7 @@ import (
 	"github.com/AnudeepChPaul/digest/pkg/config"
 	"github.com/AnudeepChPaul/digest/pkg/doctor"
 	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -239,18 +239,15 @@ func (m Model) setupToggleDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func writeSetupConfig(configPath string, answers config.SetupAnswers) (*config.Config, error) {
-	existing, readErr := os.ReadFile(configPath)
+	existing, readErr := system.Read(configPath)
 	text := config.DefaultConfigYAML
 	if readErr == nil && string(existing) != config.DefaultConfigYAML {
 		text = string(existing)
-		if err := os.WriteFile(configPath+".bak", existing, paths.PrivateFileMode); err != nil {
+		if err := system.Write(configPath+".bak", existing); err != nil {
 			return nil, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(configPath), paths.PrivateDirMode); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(configPath, []byte(config.RenderConfig(text, answers)), paths.PrivateFileMode); err != nil {
+	if err := system.Write(configPath, []byte(config.RenderConfig(text, answers))); err != nil {
 		return nil, err
 	}
 	return config.Load(configPath)

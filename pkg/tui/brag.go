@@ -10,6 +10,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/brag"
 	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -43,6 +44,9 @@ func (m Model) bragRoot() string {
 }
 
 func (m Model) firstNoteTime() time.Time {
+	if m.appStateKnown && !m.appState.FirstNoteCreated.IsZero() {
+		return m.appState.FirstNoteCreated
+	}
 	var first time.Time
 	for _, note := range m.notes {
 		if !note.Created.IsZero() && (first.IsZero() || note.Created.Before(first)) {
@@ -309,14 +313,18 @@ func (m Model) saveBragEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if parsed.Created.IsZero() {
 		parsed.Created = now
 	}
-	if err := parsed.Save(m.bragRoot()); err != nil {
-		m.bragNotice = err.Error()
+	saveErr := parsed.Save(m.bragRoot())
+	if saveErr != nil && !errors.Is(saveErr, system.ErrLock) {
+		m.bragNotice = saveErr.Error()
 		return m, nil
 	}
 	m.editor.Blur()
-	if err := m.loadBragView(); err != nil {
+	switch err := m.loadBragView(); {
+	case err != nil:
 		m.bragNotice = err.Error()
-	} else {
+	case saveErr != nil:
+		m.bragNotice = "Saved but not locked"
+	default:
 		m.bragNotice = "Saved"
 	}
 	m.mode = ViewBragView
@@ -511,14 +519,6 @@ func (m Model) renderBragConfirm(modalWidth int) string {
 
 func bragRunLabel(run brag.Run) string {
 	return "brag " + run.Meta.ID
-}
-
-func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
-	rightBlock := stateStyle(review.StateFailed).Render("failed")
-	if run.Status == brag.RunRunning {
-		rightBlock = m.renderPulseIndicator("bragging...")
-	}
-	return renderJobStyleRow(amberDiamond.Render(), bragRunLabel(run), rightBlock, selected, width)
 }
 
 func bragRunPreview(root string, run brag.Run) runPreview {

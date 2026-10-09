@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -51,25 +53,22 @@ func searchCSVRecord(note *model.Note) []string {
 }
 
 func writeSearchCSV(dir string, notes []*model.Note, now time.Time) (string, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := system.MkdirAllWithMode(dir, 0755); err != nil {
 		return "", err
 	}
-	exportPath := filepath.Join(dir, now.Local().Format(searchExportFileFormat))
-	exportFile, err := paths.CreatePrivate(exportPath)
-	if err != nil {
-		return "", err
-	}
-	writer := csv.NewWriter(exportFile)
+	var encoded bytes.Buffer
 	records := [][]string{searchCSVHeader}
 	for _, note := range notes {
 		records = append(records, searchCSVRecord(note))
 	}
-	writeErr := writer.WriteAll(records)
-	closeErr := exportFile.Close()
-	if writeErr != nil {
-		return "", writeErr
+	if err := csv.NewWriter(&encoded).WriteAll(records); err != nil {
+		return "", err
 	}
-	return exportPath, closeErr
+	exportPath := filepath.Join(dir, now.Local().Format(searchExportFileFormat))
+	if err := system.Write(exportPath, encoded.Bytes()); err != nil {
+		return "", err
+	}
+	return exportPath, nil
 }
 
 func (m Model) exportSearchCmd(results []*model.Note) tea.Cmd {

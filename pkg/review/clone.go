@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -67,18 +67,17 @@ func reuseClone(ctx context.Context, ref PRRef, dir string, logger *log.Logger, 
 const PartialCloneSuffix = ".partial"
 
 func CloneExists(root string, ref PRRef) bool {
-	_, err := os.Stat(filepath.Join(CloneDir(root, ref), ".git"))
-	return err == nil
+	return system.Exists(filepath.Join(CloneDir(root, ref), ".git"))
 }
 
 func freshClone(ctx context.Context, ref PRRef, root, dir string, logger *log.Logger, output io.Writer) error {
 	partialDir := dir + PartialCloneSuffix
 	for _, stale := range []string{dir, partialDir} {
-		if err := os.RemoveAll(stale); err != nil {
+		if err := system.RemoveAll(stale); err != nil {
 			return fmt.Errorf("remove previous clone: %w", err)
 		}
 	}
-	if err := os.MkdirAll(root, paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(root); err != nil {
 		return err
 	}
 	logger.Info("Cloning repository", "repo", ref.CloneSpec(), "dir", dir)
@@ -89,7 +88,7 @@ func freshClone(ctx context.Context, ref PRRef, root, dir string, logger *log.Lo
 	if err := runStep(ctx, output, partialDir, "gh", "pr", "checkout", fmt.Sprint(ref.Number)); err != nil {
 		return fmt.Errorf("checkout PR #%d: %w", ref.Number, err)
 	}
-	return os.Rename(partialDir, dir)
+	return system.Rename(partialDir, dir)
 }
 
 func PrepareTo(ctx context.Context, ref PRRef, root string, logger *log.Logger, output io.Writer) (string, error) {

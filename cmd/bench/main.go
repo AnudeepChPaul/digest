@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/benchmark"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const processStartRuns = 20
@@ -80,11 +81,11 @@ func scenarioResults(root, sizes, benchtime string) ([]benchmark.Result, string,
 }
 
 func processStart(root string) (benchmark.Result, error) {
-	buildDir, err := os.MkdirTemp("", "digest-bench-bin-")
+	buildDir, err := system.MkdirTemp("", "digest-bench-bin-")
 	if err != nil {
 		return benchmark.Result{}, err
 	}
-	defer os.RemoveAll(buildDir)
+	defer system.RemoveAll(buildDir)
 	binary := filepath.Join(buildDir, "digest")
 	build := exec.Command("go", "-C", root, "build", "-trimpath", "-o", binary, "./cmd/digest")
 	if output, err := build.CombinedOutput(); err != nil {

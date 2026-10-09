@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 type doneFile struct {
@@ -36,7 +37,7 @@ func startOfDay(moment time.Time) time.Time {
 
 func (s *NoteStore) ListDashboard(viewedDay time.Time) ([]*model.Note, error) {
 	var notes []*model.Note
-	if _, err := os.Stat(s.Root); os.IsNotExist(err) {
+	if !system.Exists(s.Root) {
 		return notes, nil
 	}
 	dayStart := startOfDay(viewedDay)
@@ -47,7 +48,7 @@ func (s *NoteStore) ListDashboard(viewedDay time.Time) ([]*model.Note, error) {
 			notes = append(notes, note)
 		}
 	}
-	err := filepath.WalkDir(s.Root, func(path string, entry os.DirEntry, err error) error {
+	err := system.Walk(s.Root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

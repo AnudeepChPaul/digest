@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
 )
@@ -52,5 +53,42 @@ func TestConfiguredDigestCommandsUseTheRunningBinary(t *testing.T) {
 	}
 	if command, _ := resolveJobCommand(config.JobSpec{Name: "custom", Command: "./digest-like.sh run"}, false); command != "./digest-like.sh run" {
 		t.Errorf("non-digest command rewritten: %q", command)
+	}
+}
+
+func TestDryRunRecordsTheCommandsExitCodeAndOutput(t *testing.T) {
+	previousRoot := digestRoot
+	digestRoot = t.TempDir()
+	t.Cleanup(func() { digestRoot = previousRoot })
+	cases := map[string]struct {
+		command  string
+		exitCode int
+	}{
+		"dry-exit":   {command: "echo checked; echo warned >&2; exit 3", exitCode: 3},
+		"dry-ok":     {command: "echo checked", exitCode: 0},
+		"dry-signal": {command: "echo checked; kill -TERM $$", exitCode: 143},
+	}
+	for jobName, expected := range cases {
+		if err := startDryRunBackground(config.JobSpec{Name: jobName, DryRunCommand: expected.command}); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		output, exitCode, finished := loadDryRunResult(jobName)
+		for !finished && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+			output, exitCode, finished = loadDryRunResult(jobName)
+		}
+		if !finished {
+			t.Fatalf("%s never wrote its exit file", jobName)
+		}
+		for isDryRunInFlight(jobName) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if exitCode != expected.exitCode || !strings.Contains(output, "checked") {
+			t.Errorf("%s: exit %d output %q, want exit %d with its output", jobName, exitCode, output, expected.exitCode)
+		}
+		if jobName == "dry-exit" && !strings.Contains(output, "warned") {
+			t.Errorf("stderr missing from the dry-run log: %q", output)
+		}
 	}
 }

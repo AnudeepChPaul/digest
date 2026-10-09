@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
@@ -61,7 +61,7 @@ func processAlive(pid int) bool {
 }
 
 func readInt(path string) (int, bool) {
-	data, err := os.ReadFile(path)
+	data, err := system.Read(path)
 	if err != nil {
 		return 0, false
 	}
@@ -75,14 +75,14 @@ func Status(dir string) RunStatus {
 		if processAlive(pid) {
 			return RunRunning
 		}
-		_ = os.Remove(pidPath)
+		_ = system.Remove(pidPath)
 	}
 	exitCode, ok := readInt(filepath.Join(dir, exitFile))
 	if !ok {
-		if _, err := os.Stat(filepath.Join(dir, exitFile)); err == nil {
+		if system.Exists(filepath.Join(dir, exitFile)) {
 			return RunFailed
 		}
-		if _, err := os.Stat(filepath.Join(dir, FindingsFile)); err == nil {
+		if system.Exists(filepath.Join(dir, FindingsFile)) {
 			return RunDone
 		}
 		return RunIdle
@@ -90,7 +90,7 @@ func Status(dir string) RunStatus {
 	if exitCode != 0 {
 		return RunFailed
 	}
-	if _, err := os.Stat(filepath.Join(dir, FindingsFile)); err != nil {
+	if !system.Exists(filepath.Join(dir, FindingsFile)) {
 		return RunFailed
 	}
 	return RunDone
@@ -98,7 +98,7 @@ func Status(dir string) RunStatus {
 
 func LocalReviewFinishedAt(dir string) (time.Time, bool) {
 	for _, name := range []string{FindingsFile, exitFile} {
-		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		if info, err := system.Stat(filepath.Join(dir, name)); err == nil {
 			return info.ModTime(), true
 		}
 	}
@@ -106,14 +106,7 @@ func LocalReviewFinishedAt(dir string) (time.Time, bool) {
 }
 
 func WriteMeta(dir string, meta Meta) error {
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, metaFile), data, paths.PrivateFileMode)
+	return system.WriteJSON(filepath.Join(dir, metaFile), meta)
 }
 
 func LocalReviewOutdated(root string, pr QueuedPR) bool {
@@ -130,7 +123,7 @@ func LocalReviewOutdated(root string, pr QueuedPR) bool {
 
 func ReadMeta(dir string) (Meta, error) {
 	var meta Meta
-	data, err := os.ReadFile(filepath.Join(dir, metaFile))
+	data, err := system.Read(filepath.Join(dir, metaFile))
 	if err != nil {
 		return meta, err
 	}
@@ -138,13 +131,9 @@ func ReadMeta(dir string) (Meta, error) {
 	return meta, err
 }
 
-func backgroundScript(runCommand string) string {
-	return runCommand + `; echo $? > "$1"; rm -f "$2"`
-}
-
 func clearExitedPID(pidPath string) {
 	if pid, ok := readInt(pidPath); ok && !processAlive(pid) {
-		_ = os.Remove(pidPath)
+		_ = system.Remove(pidPath)
 	}
 }
 
@@ -175,11 +164,11 @@ func StartBackground(pr QueuedPR, root string) error {
 	if Status(dir) == RunRunning {
 		return ErrReviewRunning
 	}
-	if err := os.MkdirAll(dir, paths.PrivateDirMode); err != nil {
+	if err := system.MkdirAll(dir); err != nil {
 		return err
 	}
 	for _, stale := range []string{exitFile, FindingsFile, pidFile} {
-		_ = os.Remove(filepath.Join(dir, stale))
+		_ = system.Remove(filepath.Join(dir, stale))
 	}
 	if err := WriteMeta(dir, Meta{Ref: pr.Ref, Title: pr.Title, HeadSHA: pr.HeadSHA}); err != nil {
 		return err
@@ -188,25 +177,22 @@ func StartBackground(pr QueuedPR, root string) error {
 	if err != nil {
 		return fmt.Errorf("locate digest binary: %w", err)
 	}
-	logOutput, err := paths.CreatePrivate(filepath.Join(dir, LogFile))
+	logFile, err := system.OpenLog(filepath.Join(dir, LogFile))
 	if err != nil {
 		return err
 	}
+	defer logFile.Close()
 	pidPath := filepath.Join(dir, pidFile)
-	cmd := exec.Command("sh", "-c", backgroundScript(`"$3" pr-review --url "$4"`), "digest-review", filepath.Join(dir, exitFile), pidPath, executable, pr.Ref.URL)
+	cmd := exec.Command(executable, "pr-review", "--url", pr.Ref.URL)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = os.Environ()
+	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.Dir = root
-	cmd.Stdout = logOutput
-	cmd.Stderr = logOutput
 	if err := cmd.Start(); err != nil {
-		logOutput.Close()
 		return err
 	}
-	pidErr := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), paths.PrivateFileMode)
+	pidErr := system.Write(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)))
 	go func() {
 		_ = cmd.Wait()
-		_ = logOutput.Close()
 		clearExitedPID(pidPath)
 	}()
 	if pidErr != nil {
@@ -223,7 +209,7 @@ type ReviewRun struct {
 
 func ListRuns(root string) []ReviewRun {
 	stateRoot := filepath.Join(root, ".state")
-	entries, err := os.ReadDir(stateRoot)
+	entries, err := system.List(stateRoot)
 	if err != nil {
 		return nil
 	}
@@ -242,7 +228,7 @@ func ListRuns(root string) []ReviewRun {
 			continue
 		}
 		run := ReviewRun{Meta: meta, Status: status}
-		if info, err := os.Stat(filepath.Join(dir, metaFile)); err == nil {
+		if info, err := system.Stat(filepath.Join(dir, metaFile)); err == nil {
 			run.StartedAt = info.ModTime()
 		}
 		runs = append(runs, run)
@@ -276,7 +262,7 @@ func Stop(root string, ref PRRef) error {
 			return fmt.Errorf("stop review %s: %w", ref.DirName(), err)
 		}
 	}
-	if err := os.Remove(filepath.Join(dir, pidFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := system.Remove(filepath.Join(dir, pidFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -287,7 +273,7 @@ func AdoptLegacyDirs(root string, ref PRRef) {
 		return
 	}
 	stateDir := StateDir(root, ref)
-	if _, err := os.Stat(stateDir); err == nil {
+	if system.Exists(stateDir) {
 		return
 	}
 	legacyState := filepath.Join(root, stateDirName, ref.legacyDirName())
@@ -295,10 +281,10 @@ func AdoptLegacyDirs(root string, ref PRRef) {
 		return
 	}
 	legacyClone := filepath.Join(root, ref.legacyDirName())
-	if _, err := os.Stat(legacyClone); err == nil {
-		if err := os.Rename(legacyClone, CloneDir(root, ref)); err != nil {
+	if system.Exists(legacyClone) {
+		if err := system.Rename(legacyClone, CloneDir(root, ref)); err != nil {
 			return
 		}
 	}
-	_ = os.Rename(legacyState, stateDir)
+	_ = system.Rename(legacyState, stateDir)
 }

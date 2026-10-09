@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	"github.com/AnudeepChPaul/digest/pkg/brand"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 )
 
 const (
@@ -90,32 +91,32 @@ func terminalNotifierApp() (string, error) {
 		wrapper = resolved
 	}
 	app := filepath.Join(filepath.Dir(filepath.Dir(wrapper)), "terminal-notifier.app")
-	if _, err := os.Stat(app); err != nil {
+	if _, err := system.Stat(app); err != nil {
 		return "", errors.New("terminal-notifier.app not found next to " + wrapper)
 	}
 	return app, nil
 }
 
 func BuildNotifierApp(sourceApp, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+	if err := system.MkdirAllWithMode(filepath.Dir(destination), 0755); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(destination); err != nil {
+	if err := system.RemoveAll(destination); err != nil {
 		return err
 	}
 	if err := runTool("cp", "-R", sourceApp, destination); err != nil {
 		return err
 	}
-	workDir, err := os.MkdirTemp("", "digest-icon")
+	workDir, err := system.MkdirTemp("", "digest-icon")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(workDir)
+	defer system.RemoveAll(workDir)
 	iconPath, iconset := filepath.Join(workDir, "icon.png"), filepath.Join(workDir, "digest.iconset")
-	if err := os.MkdirAll(iconset, 0755); err != nil {
+	if err := system.MkdirAllWithMode(iconset, 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(iconPath, IconPNG(), 0644); err != nil {
+	if err := system.WriteWithMode(iconPath, IconPNG(), 0644); err != nil {
 		return err
 	}
 	for _, size := range iconSizes {
@@ -139,7 +140,7 @@ func BuildNotifierApp(sourceApp, destination string) error {
 
 func senderBinary() string {
 	binary := filepath.Join(NotifierAppPath(), "Contents", "MacOS", "terminal-notifier")
-	if _, err := os.Stat(binary); err == nil {
+	if system.Exists(binary) {
 		return binary
 	}
 	return "terminal-notifier"

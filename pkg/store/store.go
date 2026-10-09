@@ -15,6 +15,7 @@ import (
 
 	"github.com/AnudeepChPaul/digest/pkg/model"
 	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/AnudeepChPaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +36,8 @@ const (
 
 var (
 	ErrNoteFileMissing = errors.New("note file is missing")
+	ErrUnlockNote      = system.ErrUnlock
+	ErrLockNote        = system.ErrLock
 	saveLock           sync.Mutex
 	spacedDatePattern  = regexp.MustCompile(`(?m)^((?:created|updated):[ \t]+['"]?\d{4}-\d{2}-\d{2}) (\d{2}:)`)
 )
@@ -70,10 +73,10 @@ func FileName(n *model.Note) string {
 }
 
 func idTaken(dir, stem string) bool {
-	if _, err := os.Stat(filepath.Join(dir, stem+noteExtension)); err == nil {
+	if _, err := system.Stat(filepath.Join(dir, stem+noteExtension)); err == nil {
 		return true
 	}
-	matches, _ := filepath.Glob(filepath.Join(dir, stem+"-*"))
+	matches, _ := system.Glob(filepath.Join(dir, stem+"-*"))
 	return len(matches) > 0
 }
 
@@ -116,6 +119,10 @@ func (s *NoteStore) Recreate(n *model.Note) error {
 func (s *NoteStore) save(n *model.Note, createMissing bool) error {
 	saveLock.Lock()
 	defer saveLock.Unlock()
+	return s.write(n, createMissing)
+}
+
+func (s *NoteStore) write(n *model.Note, createMissing bool) error {
 	now := time.Now()
 	if n.Created.IsZero() {
 		n.Created = now
@@ -150,48 +157,40 @@ func (s *NoteStore) save(n *model.Note, createMissing bool) error {
 		buf.WriteString("\n")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(currentPath), paths.PrivateDirMode); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-	if err := writeNoteFile(currentPath, buf.Bytes(), isNew || createMissing); err != nil {
-		return err
+	lockErr := writeNoteFile(currentPath, buf.Bytes(), isNew || createMissing)
+	if lockErr != nil && !errors.Is(lockErr, ErrLockNote) {
+		return lockErr
 	}
 	n.FilePath = currentPath
 
 	if !IsStemID(n.ID) {
-		return nil
+		return lockErr
 	}
 	targetPath := filepath.Join(filepath.Dir(currentPath), FileName(n))
 	if targetPath == currentPath {
-		return nil
+		return lockErr
 	}
-	if err := os.Rename(currentPath, targetPath); err != nil {
-		return fmt.Errorf("failed to rename note file: %w", err)
+	lockErr = system.Rename(currentPath, targetPath)
+	if lockErr != nil && !errors.Is(lockErr, ErrLockNote) {
+		return fmt.Errorf("failed to rename note file: %w", lockErr)
 	}
 	n.FilePath = targetPath
-	return nil
+	return lockErr
 }
 
 func writeNoteFile(path string, content []byte, create bool) error {
-	flags := os.O_WRONLY | os.O_TRUNC
+	write := system.WriteExisting
 	if create {
-		flags |= os.O_CREATE
+		write = system.Write
 	}
-	file, err := os.OpenFile(path, flags, paths.PrivateFileMode)
-	if errors.Is(err, os.ErrNotExist) {
+	err := write(path, content)
+	if errors.Is(err, os.ErrNotExist) && !create {
 		return fmt.Errorf("%w: %s", ErrNoteFileMissing, path)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrUnlockNote) && !errors.Is(err, ErrLockNote) {
 		return fmt.Errorf("failed to write note file: %w", err)
 	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		return fmt.Errorf("failed to write note file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("failed to write note file: %w", err)
-	}
-	return nil
+	return err
 }
 
 func (s *NoteStore) Delete(n *model.Note) error {
@@ -201,10 +200,18 @@ func (s *NoteStore) Delete(n *model.Note) error {
 	if err := s.withinRoot(n.FilePath); err != nil {
 		return err
 	}
-	if err := os.Remove(n.FilePath); err != nil {
+	saveLock.Lock()
+	defer saveLock.Unlock()
+	if err := system.Remove(n.FilePath); err != nil && !errors.Is(err, ErrUnlockNote) {
 		return fmt.Errorf("failed to delete note file: %w", err)
+	} else if err != nil {
+		return err
 	}
 	return nil
+}
+
+func IsDonePath(path string) bool {
+	return strings.HasSuffix(path, doneExtension)
 }
 
 func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
@@ -217,7 +224,7 @@ func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
 			return note, nil
 		}
 	}
-	monthDirs, _ := filepath.Glob(filepath.Join(s.Root, "*", "*"))
+	monthDirs, _ := system.Glob(filepath.Join(s.Root, "*", "*"))
 	for _, dir := range monthDirs {
 		if dir == monthDir {
 			continue
@@ -230,7 +237,7 @@ func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
 }
 
 func loadNamedNote(dir, id string) *model.Note {
-	matches, _ := filepath.Glob(filepath.Join(dir, id+"*"))
+	matches, _ := system.Glob(filepath.Join(dir, id+"*"))
 	activeName := id + noteExtension
 	slices.SortFunc(matches, func(first, second string) int {
 		firstActive, secondActive := filepath.Base(first) == activeName, filepath.Base(second) == activeName
@@ -255,7 +262,7 @@ func loadNamedNote(dir, id string) *model.Note {
 }
 
 func Load(path string) (*model.Note, error) {
-	data, err := os.ReadFile(path)
+	data, err := system.Read(path)
 	if err != nil {
 		return nil, err
 	}
@@ -284,11 +291,11 @@ func Load(path string) (*model.Note, error) {
 func (s *NoteStore) List() ([]*model.Note, error) {
 	var notes []*model.Note
 
-	if _, err := os.Stat(s.Root); os.IsNotExist(err) {
+	if !system.Exists(s.Root) {
 		return notes, nil
 	}
 
-	err := filepath.WalkDir(s.Root, func(path string, d os.DirEntry, err error) error {
+	err := system.Walk(s.Root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

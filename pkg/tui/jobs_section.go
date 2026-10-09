@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/AnudeepChPaul/digest/pkg/automation"
 	"github.com/AnudeepChPaul/digest/pkg/brag"
 	"github.com/AnudeepChPaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type jobsSection struct{}
@@ -220,14 +223,47 @@ func (m Model) renderDraftRow(draft *JobDraft, selected bool, width int) string 
 	} else if draft.DryRunInFlight {
 		rightBlock = fmt.Sprintf("%s   %s", jobActiveTagStyle.Render("#job"), m.renderDryRunIndicator())
 	} else {
-		statusText := "need to act"
+		statusText := "act"
 		if draft.HasRunDryRun && draft.ExitCode == 0 {
-			statusText = "success"
+			statusText = "done"
 		}
 
 		rightBlock = fmt.Sprintf("%s   %s", dimBlueText.Render("#job"), mutedStyle.Render(statusText))
 	}
 	return renderJobStyleRow(icon, draft.Name, rightBlock, selected, width)
+}
+
+func (m Model) renderReviewRunRow(run review.ReviewRun, selected bool, width int) string {
+	rightBlock := stateStyle(review.StateFailed).Render("failed")
+	if run.Status == review.RunRunning {
+		rightBlock = m.renderReviewRunningIndicator()
+	}
+	return renderJobStyleRow(amberDiamond.Render(), reviewRunLabel(run), rightBlock, selected, width)
+}
+
+func (m Model) renderBragRunRow(run brag.Run, selected bool, width int) string {
+	rightBlock := stateStyle(review.StateFailed).Render("failed")
+	if run.Status == brag.RunRunning {
+		rightBlock = m.renderPulseIndicator("bragging...")
+	}
+	return renderJobStyleRow(amberDiamond.Render(), bragRunLabel(run), rightBlock, selected, width)
+}
+
+func (m Model) renderAutomationRunRow(run automation.Run, selected bool, width int) string {
+	label := "running..."
+	if run.Meta.Phase == automation.PhaseDraft {
+		label = "drafting..."
+	}
+	return renderJobStyleRow(amberDiamond.Render(), m.automationJobLabel(run), m.renderPulseIndicator(label), selected, width)
+}
+
+func renderJobStyleRow(icon, label, rightBlock string, selected bool, width int) string {
+	label = ansi.Truncate(label, max(width-lipgloss.Width(rightBlock)-6, 5), "…")
+	labelText := itemStyle.Render(label)
+	if selected {
+		labelText = selectedTitle(label)
+	}
+	return alignRight("   "+icon+" "+labelText, []string{rightBlock}, width, selected) + "\n"
 }
 
 func (jobsSection) ApplyMessage(m Model, msg tea.Msg) (tea.Model, tea.Cmd, bool) {
