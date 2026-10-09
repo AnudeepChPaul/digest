@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.4.0 — 2026-10-09
+
+### Features
+- per-section files, git below today, esc dismisses errors, ctrl+r reload, single-note saves, ID-only PR note lookups, benchmark history tables
+
 ## v1.3.0 — 2026-10-08
 
 ### Features
