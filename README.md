@@ -78,7 +78,7 @@ macOS, git and the GitHub CLI (`gh`). Optional: tmux, Neovim, terminal-notifier 
 
 ## Performance
 
-Every release records how fast digest starts, loads notes, redraws, searches and saves, at 1 to 10k notes. [BENCHMARK.md](BENCHMARK.md) has the latest numbers and their history.
+Every release records how fast digest starts, loads notes, redraws, searches and saves, at 1 to 10k notes. [BENCHMARK.md](docs/benchmark/BENCHMARK.md) has the latest numbers and their history.
 
 `mise run bench` measures locally without recording, and `mise run bench:full` adds 100k notes.
 

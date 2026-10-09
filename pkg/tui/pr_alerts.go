@@ -188,7 +188,7 @@ func sendPRAlerts(path string, current map[string]prStatus) error {
 }
 
 func (m Model) prAlertsCmd() tea.Cmd {
-	snapshot := prSnapshot(m.myPRs, m.closedMyPRs, m.ghPendingPRs)
+	snapshot := prSnapshot(m.git.myPRs, m.git.closedMyPRs, m.git.ghPendingPRs)
 	path := prStatusPath(m.cfg.Root())
 	return func() tea.Msg {
 		return prAlertsMsg{err: sendPRAlerts(path, snapshot)}

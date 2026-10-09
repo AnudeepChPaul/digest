@@ -40,10 +40,11 @@ type myPRUpdate struct {
 }
 
 type myPRNotesMsg struct {
-	known []review.PRRef
-	notes []*model.Note
-	saved bool
-	err   error
+	known   []review.PRRef
+	changed []model.Note
+	saved   bool
+	missing error
+	err     error
 }
 
 func myPRNoteID(ref review.PRRef) string {
@@ -198,6 +199,15 @@ func composeMyPRBody(head, existingUpdates string, updates []myPRUpdate) string 
 }
 
 func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.QueuedPR, closed map[string]string, failedHosts []string, now time.Time) tea.Cmd {
+	return knownMyPRNotesCmd(noteStore, prNoteIndex{}, seenPath, prs, closed, failedHosts, now)
+}
+
+func (m Model) myPRNotesCmd(prs []review.QueuedPR, closed map[string]string, failedHosts []string, now time.Time) tea.Cmd {
+	known := m.prNoteSnapshot(model.SourceMyPR)
+	return knownMyPRNotesCmd(m.store, known, myPRsSeenPath(m.cfg.Root()), prs, closed, failedHosts, now)
+}
+
+func knownMyPRNotesCmd(noteStore *store.NoteStore, known prNoteIndex, seenPath string, prs []review.QueuedPR, closed map[string]string, failedHosts []string, now time.Time) tea.Cmd {
 	return func() tea.Msg {
 		myPRNotesMu.Lock()
 		defer myPRNotesMu.Unlock()
@@ -205,17 +215,15 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 		if err != nil {
 			return myPRNotesMsg{err: err}
 		}
-		notes, err := noteStore.List()
-		if err != nil {
-			return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
-		}
-		notesByRef := indexPRNotes(notes, model.SourceMyPR)
-		saved, seenChanged := false, false
+		finder := newPRNoteFinder(noteStore, model.SourceMyPR, known)
+		var changed []model.Note
+		var missing []error
+		seenChanged := false
 		save := func(note *model.Note) error {
 			if err := noteStore.Save(note); err != nil {
 				return err
 			}
-			saved = true
+			changed = append(changed, *note)
 			return nil
 		}
 		for _, pr := range prs {
@@ -225,7 +233,11 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 				seen[pr.Ref.URL], seenChanged = current, true
 			}
 			ref := prNoteRef(pr.Ref.Owner, pr.Ref.Repo, pr.Ref.Number)
-			note, exists := notesByRef.find(ref, pr.Ref.Repo, pr.Ref.Number, myPRNoteID(pr.Ref))
+			note, exists, err := finder.find(ref, pr.Ref.Repo, pr.Ref.Number, myPRNoteID(pr.Ref))
+			if err != nil {
+				missing = append(missing, err)
+				continue
+			}
 			switch {
 			case !wasSeen && !exists:
 				created := pr.CreatedAt.Local()
@@ -253,9 +265,9 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 				note.Ref = ref
 			}
 			if err := save(note); err != nil {
-				return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
+				return myPRNotesMsg{known: knownMyPRRefs(seen), changed: changed, saved: len(changed) > 0, missing: errors.Join(missing...), err: err}
 			}
-			notesByRef.remember(note)
+			finder.remember(note)
 		}
 		for url, state := range closed {
 			entry, wasSeen := seen[url]
@@ -264,7 +276,11 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 			}
 			delete(seen, url)
 			seenChanged = true
-			note, exists := notesByRef.find(prNoteRef(entry.Ref.Owner, entry.Ref.Repo, entry.Ref.Number), entry.Ref.Repo, entry.Ref.Number, myPRNoteID(entry.Ref))
+			note, exists, err := finder.find(prNoteRef(entry.Ref.Owner, entry.Ref.Repo, entry.Ref.Number), entry.Ref.Repo, entry.Ref.Number, myPRNoteID(entry.Ref))
+			if err != nil {
+				missing = append(missing, err)
+				continue
+			}
 			if !exists {
 				continue
 			}
@@ -276,19 +292,15 @@ func myPRNotesCmd(noteStore *store.NoteStore, seenPath string, prs []review.Queu
 			note.Body = composeMyPRBody(head, existingUpdates, []myPRUpdate{{at: now, text: text}})
 			note.Status, note.Updated = model.StatusDone, now
 			if err := save(note); err != nil {
-				return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
+				return myPRNotesMsg{known: knownMyPRRefs(seen), changed: changed, saved: len(changed) > 0, missing: errors.Join(missing...), err: err}
 			}
 		}
 		if seenChanged {
 			if err := saveMyPRsSeen(seenPath, seen); err != nil {
-				return myPRNotesMsg{known: knownMyPRRefs(seen), err: err}
+				return myPRNotesMsg{known: knownMyPRRefs(seen), changed: changed, saved: len(changed) > 0, missing: errors.Join(missing...), err: err}
 			}
 		}
-		msg := myPRNotesMsg{known: knownMyPRRefs(seen), saved: saved}
-		if saved {
-			msg.notes, msg.err = noteStore.List()
-		}
-		return msg
+		return myPRNotesMsg{known: knownMyPRRefs(seen), changed: changed, saved: len(changed) > 0, missing: errors.Join(missing...)}
 	}
 }
 

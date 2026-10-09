@@ -36,9 +36,9 @@ func gitDetailsModel(t *testing.T, itemCount int) Model {
 	for index := range itemCount {
 		repo.Items = append(repo.Items, GitPRItem{Title: fmt.Sprintf("item-%02d", index), Kind: "Reviewed", URL: fmt.Sprintf("https://github.com/o/console/pull/%d", index)})
 	}
-	m.gitPopupRepo = repo
-	m.gitPopupTab = 0
-	m.gitPopupSelected = 0
+	m.git.gitPopupRepo = repo
+	m.git.gitPopupTab = 0
+	m.git.gitPopupSelected = 0
 	m.mode = ViewGitDetails
 	return m
 }

@@ -1,115 +1,17 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/review"
 	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-func waitForGitSection(sections <-chan sourcecontrol.Section, generation int) tea.Cmd {
-	return func() tea.Msg {
-		section, open := <-sections
-		switch {
-		case !open:
-			return nil
-		case section.MyPRs != nil:
-			mine := section.MyPRs
-			return gitMyPRsMsg{generation: generation, partOfSync: true, prs: mine.PRs, closed: mine.Closed, failedHosts: mine.FailedHosts, err: mine.Err, sections: sections}
-		case section.Day != nil:
-			day := section.Day
-			return gitDaySectionMsg{generation: generation, day: day.Day, date: day.Date, reviewed: day.Reviewed, reviews: day.Reviews, details: day.Details, failedHosts: day.FailedHosts, err: day.Err, sections: sections}
-		default:
-			pending := section.Pending
-			return gitPendingMsg{generation: generation, startedAt: pending.StartedAt, pending: pending.Items, details: pending.Details, failedHosts: pending.FailedHosts, err: pending.Err, sections: sections}
-		}
-	}
-}
-
-func (m *Model) beginGitFetch() {
-	if m.gitCancel != nil {
-		m.gitCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.gitFetchCtx = ctx
-	m.gitCancel = cancel
-	m.fetchGeneration++
-	m.fetchedPreviousDay = m.previousNoteDay()
-	m.loadingGit = true
-	m.gitSectionsPending = gitSectionCount
-	m.postMessage(messageSourceGit, messageProgress, "syncing")
-}
-
-func (m Model) gitFetchCmd() tea.Cmd {
-	if !m.cfg.GitEnabled() {
-		return nil
-	}
-	ctx := m.gitFetchCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	sections := sourcecontrol.Sync(ctx, sourcecontrol.SyncParams{
-		Config:      m.cfg,
-		Today:       m.currentDate,
-		PreviousDay: m.previousNoteDay(),
-		Sort:        m.pendingSort,
-		KnownMyPRs:  m.knownMyPRs,
-	})
-
-	return waitForGitSection(sections, m.fetchGeneration)
-}
-
-func (m Model) myPRsFetchCmd() tea.Cmd {
-	if !m.cfg.GitEnabled() {
-		return nil
-	}
-	cfg, known, generation, ctx := m.cfg, m.knownMyPRs, m.fetchGeneration, m.sessionCtx
-	return func() tea.Msg {
-		result := sourcecontrol.NewEngine(cfg).FetchMyPRs(ctx, known)
-		return gitMyPRsMsg{generation: generation, prs: result.PRs, closed: result.Closed, failedHosts: result.FailedHosts, err: result.Err}
-	}
-}
-
-func (m *Model) cancelGitSync() {
-	if m.gitCancel != nil {
-		m.gitCancel()
-	}
-	m.fetchGeneration++
-	if m.commitsCancel != nil {
-		m.commitsCancel()
-	}
-	m.commitsGeneration++
-}
-
-func (m *Model) scheduleDaySync() tea.Cmd {
-	if !m.cfg.GitEnabled() {
-		return nil
-	}
-	m.cancelGitSync()
-	m.loadingGit = true
-	m.loadingCommits = m.cfg.DailyCommitsEnabled()
-	m.postMessage(messageSourceGit, messageProgress, "syncing")
-	m.daySyncGeneration++
-	generation := m.daySyncGeneration
-	return tea.Batch(tea.Tick(daySyncDelay, func(time.Time) tea.Msg { return daySyncDueMsg{generation: generation} }), m.ensureSyncPulse())
-}
-
-func (m *Model) startLoadGitStatsCmd() tea.Cmd {
-	if !m.cfg.GitEnabled() {
-		return nil
-	}
-	m.daySyncGeneration++
-	m.beginGitFetch()
-	return tea.Batch(m.gitFetchCmd(), m.refreshCommitsCmd(), m.ensureSyncPulse())
-}
 
 const (
 	sectionReviewedToday     = "Reviewed today"
@@ -119,48 +21,48 @@ const (
 )
 
 func (m *Model) finishGitSection() {
-	if m.gitSectionsPending > 0 {
-		m.gitSectionsPending--
+	if m.git.gitSectionsPending > 0 {
+		m.git.gitSectionsPending--
 	}
-	m.loadingGit = m.gitSectionsPending > 0
+	m.git.loadingGit = m.git.gitSectionsPending > 0
 	m.noteGitSyncDone()
 }
 
 func (m *Model) recordSectionError(section string, err error) {
 	if err == nil {
-		delete(m.syncErrors, section)
+		delete(m.git.syncErrors, section)
 		return
 	}
-	if m.syncErrors == nil {
-		m.syncErrors = make(map[string]string)
+	if m.git.syncErrors == nil {
+		m.git.syncErrors = make(map[string]string)
 	}
-	m.syncErrors[section] = err.Error()
+	m.git.syncErrors[section] = err.Error()
 }
 
 func (m *Model) applyGitDay(msg gitDaySectionMsg) {
-	if msg.generation != m.fetchGeneration {
+	if msg.generation != m.git.fetchGeneration {
 		return
 	}
 	m.finishGitSection()
 	selectedKey, selectedOccurrence := m.selectedNavKey()
 
-	section, reviewed := sectionReviewedToday, &m.ghReviewedToday
+	section, reviewed := sectionReviewedToday, &m.git.ghReviewedToday
 	if msg.day == gitDayYesterday {
-		section, reviewed = sectionReviewedYesterday, &m.ghReviewedYesterday
+		section, reviewed = sectionReviewedYesterday, &m.git.ghReviewedYesterday
 	}
-	if m.gitSectionDates == nil {
-		m.gitSectionDates = make(map[string]string)
+	if m.git.gitSectionDates == nil {
+		m.git.gitSectionDates = make(map[string]string)
 	}
 	m.recordSectionError(section, msg.err)
 	m.mergePRDetails(msg.details)
-	if msg.err == nil || len(msg.reviewed) > 0 || m.gitSectionDates[section] != msg.date {
+	if msg.err == nil || len(msg.reviewed) > 0 || m.git.gitSectionDates[section] != msg.date {
 		var previous []GitPRItem
-		if m.gitSectionDates[section] == msg.date {
+		if m.git.gitSectionDates[section] == msg.date {
 			previous = *reviewed
 		}
 		*reviewed = keepFailedHostItems(previous, msg.reviewed, msg.failedHosts)
 		sourcecontrol.SortItems(*reviewed, sourcecontrol.Sort{})
-		m.gitSectionDates[section] = msg.date
+		m.git.gitSectionDates[section] = msg.date
 	}
 
 	m.refreshReviewRuns()
@@ -170,7 +72,7 @@ func (m *Model) applyGitDay(msg gitDaySectionMsg) {
 }
 
 func (m *Model) applyGitPending(msg gitPendingMsg) {
-	if msg.generation != m.fetchGeneration {
+	if msg.generation != m.git.fetchGeneration {
 		return
 	}
 	m.finishGitSection()
@@ -179,7 +81,7 @@ func (m *Model) applyGitPending(msg gitPendingMsg) {
 	m.recordSectionError(sectionPending, msg.err)
 	m.mergePRDetails(msg.details)
 	if msg.err == nil || len(msg.pending) > 0 {
-		m.ghPendingPRs = keepFailedHostItems(m.ghPendingPRs, msg.pending, msg.failedHosts)
+		m.git.ghPendingPRs = keepFailedHostItems(m.git.ghPendingPRs, msg.pending, msg.failedHosts)
 	}
 
 	m.refreshReviewRuns()
@@ -190,18 +92,18 @@ func (m *Model) applyGitPending(msg gitPendingMsg) {
 
 func (m *Model) applyMyPRs(msg gitMyPRsMsg) {
 	if msg.partOfSync {
-		if msg.generation != m.fetchGeneration {
+		if msg.generation != m.git.fetchGeneration {
 			return
 		}
 		m.finishGitSection()
 	}
-	m.loadingMyPRs = false
+	m.git.loadingMyPRs = false
 	selectedKey, selectedOccurrence := m.selectedNavKey()
 	m.recordSectionError(sectionMyPRs, msg.err)
 	if msg.err == nil || len(msg.prs) > 0 {
-		m.myPRs = keepFailedHostPRs(m.myPRs, msg.prs, msg.failedHosts)
-		m.closedMyPRs = msg.closed
-		sortMyPRs(m.myPRs)
+		m.git.myPRs = keepFailedHostPRs(m.git.myPRs, msg.prs, msg.failedHosts)
+		m.git.closedMyPRs = msg.closed
+		sortMyPRs(m.git.myPRs)
 	}
 	m.restoreSelection(selectedKey, selectedOccurrence)
 	m.updateScrollOffset()
@@ -288,23 +190,23 @@ func (m *Model) rebuildGitRepoStats() {
 		return stats
 	}
 
-	commitsToday, commitsYesterday := m.localCommitsToday, m.localCommitsYesterday
+	commitsToday, commitsYesterday := m.git.localCommitsToday, m.git.localCommitsYesterday
 	if !m.cfg.DailyCommitsEnabled() {
 		commitsToday, commitsYesterday = nil, nil
 	}
-	m.todayGitRepos = buildStats(m.ghReviewedToday, commitsToday)
-	m.yesterdayGitRepo = buildStats(m.ghReviewedYesterday, commitsYesterday)
-	sourcecontrol.SortItems(m.ghPendingPRs, m.pendingSort)
-	m.pendingGitAction = m.ghPendingPRs
-	if m.pendingMeOnly {
-		m.pendingGitAction = slices.DeleteFunc(slices.Clone(m.ghPendingPRs), func(item GitPRItem) bool {
+	m.git.todayGitRepos = buildStats(m.git.ghReviewedToday, commitsToday)
+	m.git.yesterdayGitRepo = buildStats(m.git.ghReviewedYesterday, commitsYesterday)
+	sourcecontrol.SortItems(m.git.ghPendingPRs, m.git.pendingSort)
+	m.git.pendingGitAction = m.git.ghPendingPRs
+	if m.git.pendingMeOnly {
+		m.git.pendingGitAction = slices.DeleteFunc(slices.Clone(m.git.ghPendingPRs), func(item GitPRItem) bool {
 			return item.PR == nil || !item.PR.DirectRequest
 		})
 	}
 }
 
 func (m *Model) applyPendingSort() {
-	m.pendingSortChosen = true
+	m.git.pendingSortChosen = true
 	selectedKey, selectedOccurrence := m.selectedNavKey()
 	m.rebuildGitRepoStats()
 	m.restoreSelection(selectedKey, selectedOccurrence)
@@ -312,10 +214,10 @@ func (m *Model) applyPendingSort() {
 }
 
 func (m *Model) changePendingSort(toggle func(*sourcecontrol.Sort)) tea.Cmd {
-	toggle(&m.pendingSort)
+	toggle(&m.git.pendingSort)
 	m.applyPendingSort()
-	save := pendingSortSaveCmd(m.pendingSort)
-	if !m.loadingGit {
+	save := pendingSortSaveCmd(m.git.pendingSort)
+	if !m.git.loadingGit {
 		return save
 	}
 	return tea.Batch(save, m.startLoadGitStatsCmd())
@@ -323,14 +225,14 @@ func (m *Model) changePendingSort(toggle func(*sourcecontrol.Sort)) tea.Cmd {
 
 func (m Model) renderPendingSortHint() string {
 	field, direction := "Updated", "↓ Desc"
-	if m.pendingSort.ByCreated {
+	if m.git.pendingSort.ByCreated {
 		field = "Created"
 	}
-	if m.pendingSort.Ascending {
+	if m.git.pendingSort.Ascending {
 		direction = "↑ Asc"
 	}
 	scope := directReviewIcon + " " + teamReviewIcon
-	if m.pendingMeOnly {
+	if m.git.pendingMeOnly {
 		scope = directReviewIcon
 	}
 	return fmt.Sprintf("%s %s  %s %s  %s %s", keyStyle.Render("s"), mutedStyle.Render(field), keyStyle.Render("w"), mutedStyle.Render(direction), keyStyle.Render("m"), dimBlueText.Render(scope))

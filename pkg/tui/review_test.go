@@ -32,7 +32,7 @@ func reviewTestModel(t *testing.T) Model {
 	}
 	m := NewModel(cfg, nil)
 	m.width, m.height = 120, 40
-	m.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(review.QueuedPR{Ref: ref, Title: "Fix", HeadSHA: "sha", CIState: "SUCCESS"}, "Pending Review")}
+	m.git.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(review.QueuedPR{Ref: ref, Title: "Fix", HeadSHA: "sha", CIState: "SUCCESS"}, "Pending Review")}
 	m.rebuildGitRepoStats()
 	m.selected = 0
 	m.mode = ViewPreview

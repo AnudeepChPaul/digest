@@ -66,16 +66,16 @@ type myPRColumnLine struct {
 }
 
 func (m Model) renderMyPRBlock(firstIndex, width int) []myPRColumnLine {
-	if len(m.myPRs) == 0 {
+	if len(m.git.myPRs) == 0 {
 		hint := "     (no open PRs)"
-		if m.loadingMyPRs {
+		if m.git.loadingMyPRs {
 			hint = "     (fetching...)"
 		}
 		return []myPRColumnLine{{text: mutedStyle.Render(hint), navIndex: -1}}
 	}
 	var lines []myPRColumnLine
 	currentRepo := ""
-	for index, pr := range m.myPRs {
+	for index, pr := range m.git.myPRs {
 		if pr.Ref.Repo != currentRepo || index == 0 {
 			currentRepo = pr.Ref.Repo
 			lines = append(lines, myPRColumnLine{text: "     " + subSectionStyle.Render(currentRepo), navIndex: -1})

@@ -24,15 +24,15 @@ func TestKeepFailedHostItems(t *testing.T) {
 
 func TestPendingSyncKeepsFailedHostPRs(t *testing.T) {
 	m := syncTestModel(t)
-	m.ghPendingPRs = []GitPRItem{pendingOnHost("git.example.com", 1), pendingOnHost("other.example.com", 2)}
+	m.git.ghPendingPRs = []GitPRItem{pendingOnHost("git.example.com", 1), pendingOnHost("other.example.com", 2)}
 	m.applyGitPending(gitPendingMsg{
-		generation:  m.fetchGeneration,
+		generation:  m.git.fetchGeneration,
 		pending:     []GitPRItem{pendingOnHost("git.example.com", 5)},
 		failedHosts: []string{"other.example.com"},
 		err:         fmt.Errorf("other.example.com: TLS handshake timeout"),
 	})
-	assertNumbers(t, "pending", m.ghPendingPRs, []int{5, 2})
-	if m.syncErrors[sectionPending] == "" {
+	assertNumbers(t, "pending", m.git.ghPendingPRs, []int{5, 2})
+	if m.git.syncErrors[sectionPending] == "" {
 		t.Errorf("failed host should leave a sync warning")
 	}
 }
@@ -40,17 +40,17 @@ func TestPendingSyncKeepsFailedHostPRs(t *testing.T) {
 func TestReviewedSyncKeepsFailedHostPRs(t *testing.T) {
 	m := syncTestModel(t)
 	today := m.currentDate.Format("2006-01-02")
-	m.gitSectionDates = map[string]string{sectionReviewedToday: today}
-	m.ghReviewedToday = []GitPRItem{pendingOnHost("other.example.com", 7)}
+	m.git.gitSectionDates = map[string]string{sectionReviewedToday: today}
+	m.git.ghReviewedToday = []GitPRItem{pendingOnHost("other.example.com", 7)}
 	m.applyGitDay(gitDaySectionMsg{
-		generation:  m.fetchGeneration,
+		generation:  m.git.fetchGeneration,
 		day:         gitDayToday,
 		date:        today,
 		reviewed:    []GitPRItem{pendingOnHost("git.example.com", 8)},
 		failedHosts: []string{"other.example.com"},
 		err:         fmt.Errorf("other.example.com: TLS handshake timeout"),
 	})
-	if len(m.ghReviewedToday) != 2 {
-		t.Errorf("reviewed today = %v", pendingNumbers(m.ghReviewedToday))
+	if len(m.git.ghReviewedToday) != 2 {
+		t.Errorf("reviewed today = %v", pendingNumbers(m.git.ghReviewedToday))
 	}
 }

@@ -66,7 +66,7 @@ func TestHeaderShowsTheStreakAndWeek(t *testing.T) {
 	withVersionSources(t, "1.2.3", "", false)
 	m, _ := actionsTestModel(t)
 	m.notes = slices.DeleteFunc(m.notes, func(note *model.Note) bool { return note.Status == model.StatusDone })
-	if header := stripANSI(m.renderHeader()); strings.Contains(header, "streak") || strings.Contains(header, "closed this week") {
+	if header := stripANSI(headerSection{}.Render(m)); strings.Contains(header, "streak") || strings.Contains(header, "closed this week") {
 		t.Errorf("nothing closed yet, header should stay quiet:\n%s", header)
 	}
 	today := m.currentDate
@@ -77,10 +77,10 @@ func TestHeaderShowsTheStreakAndWeek(t *testing.T) {
 		&model.Note{ID: "c1", Summary: "done today", Status: model.StatusDone, Created: today, Updated: today},
 		&model.Note{ID: "c2", Summary: "done yesterday", Status: model.StatusDone, Created: today, Updated: lastWorkDayBefore(m, today)},
 	)
-	if header := stripANSI(m.renderHeader()); !strings.Contains(header, "🔥 2-day streak") || !strings.Contains(header, "closed this week") {
+	if header := stripANSI(headerSection{}.Render(m)); !strings.Contains(header, "🔥 2-day streak") || !strings.Contains(header, "closed this week") {
 		t.Errorf("header should show the streak:\n%s", header)
 	}
-	headerLines := plainLines(m.renderHeader())
+	headerLines := plainLines(headerSection{}.Render(m))
 	topLine, middleLine, bottomLine := headerLines[1], headerLines[2], headerLines[3]
 	streakAt, versionAt := strings.Index(topLine, "🔥"), strings.Index(middleLine, displayVersion())
 	if streakAt < 0 || versionAt < 0 || !strings.Contains(topLine, "closed this week") || lipgloss.Width(topLine[:streakAt]) != lipgloss.Width(middleLine[:versionAt]) {

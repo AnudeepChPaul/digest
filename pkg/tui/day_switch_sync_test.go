@@ -11,7 +11,7 @@ import (
 )
 
 func syncRunning(m Model) bool {
-	return m.gitFetchCtx != nil && m.gitFetchCtx.Err() == nil
+	return m.git.gitFetchCtx != nil && m.git.gitFetchCtx.Err() == nil
 }
 
 func update(m Model, msg tea.Msg) Model {
@@ -22,15 +22,15 @@ func update(m Model, msg tea.Msg) Model {
 func TestDaySwitchSyncsOnceAfterTheDelay(t *testing.T) {
 	m := syncTestModel(t)
 	m = update(m, runes("p"))
-	firstPress := m.daySyncGeneration
+	firstPress := m.git.daySyncGeneration
 	m = update(m, runes("p"))
-	if syncRunning(m) || !m.loadingGit {
-		t.Fatalf("switching days should wait before syncing and show syncing: running=%v loading=%v", syncRunning(m), m.loadingGit)
+	if syncRunning(m) || !m.git.loadingGit {
+		t.Fatalf("switching days should wait before syncing and show syncing: running=%v loading=%v", syncRunning(m), m.git.loadingGit)
 	}
 	if m = update(m, daySyncDueMsg{generation: firstPress}); syncRunning(m) {
 		t.Fatal("an earlier press should not sync")
 	}
-	if m = update(m, daySyncDueMsg{generation: m.daySyncGeneration}); !syncRunning(m) {
+	if m = update(m, daySyncDueMsg{generation: m.git.daySyncGeneration}); !syncRunning(m) {
 		t.Fatal("the last press should sync once the delay passes")
 	}
 	if daySyncDelay != 2*time.Second {
@@ -49,7 +49,7 @@ func TestDaySwitchCancelsRunningSyncs(t *testing.T) {
 	m := syncTestModel(t)
 	m.refreshCommitsCmd()
 	m.loadCommitsCmd()()
-	gitCtx := m.gitFetchCtx
+	gitCtx := m.git.gitFetchCtx
 	update(m, runes("n"))
 	if gitCtx.Err() == nil || commitsCtx == nil || commitsCtx.Err() == nil {
 		t.Errorf("day switch should cancel git (%v) and commits (%v)", gitCtx.Err(), commitsCtx)
@@ -59,10 +59,10 @@ func TestDaySwitchCancelsRunningSyncs(t *testing.T) {
 func TestSyncDuringTheWaitReplacesTheDelayedOne(t *testing.T) {
 	m := syncTestModel(t)
 	m = update(m, runes("p"))
-	pending := m.daySyncGeneration
+	pending := m.git.daySyncGeneration
 	m = update(m, runes("g"))
-	generation := m.fetchGeneration
-	if m = update(m, daySyncDueMsg{generation: pending}); m.fetchGeneration != generation {
+	generation := m.git.fetchGeneration
+	if m = update(m, daySyncDueMsg{generation: pending}); m.git.fetchGeneration != generation {
 		t.Error("the delayed sync should not run after a manual sync")
 	}
 }

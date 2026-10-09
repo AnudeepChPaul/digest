@@ -163,7 +163,7 @@ func TestFootersHideScrollKeysOutsideDashboard(t *testing.T) {
 		t.Errorf("dashboard footer should be gone; keys live in the ? shortcuts modal")
 	}
 	dashboard.mode = ViewHelp
-	if view := dashboard.View(); !strings.Contains(view, "ctrl+d|u") || !strings.Contains(view, "search") || !strings.Contains(view, "←|→") {
+	if view := stripANSI(dashboard.View()); !strings.Contains(view, "ctrl+d") || !strings.Contains(view, "ctrl+u") || !strings.Contains(view, "search") || !strings.Contains(view, "←|→") {
 		t.Errorf("shortcuts modal missing dashboard keys")
 	}
 }

@@ -42,7 +42,7 @@ func TestUnknownVersionIsHiddenFromTheHeader(t *testing.T) {
 			t.Errorf("module version %q: displayVersion() = %q", moduleVersion, got)
 		}
 		m := syncTestModel(t)
-		middle := plainLines(m.renderHeader())[2]
+		middle := plainLines(headerSection{}.Render(m))[2]
 		if strings.Contains(middle, " v") || strings.Contains(middle, "dev") || !strings.Contains(middle, "— ") {
 			t.Errorf("header should show only the date: %q", middle)
 		}

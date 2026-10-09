@@ -80,7 +80,7 @@ func TestLaunchFallsBackToFirstItem(t *testing.T) {
 
 func TestLaunchSelectionSurvivesLaterGitLoad(t *testing.T) {
 	m := launchedWith(t, true, true)
-	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayYesterday, date: m.currentDate.AddDate(0, 0, -1).Format("2006-01-02"), reviewed: []GitPRItem{reviewedItem("console", 9)}})
+	m.applyGitDay(gitDaySectionMsg{generation: m.git.fetchGeneration, day: gitDayYesterday, date: m.currentDate.AddDate(0, 0, -1).Format("2006-01-02"), reviewed: []GitPRItem{reviewedItem("console", 9)}})
 	if got := selectedSummary(m); got != "added-today" {
 		t.Errorf("selection should stay on the launch note after git loads, got %q", got)
 	}

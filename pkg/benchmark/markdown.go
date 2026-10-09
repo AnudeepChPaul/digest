@@ -8,11 +8,8 @@ import (
 )
 
 const (
-	headlineSize  = "10000"
-	headlineLines = "Typing/lines=10000/cursor=bottom"
-	processStart  = "Process/start"
-	missingCell   = "–"
-	historyHeader = "| Date | Version | Commit | Machine | Process start | Peak memory | Startup | Typing | Navigate | Save |"
+	processStart = "Process/start"
+	missingCell  = "–"
 )
 
 type tableRow struct {
@@ -59,7 +56,7 @@ var sizedSections = []tableSection{
 	}},
 }
 
-func Markdown(latest Run, historyRows []string) string {
+func Markdown(latest Run, previous string) string {
 	var page strings.Builder
 	page.WriteString(`# Benchmarks
 
@@ -67,14 +64,14 @@ How fast digest is, measured in CI on every release, beside the release build. E
 
 - The release workflow records each run here in its own ` + "`chore: benchmark`" + ` commit.
 - ` + "`mise run bench`" + ` prints the same tables locally without recording them; ` + "`mise run bench:full`" + ` adds 100k notes.
-- History rows from different machines aren't directly comparable.
+- History columns from different machines aren't directly comparable.
 
 What runs, at 1, 100, 1k and 10k notes on disk:
 
 - **Process**: starting the binary (` + "`digest --help`" + `) and its peak memory.
 - **Startup and loading**: opening the dashboard (config, notes from disk, first frame), the heap it keeps, listing notes, reading local review state.
 - **Redraw and navigation**: moving with j/k, the sync pulse, the header, opening a preview and stepping through previews.
-- **Actions**: quick actions, a search keystroke, saving and deleting a note (each reloads every note).
+- **Actions**: quick actions, a search keystroke, saving and deleting a note (each reloads only that note).
 - **Screens and overlays**: archive, help, settings, brag view, review details, link menu, delete confirm, error.
 - **Typing in a long note**: a keystroke in a 500, 2k and 10k-line note with the cursor at the top and at the bottom.
 
@@ -83,7 +80,7 @@ What runs, at 1, 100, 1k and 10k notes on disk:
 	writeProcessTable(&page, latest)
 	writeSizedTables(&page, latest)
 	writeTypingTable(&page, latest)
-	writeHistory(&page, historyRows)
+	writeHistory(&page, withRun(historyTables(previous), latest))
 	return page.String()
 }
 
@@ -178,40 +175,6 @@ func writeTypingTable(page *strings.Builder, run Run) {
 		page.WriteString("\n")
 	}
 	page.WriteString("\n")
-}
-
-func headlineSizeFor(run Run) string {
-	sizes := sizeKeys(run)
-	if slices.Contains(sizes, headlineSize) || len(sizes) == 0 {
-		return headlineSize
-	}
-	return sizes[len(sizes)-1]
-}
-
-func writeHistory(page *strings.Builder, rows []string) {
-	page.WriteString("## History\n\nNewest first. Startup, Navigate and Save at 10k notes; Typing in a 10k-line note with the cursor at the bottom.\n\n")
-	page.WriteString(historyStart + "\n")
-	page.WriteString(historyHeader + "\n|---|---|---|---|---|---|---|---|---|---|\n")
-	for _, row := range rows {
-		page.WriteString(row + "\n")
-	}
-	page.WriteString(historyEnd + "\n")
-}
-
-func HistoryRow(run Run) string {
-	size := headlineSizeFor(run)
-	return fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |",
-		run.Date.UTC().Format("2006-01-02"),
-		escapeCell(run.Version),
-		commitLabel(run.Commit),
-		escapeCell(run.CPU),
-		durationCell(run.metric(processStart, "ns/op")),
-		megabytesCell(run.metric(processStart, "rss-MB")),
-		durationCell(run.metric("Startup/notes="+size, "ns/op")),
-		durationCell(run.metric(headlineLines, "ns/op")),
-		durationCell(run.metric("Navigate/notes="+size, "ns/op")),
-		durationCell(run.metric("SaveNote/notes="+size, "ns/op")),
-	)
 }
 
 func namedCell(run Run, name string) string {

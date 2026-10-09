@@ -22,7 +22,7 @@ func TestOldCacheIsFilteredOnLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := NewModel(m.cfg, nil)
-	if len(fresh.ghPendingPRs) != 1 || fresh.ghPendingPRs[0].Repository != "console" {
-		t.Errorf("pending = %+v", fresh.ghPendingPRs)
+	if len(fresh.git.ghPendingPRs) != 1 || fresh.git.ghPendingPRs[0].Repository != "console" {
+		t.Errorf("pending = %+v", fresh.git.ghPendingPRs)
 	}
 }

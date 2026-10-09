@@ -12,7 +12,7 @@ type keyAction int
 const (
 	actionNone keyAction = iota
 	actionQuit
-	actionDismissSyncErrors
+	actionDismissErrors
 	actionSync
 	actionToggleSortField
 	actionToggleSortOrder
@@ -39,6 +39,7 @@ const (
 	actionOpenBrag
 	actionOpenHelp
 	actionSwitchGitColumn
+	actionReloadNotes
 
 	actionCloseHelp
 
@@ -230,7 +231,7 @@ func (m Model) activeBindings() []keyBinding {
 	case ViewRejectComment:
 		return rejectCommentBindings()
 	case ViewPreview:
-		return m.previewBindings()
+		return append(m.previewBindings(), hiddenKeyBinding(actionOpenHelp, "?"))
 	case ViewLinkMenu:
 		return linkMenuBindings()
 	case ViewArchived:
@@ -242,7 +243,7 @@ func (m Model) activeBindings() []keyBinding {
 	case ViewSearch:
 		return searchBindings()
 	case ViewSearchPreview:
-		return searchPreviewBindings()
+		return append(searchPreviewBindings(), hiddenKeyBinding(actionOpenHelp, "?"))
 	case ViewError:
 		return errorBindings()
 	case ViewHelp:
@@ -295,6 +296,7 @@ func (m Model) dashboardBindings() []keyBinding {
 		newKeyBinding(actionPreviousDay, []string{"p"}, "p|n", "date"),
 		hiddenKeyBinding(actionNextDay, "n"),
 		newKeyBinding(actionOpenArchive, []string{"ctrl+e"}, "ctrl+e", "open archive"),
+		hiddenKeyBinding(actionReloadNotes, "ctrl+r"),
 		newKeyBinding(actionSync, []string{"g"}, "g", "run git"),
 		newKeyBinding(actionRefreshCommits, []string{"c"}, "c", "refresh commits").shownWhen(m.cfg.DailyCommitsEnabled()),
 		newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "run job"),
@@ -311,7 +313,7 @@ func (m Model) dashboardBindings() []keyBinding {
 		hiddenKeyBinding(actionToggleSortField, "s"),
 		hiddenKeyBinding(actionToggleSortOrder, "w"),
 		hiddenKeyBinding(actionTogglePendingScope, "m"),
-		hiddenKeyBinding(actionDismissSyncErrors, "esc"),
+		hiddenKeyBinding(actionDismissErrors, "esc"),
 	)
 	if m.cfg.GitEnabled() {
 		return bindings

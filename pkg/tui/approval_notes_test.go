@@ -14,7 +14,7 @@ import (
 func TestApprovalNotesCreatedOnceWithRepoPRID(t *testing.T) {
 	noteStore := store.New(t.TempDir())
 	approvedAt := time.Date(2026, 10, 1, 15, 30, 0, 0, time.Local)
-	existing := &model.Note{ID: "console:5", Summary: "Approved: Old", Status: model.StatusDone, Source: model.SourcePRReview}
+	existing := &model.Note{Ref: "o/console#5", Summary: "Approved: Old", Status: model.StatusDone, Source: model.SourcePRReview}
 	if err := noteStore.Save(existing); err != nil {
 		t.Fatal(err)
 	}
@@ -23,9 +23,10 @@ func TestApprovalNotesCreatedOnceWithRepoPRID(t *testing.T) {
 		{Number: 6, Title: "Fix date picker", URL: "https://github.com/o/console/pull/6", Repository: "console", State: "APPROVED", ReviewedAt: approvedAt},
 		{Number: 6, Title: "Fix date picker", URL: "https://github.com/o/console/pull/6", Repository: "console", State: "APPROVED", ReviewedAt: approvedAt},
 	}
+	known := indexPRNotes([]*model.Note{existing}, "")
 	for attempt := range 2 {
-		msg := reviewNotesCmd(noteStore, approvals)()
-		if loaded, ok := msg.(loadNotesMsg); attempt == 0 && (!ok || loaded.err != nil) {
+		msg := knownReviewNotesCmd(noteStore, known, approvals)()
+		if changed, ok := msg.(notesChangedMsg); attempt == 0 && (!ok || changed.err != nil) {
 			t.Fatalf("msg = %#v", msg)
 		}
 	}
@@ -91,19 +92,23 @@ func TestReviewNoteSummaryIncludesRepoAndNumber(t *testing.T) {
 func TestReopenApprovedNotesMatchesNewAndLegacySummary(t *testing.T) {
 	noteStore := store.New(t.TempDir())
 	approvedAt := time.Now().Add(-time.Hour)
-	for _, note := range []*model.Note{
-		{ID: "console:7", Summary: "Approved:console:7 New", Status: model.StatusDone, Source: model.SourcePRReview, Updated: approvedAt},
-		{ID: "console:8", Summary: "Approved: Legacy", Status: model.StatusDone, Source: model.SourcePRReview, Updated: approvedAt},
-	} {
+	approved := []*model.Note{
+		{Ref: prNoteRef("", "console", 7), Summary: "Approved:console:7 New", Status: model.StatusDone, Source: model.SourcePRReview, Updated: approvedAt},
+		{Ref: prNoteRef("", "console", 8), Summary: "Approved: Legacy", Status: model.StatusDone, Source: model.SourcePRReview, Updated: approvedAt},
+	}
+	for _, note := range approved {
 		if err := noteStore.Save(note); err != nil {
 			t.Fatal(err)
 		}
 	}
 	pending := []GitPRItem{{Number: 7, Repository: "console"}, {Number: 8, Repository: "console"}}
-	msg := reopenApprovedNotesCmd(noteStore, pending, time.Now())()
-	loaded, ok := msg.(loadNotesMsg)
+	msg := knownReopenApprovedNotesCmd(noteStore, indexPRNotes(approved, ""), pending, time.Now())()
+	loaded, ok := msg.(notesChangedMsg)
 	if !ok || loaded.err != nil {
 		t.Fatalf("msg = %#v", msg)
+	}
+	if len(loaded.notes) != 2 {
+		t.Fatalf("reopened notes = %d, want 2", len(loaded.notes))
 	}
 	for _, note := range loaded.notes {
 		if note.Status != model.StatusActive {

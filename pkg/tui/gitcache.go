@@ -105,10 +105,10 @@ var writeGitCache = saveGitCache
 var gitCacheWriteMu sync.Mutex
 
 func (m *Model) gitCacheSaveCmd() tea.Cmd {
-	if m.loadingGit || m.loadingCommits {
+	if m.git.loadingGit || m.git.loadingCommits {
 		return nil
 	}
-	m.prDetails = m.listedPRDetails()
+	m.git.prDetails = m.listedPRDetails()
 	if !isSameDay(m.currentDate, time.Now()) {
 		return nil
 	}
@@ -123,17 +123,17 @@ func (m *Model) gitCacheSaveCmd() tea.Cmd {
 func (m *Model) gitCacheSnapshot() gitSyncCache {
 	cache := gitSyncCache{
 		Date:              m.currentDate.Format("2006-01-02"),
-		PreviousDay:       m.fetchedPreviousDay.Format("2006-01-02"),
-		ReviewedToday:     toCachedItems(m.ghReviewedToday),
-		ReviewedYesterday: toCachedItems(m.ghReviewedYesterday),
-		Pending:           toCachedItems(m.ghPendingPRs),
-		CommitsToday:      m.localCommitsToday,
-		CommitsYesterday:  m.localCommitsYesterday,
+		PreviousDay:       m.git.fetchedPreviousDay.Format("2006-01-02"),
+		ReviewedToday:     toCachedItems(m.git.ghReviewedToday),
+		ReviewedYesterday: toCachedItems(m.git.ghReviewedYesterday),
+		Pending:           toCachedItems(m.git.ghPendingPRs),
+		CommitsToday:      m.git.localCommitsToday,
+		CommitsYesterday:  m.git.localCommitsYesterday,
 		Details:           m.listedPRDetails(),
-		MyPRs:             m.myPRs,
+		MyPRs:             m.git.myPRs,
 	}
-	if m.pendingSortChosen {
-		activeSort := m.pendingSort
+	if m.git.pendingSortChosen {
+		activeSort := m.git.pendingSort
 		cache.PendingSort = &activeSort
 	}
 	return cache
@@ -160,17 +160,17 @@ func (m *Model) mergePRDetails(details map[string]json.RawMessage) {
 	if len(details) == 0 {
 		return
 	}
-	if m.prDetails == nil {
-		m.prDetails = make(map[string]json.RawMessage, len(details))
+	if m.git.prDetails == nil {
+		m.git.prDetails = make(map[string]json.RawMessage, len(details))
 	}
-	maps.Copy(m.prDetails, details)
+	maps.Copy(m.git.prDetails, details)
 }
 
 func (m Model) listedPRDetails() map[string]json.RawMessage {
 	listed := map[string]json.RawMessage{}
-	for _, items := range [][]GitPRItem{m.ghPendingPRs, m.ghReviewedToday, m.ghReviewedYesterday} {
+	for _, items := range [][]GitPRItem{m.git.ghPendingPRs, m.git.ghReviewedToday, m.git.ghReviewedYesterday} {
 		for _, item := range items {
-			if raw, found := m.prDetails[item.URL]; found {
+			if raw, found := m.git.prDetails[item.URL]; found {
 				listed[item.URL] = raw
 			}
 		}
@@ -179,19 +179,19 @@ func (m Model) listedPRDetails() map[string]json.RawMessage {
 }
 
 func (m *Model) applyGitCache(cache gitSyncCache) {
-	m.prDetails = cache.Details
+	m.git.prDetails = cache.Details
 	allowedRepos := sourcecontrol.ConfiguredRepoNames(m.cfg)
-	m.ghPendingPRs = sourcecontrol.FilterPRItems(fromCachedItems(cache.Pending), allowedRepos)
-	m.myPRs = sourcecontrol.FilterQueuedPRs(cache.MyPRs, allowedRepos)
+	m.git.ghPendingPRs = sourcecontrol.FilterPRItems(fromCachedItems(cache.Pending), allowedRepos)
+	m.git.myPRs = sourcecontrol.FilterQueuedPRs(cache.MyPRs, allowedRepos)
 	today := m.currentDate.Format("2006-01-02")
-	if cache.Date == today && cache.PreviousDay == m.fetchedPreviousDay.Format("2006-01-02") {
-		m.ghReviewedToday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedToday), allowedRepos)
-		m.ghReviewedYesterday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedYesterday), allowedRepos)
+	if cache.Date == today && cache.PreviousDay == m.git.fetchedPreviousDay.Format("2006-01-02") {
+		m.git.ghReviewedToday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedToday), allowedRepos)
+		m.git.ghReviewedYesterday = sourcecontrol.FilterPRItems(fromCachedItems(cache.ReviewedYesterday), allowedRepos)
 		if m.cfg.DailyCommitsEnabled() {
-			m.localCommitsToday = cache.CommitsToday
-			m.localCommitsYesterday = cache.CommitsYesterday
+			m.git.localCommitsToday = cache.CommitsToday
+			m.git.localCommitsYesterday = cache.CommitsYesterday
 		}
-		m.gitSectionDates = map[string]string{
+		m.git.gitSectionDates = map[string]string{
 			sectionReviewedToday:     today,
 			sectionReviewedYesterday: cache.PreviousDay,
 		}

@@ -410,12 +410,12 @@ func TestSucceededRunReloadsNotesAndTagsTheKind(t *testing.T) {
 	}
 	reloads := false
 	for _, msg := range collectMsgs(cmd) {
-		if _, ok := msg.(loadNotesMsg); ok {
+		if _, ok := msg.(notesChangedMsg); ok {
 			reloads = true
 		}
 	}
 	if !reloads {
-		t.Error("notes not reloaded after the automation succeeded")
+		t.Error("the automated note was not reloaded after the automation succeeded")
 	}
 	for kind, tag := range map[string]string{"ticket": "#ticket", "Doc": "#doc"} {
 		automated := *m.notes[len(m.notes)-1]

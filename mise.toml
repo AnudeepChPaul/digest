@@ -106,6 +106,6 @@ quiet = true
 run = "go run ./cmd/bench run --sizes 1,100,1000,10000,100000"
 
 [tasks."bench:record"]
-description = "Measure benchmarks and record them in BENCHMARK.md (used by the release workflow)"
+description = "Measure benchmarks and record them in docs/benchmark/BENCHMARK.md (used by the release workflow)"
 quiet = true
 run = "go run ./cmd/bench record"

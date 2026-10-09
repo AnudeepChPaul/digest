@@ -67,44 +67,44 @@ func collectMsgs(cmd tea.Cmd) []tea.Msg {
 
 func TestSectionsApplyIndependently(t *testing.T) {
 	m := syncTestModel(t)
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayYesterday, reviewed: []GitPRItem{reviewedItem("console", 1)}})
-	if len(m.ghReviewedYesterday) != 1 || !m.loadingGit {
-		t.Fatalf("yesterday=%d loading=%v", len(m.ghReviewedYesterday), m.loadingGit)
+	if len(m.git.ghReviewedYesterday) != 1 || !m.git.loadingGit {
+		t.Fatalf("yesterday=%d loading=%v", len(m.git.ghReviewedYesterday), m.git.loadingGit)
 	}
 	m.applyGitPending(gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}})
-	if len(m.ghPendingPRs) != 1 || !m.loadingGit {
-		t.Fatalf("pending=%d loading=%v", len(m.ghPendingPRs), m.loadingGit)
+	if len(m.git.ghPendingPRs) != 1 || !m.git.loadingGit {
+		t.Fatalf("pending=%d loading=%v", len(m.git.ghPendingPRs), m.git.loadingGit)
 	}
 	m.applyMyPRs(gitMyPRsMsg{generation: generation, partOfSync: true})
-	if !m.loadingGit {
+	if !m.git.loadingGit {
 		t.Fatalf("my PRs finished the sync early")
 	}
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, reviewed: []GitPRItem{reviewedItem("console", 2)}})
-	if len(m.ghReviewedToday) != 1 || m.loadingGit {
-		t.Fatalf("today=%d loading=%v", len(m.ghReviewedToday), m.loadingGit)
+	if len(m.git.ghReviewedToday) != 1 || m.git.loadingGit {
+		t.Fatalf("today=%d loading=%v", len(m.git.ghReviewedToday), m.git.loadingGit)
 	}
 	m.applyGitPending(gitPendingMsg{generation: generation - 1, pending: nil})
-	if len(m.ghPendingPRs) != 1 {
+	if len(m.git.ghPendingPRs) != 1 {
 		t.Errorf("stale generation replaced pending")
 	}
 }
 
 func TestFailedSectionKeepsRowsAndShowsHeaderError(t *testing.T) {
 	m := syncTestModel(t)
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, reviewed: []GitPRItem{reviewedItem("console", 2)}})
 	m.applyGitPending(gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}})
 
 	m.startLoadGitStatsCmd()
-	generation = m.fetchGeneration
+	generation = m.git.fetchGeneration
 	m.applyGitDay(gitDaySectionMsg{generation: generation, day: gitDayToday, err: errors.New("HTTP 502")})
 	m.applyGitPending(gitPendingMsg{generation: generation, err: errors.New("timeout")})
-	if len(m.ghReviewedToday) != 1 || len(m.ghPendingPRs) != 1 {
-		t.Fatalf("failed sync wiped rows: today=%d pending=%d", len(m.ghReviewedToday), len(m.ghPendingPRs))
+	if len(m.git.ghReviewedToday) != 1 || len(m.git.ghPendingPRs) != 1 {
+		t.Fatalf("failed sync wiped rows: today=%d pending=%d", len(m.git.ghReviewedToday), len(m.git.ghPendingPRs))
 	}
-	m.loadingCommits = false
-	m.gitSectionsPending = 1
+	m.git.loadingCommits = false
+	m.git.gitSectionsPending = 1
 	m.finishGitSection()
 	if !strings.Contains(headerTopRow(m), "sync failed") {
 		t.Errorf("header should say the sync failed: %q", headerTopRow(m))
@@ -125,7 +125,7 @@ func TestFailedSectionKeepsRowsAndShowsHeaderError(t *testing.T) {
 
 func TestSuccessfulSectionClearsItsError(t *testing.T) {
 	m := syncTestModel(t)
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	m.applyGitPending(gitPendingMsg{generation: generation, err: errors.New("timeout")})
 	m.applyGitPending(gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}})
 	if strings.Contains(m.View(), "GIT SYNC FAILED") {
@@ -135,12 +135,12 @@ func TestSuccessfulSectionClearsItsError(t *testing.T) {
 
 func TestDateChangeClearsFailedSection(t *testing.T) {
 	m := syncTestModel(t)
-	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), reviewed: []GitPRItem{reviewedItem("console", 2)}})
+	m.applyGitDay(gitDaySectionMsg{generation: m.git.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), reviewed: []GitPRItem{reviewedItem("console", 2)}})
 	m.currentDate = m.currentDate.AddDate(0, 0, -3)
 	m.startLoadGitStatsCmd()
-	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), err: errors.New("HTTP 502")})
-	if len(m.ghReviewedToday) != 0 {
-		t.Errorf("rows from another day kept: %d", len(m.ghReviewedToday))
+	m.applyGitDay(gitDaySectionMsg{generation: m.git.fetchGeneration, day: gitDayToday, date: m.currentDate.Format("2006-01-02"), err: errors.New("HTTP 502")})
+	if len(m.git.ghReviewedToday) != 0 {
+		t.Errorf("rows from another day kept: %d", len(m.git.ghReviewedToday))
 	}
 }
 
@@ -152,7 +152,7 @@ func TestBothDaySectionsCreateApprovalNotes(t *testing.T) {
 		gitDayYesterday: {Number: 2, Title: "Yesterday", URL: prRef("console", 2).URL, Repository: "console", State: "APPROVED", ReviewedAt: now.AddDate(0, 0, -1)},
 	}
 	for day, approval := range approvals {
-		next, cmd := m.Update(gitDaySectionMsg{generation: m.fetchGeneration, day: day, reviews: []review.ActivityPR{approval}})
+		next, cmd := m.Update(gitDaySectionMsg{generation: m.git.fetchGeneration, day: day, reviews: []review.ActivityPR{approval}})
 		m = next.(Model)
 		collectMsgs(cmd)
 	}
@@ -196,10 +196,10 @@ func TestApproveSchedulesDelayedSync(t *testing.T) {
 	originalDelay := approvalSyncDelay
 	approvalSyncDelay = time.Millisecond
 	t.Cleanup(func() { approvalSyncDelay = originalDelay })
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	next, cmd := m.handleReviewSubmitted(reviewSubmittedMsg{event: review.EventApprove})
 	m = next.(Model)
-	if m.fetchGeneration != generation {
+	if m.git.fetchGeneration != generation {
 		t.Fatalf("sync started immediately")
 	}
 	if cmd == nil {
@@ -209,7 +209,7 @@ func TestApproveSchedulesDelayedSync(t *testing.T) {
 		t.Fatalf("cmd did not yield approvalSyncMsg")
 	}
 	next, _ = m.Update(approvalSyncMsg{})
-	if next.(Model).fetchGeneration != generation+1 {
+	if next.(Model).git.fetchGeneration != generation+1 {
 		t.Errorf("approvalSyncMsg did not start a sync")
 	}
 }
@@ -218,26 +218,26 @@ func TestGitCacheRoundTrip(t *testing.T) {
 	m := syncTestModel(t)
 	pending := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 4), Title: "Cached", CIState: "SUCCESS", Additions: 7, Approved: true}, sourcecontrol.ReReviewKind)
 	today := m.currentDate.Format("2006-01-02")
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pending}})
-	m.applyGitDay(gitDaySectionMsg{generation: m.fetchGeneration, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}})
-	m.applyCommits(commitsLoadedMsg{generation: m.commitsGeneration, today: map[string][]GitPRItem{"console": {{Title: "c1", Kind: "Commit"}}}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pending}})
+	m.applyGitDay(gitDaySectionMsg{generation: m.git.fetchGeneration, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}})
+	m.applyCommits(commitsLoadedMsg{generation: m.git.commitsGeneration, today: map[string][]GitPRItem{"console": {{Title: "c1", Kind: "Commit"}}}})
 	saveCacheNow(t, m)
 	if _, err := os.Stat(gitCachePath()); err != nil {
 		t.Fatalf("cache not written: %v", err)
 	}
 
 	fresh := NewModel(m.cfg, nil)
-	if len(fresh.ghPendingPRs) != 1 || fresh.ghPendingPRs[0].PR == nil {
-		t.Fatalf("pending from cache = %+v", fresh.ghPendingPRs)
+	if len(fresh.git.ghPendingPRs) != 1 || fresh.git.ghPendingPRs[0].PR == nil {
+		t.Fatalf("pending from cache = %+v", fresh.git.ghPendingPRs)
 	}
-	pr := fresh.ghPendingPRs[0].PR
-	if pr.Title != "Cached" || pr.Additions != 7 || !pr.Approved || fresh.ghPendingPRs[0].Kind != sourcecontrol.ReReviewKind {
+	pr := fresh.git.ghPendingPRs[0].PR
+	if pr.Title != "Cached" || pr.Additions != 7 || !pr.Approved || fresh.git.ghPendingPRs[0].Kind != sourcecontrol.ReReviewKind {
 		t.Errorf("cached PR = %+v", pr)
 	}
-	if len(fresh.ghReviewedToday) != 1 || len(fresh.localCommitsToday["console"]) != 1 {
-		t.Errorf("today from cache: reviewed=%d commits=%d", len(fresh.ghReviewedToday), len(fresh.localCommitsToday["console"]))
+	if len(fresh.git.ghReviewedToday) != 1 || len(fresh.git.localCommitsToday["console"]) != 1 {
+		t.Errorf("today from cache: reviewed=%d commits=%d", len(fresh.git.ghReviewedToday), len(fresh.git.localCommitsToday["console"]))
 	}
-	if fresh.loadingGit || fresh.syncOnLoad {
+	if fresh.git.loadingGit || fresh.git.syncOnLoad {
 		t.Errorf("today's cache should skip the startup sync")
 	}
 }
@@ -253,8 +253,8 @@ func TestOldGitCacheShowsOnlyPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := NewModel(m.cfg, nil)
-	if len(fresh.ghPendingPRs) != 1 || len(fresh.ghReviewedToday) != 0 {
-		t.Errorf("pending=%d reviewedToday=%d", len(fresh.ghPendingPRs), len(fresh.ghReviewedToday))
+	if len(fresh.git.ghPendingPRs) != 1 || len(fresh.git.ghReviewedToday) != 0 {
+		t.Errorf("pending=%d reviewedToday=%d", len(fresh.git.ghPendingPRs), len(fresh.git.ghReviewedToday))
 	}
 }
 
@@ -267,7 +267,7 @@ func TestCorruptGitCacheIgnored(t *testing.T) {
 		t.Errorf("corrupt cache loaded")
 	}
 	fresh := NewModel(m.cfg, nil)
-	if len(fresh.ghPendingPRs) != 0 {
-		t.Errorf("pending = %d", len(fresh.ghPendingPRs))
+	if len(fresh.git.ghPendingPRs) != 0 {
+		t.Errorf("pending = %d", len(fresh.git.ghPendingPRs))
 	}
 }

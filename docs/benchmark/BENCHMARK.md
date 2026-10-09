@@ -4,14 +4,14 @@ How fast digest is, measured in CI on every release, beside the release build. E
 
 - The release workflow records each run here in its own `chore: benchmark` commit.
 - `mise run bench` prints the same tables locally without recording them; `mise run bench:full` adds 100k notes.
-- History rows from different machines aren't directly comparable.
+- History columns from different machines aren't directly comparable.
 
 What runs, at 1, 100, 1k and 10k notes on disk:
 
 - **Process**: starting the binary (`digest --help`) and its peak memory.
 - **Startup and loading**: opening the dashboard (config, notes from disk, first frame), the heap it keeps, listing notes, reading local review state.
 - **Redraw and navigation**: moving with j/k, the sync pulse, the header, opening a preview and stepping through previews.
-- **Actions**: quick actions, a search keystroke, saving and deleting a note (each reloads every note).
+- **Actions**: quick actions, a search keystroke, saving and deleting a note (each reloads only that note).
 - **Screens and overlays**: archive, help, settings, brag view, review details, link menu, delete confirm, error.
 - **Typing in a long note**: a keystroke in a 500, 2k and 10k-line note with the cursor at the top and at the bottom.
 
@@ -87,11 +87,69 @@ One keystroke plus redraw.
 
 ## History
 
-Newest first. Startup, Navigate and Save at 10k notes; Typing in a 10k-line note with the cursor at the bottom.
+One column per run, newest first; re-recording a version replaces its column. Rows are every scenario at 1k and at 10k notes; the 10k table adds process start, peak memory and typing in a long note.
 
 <!-- history:start -->
-| Date | Version | Commit | Machine | Process start | Peak memory | Startup | Typing | Navigate | Save |
-|---|---|---|---|---|---|---|---|---|---|
-| 2026-10-08 | v1.3.0 | `30db267` | Apple M1 (Virtual) | 30.4 ms | 17.5 MB | 273 ms | 121 ms | 42.9 ms | 367 ms |
-| 2026-10-08 | v1.2.5 | working tree | Apple M1 Pro | 18.4 ms | 18.1 MB | 978 ms | 81.3 ms | 21.8 ms | 979 ms |
+### 1k notes
+
+| Scenario | v1.3.0<br>2026-10-08<br>`30db267`<br>Apple M1 (Virtual) |
+|---|---|
+| Startup | 37 ms · 9.4 MB |
+| Startup heap | 1.3 MB |
+| Load notes | 34.9 ms · 12.1 MB |
+| Load reviews | 40 ms · 5.3 MB |
+| Navigate j/k | 1.7 ms · 518 KB |
+| Pulse tick | 372 µs · 95 KB |
+| Header | 99.7 µs · 14 KB |
+| Preview open | 1.49 ms · 705 KB |
+| Preview next | 2.26 ms · 1.3 MB |
+| Quick actions open | 1.41 ms · 436 KB |
+| Quick actions move | 1.32 ms · 329 KB |
+| Search keystroke | 1.2 ms · 423 KB |
+| Save note | 29.8 ms · 8.1 MB |
+| Delete note | 22.4 ms · 8.0 MB |
+| Archive | 140 µs · 84 KB |
+| Help | 152 µs · 94 KB |
+| Settings | 102 µs · 19 KB |
+| Brag view | 2.44 ms · 1.5 MB |
+| Review details | 1.59 ms · 795 KB |
+| Link menu | 2.05 ms · 333 KB |
+| Delete confirm | 12.6 µs · 3 KB |
+| Error | 322 µs · 84 KB |
+
+### 10k notes
+
+| Scenario | v1.3.0<br>2026-10-08<br>`30db267`<br>Apple M1 (Virtual) | v1.2.5<br>2026-10-08<br>working tree<br>Apple M1 Pro |
+|---|---|---|
+| Process start | 30.4 ms | 18.4 ms |
+| Peak memory | 17.5 MB | 18.1 MB |
+| Startup | 273 ms · 82.7 MB | 978 ms |
+| Startup heap | 6.4 MB | – |
+| Load notes | 815 ms · 119.8 MB | – |
+| Load reviews | 47.1 ms · 5.3 MB | – |
+| Navigate j/k | 42.9 ms · 8.1 MB | 21.8 ms |
+| Pulse tick | 1.29 ms · 230 KB | – |
+| Header | 403 µs · 14 KB | – |
+| Preview open | 15.5 ms · 6.4 MB | – |
+| Preview next | 6.43 ms · 6.2 MB | – |
+| Quick actions open | 30.9 ms · 7.4 MB | – |
+| Quick actions move | 22.3 ms · 6.3 MB | – |
+| Search keystroke | 3.27 ms · 968 KB | – |
+| Save note | 367 ms · 81.5 MB | 979 ms |
+| Delete note | 307 ms · 81.3 MB | – |
+| Archive | 168 µs · 83 KB | – |
+| Help | 752 µs · 608 KB | – |
+| Settings | 90.6 µs · 19 KB | – |
+| Brag view | 2.6 ms · 1.5 MB | – |
+| Review details | 3.81 ms · 2.8 MB | – |
+| Link menu | 30.4 ms · 6.4 MB | – |
+| Delete confirm | 10.9 µs · 3 KB | – |
+| Error | 802 µs · 206 KB | – |
+| Typing 500 lines, cursor top | 2.26 ms · 755 KB | – |
+| Typing 500 lines, cursor bottom | 6.56 ms · 2.0 MB | – |
+| Typing 2000 lines, cursor top | 7.09 ms · 2.6 MB | – |
+| Typing 2000 lines, cursor bottom | 28 ms · 7.6 MB | – |
+| Typing 10000 lines, cursor top | 1.34 s · 81.2 MB | – |
+| Typing 10000 lines, cursor bottom | 121 ms · 37.2 MB | 81.3 ms |
+
 <!-- history:end -->

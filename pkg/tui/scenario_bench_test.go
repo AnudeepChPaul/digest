@@ -24,7 +24,7 @@ import (
 const benchSizesEnv = "DIGEST_BENCH_SIZES"
 
 var (
-	defaultBenchSizes = []int{1, 100, 1000, 10000}
+	defaultBenchSizes  = []int{1, 100, 1000, 10000}
 	longNoteLineCounts = []int{500, 2000, 10000}
 	maxBenchReviews    = 1000
 
@@ -261,7 +261,7 @@ func BenchmarkScenarioNavigate(b *testing.B) {
 func BenchmarkScenarioPulse(b *testing.B) {
 	forEachSize(b, "notes", func(b *testing.B, notes int) {
 		m := scenarioModel(b, notes)
-		m.loadingGit = true
+		m.git.loadingGit = true
 		m.syncPulseRunning = true
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -279,7 +279,7 @@ func BenchmarkScenarioHeader(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = m.renderHeader()
+			_ = headerSection{}.Render(m)
 		}
 	})
 }
@@ -326,9 +326,8 @@ func BenchmarkScenarioSearch(b *testing.B) {
 	})
 }
 
-func saveAndReload(m Model, note *model.Note) Model {
+func saveAndRender(m Model, note *model.Note) Model {
 	m = update(m, m.saveNotesCmd(note)())
-	m = update(m, m.loadNotesCmd())
 	_ = m.View()
 	return m
 }
@@ -340,16 +339,13 @@ func BenchmarkScenarioSaveNote(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			note := &model.Note{Status: model.StatusActive, Source: model.SourceManual, Created: time.Now().Add(time.Duration(i) * time.Millisecond), Summary: "benchmark save"}
-			m = saveAndReload(m, note)
+			m = saveAndRender(m, note)
 			b.StopTimer()
 			saved := findNoteBySummary(m, "benchmark save")
 			if saved == nil {
-				b.Fatal("saved note not reloaded")
+				b.Fatal("saved note not in memory")
 			}
-			if err := m.store.Delete(saved); err != nil {
-				b.Fatal(err)
-			}
-			m = update(m, m.loadNotesCmd())
+			m = update(m, m.deleteNotesCmd(saved)())
 			b.StartTimer()
 		}
 	})
@@ -363,12 +359,9 @@ func BenchmarkScenarioDeleteNote(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 			note := &model.Note{Status: model.StatusActive, Source: model.SourceManual, Created: time.Now().Add(time.Duration(i) * time.Millisecond), Summary: "benchmark delete"}
-			if err := m.store.Save(note); err != nil {
-				b.Fatal(err)
-			}
+			m = update(m, m.saveNotesCmd(note)())
 			b.StartTimer()
 			m = update(m, m.deleteNotesCmd(note)())
-			m = update(m, m.loadNotesCmd())
 			_ = m.View()
 		}
 	})

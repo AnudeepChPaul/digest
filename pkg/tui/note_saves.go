@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -46,28 +47,6 @@ type notesDeletedMsg struct {
 	errs    []error
 }
 
-func loadAllNotesCmd(noteStore *store.NoteStore) tea.Cmd {
-	return func() tea.Msg {
-		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err, complete: true}
-	}
-}
-
-func (m *Model) ensureAllNotes() tea.Cmd {
-	if m.notesComplete || m.loadingAllNotes {
-		return nil
-	}
-	m.loadingAllNotes = true
-	return loadAllNotesCmd(m.store)
-}
-
-func (m Model) reloadNotesForDay() tea.Cmd {
-	if m.notesComplete {
-		return nil
-	}
-	return m.loadNotesCmd
-}
-
 func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
 	return m.saveNotesWithOrigin(saveFromRow, notes)
 }
@@ -99,6 +78,9 @@ func (m Model) saveNotesWithOrigin(origin noteSaveOrigin, notes []*model.Note) t
 				msg.failed = append(msg.failed, failed)
 				continue
 			}
+			if reloaded, err := store.Load(after.FilePath); err == nil {
+				after = *reloaded
+			}
 			msg.saved = append(msg.saved, savedNoteResult{target: targets[index], before: before, after: after})
 		}
 		return msg
@@ -125,6 +107,7 @@ func (m Model) deleteNotesCmd(notes ...*model.Note) tea.Cmd {
 				msg.errs = append(msg.errs, fmt.Errorf("delete %q: %w", copies[index].Summary, err))
 				continue
 			}
+			forgetWrittenPRNote(noteStore, copies[index])
 			msg.deleted = append(msg.deleted, copies[index])
 			if err := automation.Dismiss(automationRoot, copies[index].ID); err != nil && !errors.Is(err, automation.ErrInvalidNoteID) {
 				msg.errs = append(msg.errs, fmt.Errorf("remove automation for %q: %w", copies[index].Summary, err))
@@ -175,7 +158,11 @@ func (m Model) applySavedNotes(msg notesSavedMsg) (tea.Model, tea.Cmd) {
 			m.notes = append(m.notes, saved.target)
 			index = len(m.notes) - 1
 		}
-		mergeSavedFields(m.notes[index], saved.before, saved.after)
+		if reflect.DeepEqual(*m.notes[index], saved.before) {
+			*m.notes[index] = saved.after
+		} else {
+			mergeSavedFields(m.notes[index], saved.before, saved.after)
+		}
 		if m.awaitingNewNoteSave && saved.before.FilePath == "" {
 			m.awaitingNewNoteSave = false
 			m.selectNoteByID(saved.after.ID)

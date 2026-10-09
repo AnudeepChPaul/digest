@@ -1,10 +1,6 @@
 package tui
 
 import (
-	"context"
-
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -14,50 +10,19 @@ type commitsLoadedMsg struct {
 	yesterday  map[string][]GitPRItem
 }
 
-var fetchDaysCommits = sourcecontrol.FetchLocalCommitsForDays
-
-func (m Model) loadCommitsCmd() tea.Cmd {
-	if m.cfg == nil || !m.cfg.DailyCommitsEnabled() {
-		return nil
-	}
-	cfg, date, previousDay, generation := m.cfg, m.currentDate, m.previousNoteDay(), m.commitsGeneration
-	ctx := m.commitsCtx
-	return func() tea.Msg {
-		days := fetchDaysCommits(ctx, cfg, date, previousDay)
-		return commitsLoadedMsg{generation: generation, today: days[0], yesterday: days[1]}
-	}
-}
-
-func (m *Model) refreshCommitsCmd() tea.Cmd {
-	if m.commitsCancel != nil {
-		m.commitsCancel()
-	}
-	m.commitsCtx, m.commitsCancel = context.WithCancel(context.Background())
-	m.commitsGeneration++
-	load := m.loadCommitsCmd()
-	if load == nil {
-		return nil
-	}
-	m.loadingCommits = true
-	if !m.gitSyncInProgress() {
-		m.postMessage(messageSourceGit, messageProgress, "syncing")
-	}
-	return tea.Batch(load, m.ensureSyncPulse())
-}
-
 func (m *Model) resetCommitsForDate() {
-	m.localCommitsToday, m.localCommitsYesterday = nil, nil
+	m.git.localCommitsToday, m.git.localCommitsYesterday = nil, nil
 	m.rebuildGitRepoStats()
 }
 
 func (m *Model) applyCommits(msg commitsLoadedMsg) {
-	if msg.generation != m.commitsGeneration {
+	if msg.generation != m.git.commitsGeneration {
 		return
 	}
-	m.loadingCommits = false
+	m.git.loadingCommits = false
 	m.noteGitSyncDone()
 	selectedKey, selectedOccurrence := m.selectedNavKey()
-	m.localCommitsToday, m.localCommitsYesterday = msg.today, msg.yesterday
+	m.git.localCommitsToday, m.git.localCommitsYesterday = msg.today, msg.yesterday
 	m.rebuildGitRepoStats()
 	m.restoreSelection(selectedKey, selectedOccurrence)
 	m.updateScrollOffset()

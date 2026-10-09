@@ -144,20 +144,20 @@ func (m Model) openMessageLog(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) noteGitSyncDone() {
-	if m.loadingGit || m.loadingCommits {
+	if m.git.loadingGit || m.git.loadingCommits {
 		return
 	}
 	if !m.gitSyncInProgress() {
 		return
 	}
-	if len(m.syncErrors) == 0 {
+	if len(m.git.syncErrors) == 0 {
 		m.postMessage(messageSourceGit, messageSuccess, "synced")
-		m.prAlertsDue = true
+		m.git.prAlertsDue = true
 		return
 	}
 	var failures []string
-	for _, section := range slices.Sorted(maps.Keys(m.syncErrors)) {
-		failures = append(failures, section+": "+m.syncErrors[section])
+	for _, section := range slices.Sorted(maps.Keys(m.git.syncErrors)) {
+		failures = append(failures, section+": "+m.git.syncErrors[section])
 	}
 	m.postMessage(messageSourceGit, messageError, "sync failed · "+strings.Join(failures, " · "))
 }

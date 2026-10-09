@@ -60,9 +60,8 @@ func sampleRun(version, commit string, startupNanos float64) Run {
 	}
 }
 
-func TestMarkdownShowsTheLatestRunAndTheGivenHistoryRows(t *testing.T) {
-	newer, older := sampleRun("v1.2.6", "def5678", 700e6), sampleRun("v1.2.5", "abc1234", 812e6)
-	markdown := Markdown(newer, []string{HistoryRow(newer), HistoryRow(older)})
+func TestMarkdownShowsTheLatestRun(t *testing.T) {
+	markdown := Markdown(sampleRun("v1.2.6", "def5678", 700e6), "")
 	for _, want := range []string{
 		"# Benchmarks",
 		"v1.2.6 `def5678`",
@@ -77,33 +76,192 @@ func TestMarkdownShowsTheLatestRunAndTheGivenHistoryRows(t *testing.T) {
 		"9.5 ms",
 		"14.2 MB",
 		"mise run bench",
+		"each reloads only that note",
 	} {
 		if !strings.Contains(markdown, want) {
 			t.Errorf("markdown lacks %q:\n%s", want, markdown)
 		}
 	}
-	history := markdown[strings.Index(markdown, "## History"):]
-	if first, second := strings.Index(history, "def5678"), strings.Index(history, "abc1234"); first < 0 || second < 0 || first > second {
-		t.Errorf("history should keep the given order, def5678 first:\n%s", history)
-	}
-	if !strings.Contains(history, "| v1.2.5 | `abc1234` | Apple M1 Pro |") || !strings.Contains(history, "812 ms") {
-		t.Errorf("history row lacks version, commit, machine or headline numbers:\n%s", history)
+	if strings.Contains(markdown, "each reloads every note") {
+		t.Errorf("markdown still says saving reloads every note")
 	}
 }
 
-func TestHistoryRowsReadsOnlyTheRowsBetweenTheMarkers(t *testing.T) {
+func historySection(markdown string) string {
+	_, afterStart, _ := strings.Cut(markdown, historyStart)
+	body, _, _ := strings.Cut(afterStart, historyEnd)
+	return body
+}
+
+func historyLine(t *testing.T, markdown, title, label string) string {
+	t.Helper()
+	_, table, found := strings.Cut(historySection(markdown), "### "+title+"\n")
+	if !found {
+		t.Fatalf("history lacks %q table:\n%s", title, historySection(markdown))
+	}
+	table, _, _ = strings.Cut(table, "### ")
+	for _, line := range strings.Split(table, "\n") {
+		if strings.HasPrefix(line, "| "+label+" |") {
+			return line
+		}
+	}
+	return ""
+}
+
+func TestHistoryPivotsScenariosIntoRowsAndRunsIntoColumnsNewestFirst(t *testing.T) {
+	markdown := Markdown(sampleRun("v1.2.6", "def5678", 700e6), Markdown(sampleRun("v1.2.5", "abc1234", 812e6), ""))
+	header := historyLine(t, markdown, "10k notes", "Scenario")
+	newer, older := strings.Index(header, "v1.2.6"), strings.Index(header, "v1.2.5")
+	if newer < 0 || older < 0 || newer > older {
+		t.Errorf("header should list v1.2.6 before v1.2.5: %q", header)
+	}
+	for _, want := range []string{"2026-10-08", "`def5678`", "Apple M1 Pro"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("header lacks %q: %q", want, header)
+		}
+	}
+	if got := historyLine(t, markdown, "10k notes", "Startup"); got != "| Startup | 700 ms · 87.7 MB | 812 ms · 87.7 MB |" {
+		t.Errorf("startup row = %q", got)
+	}
+	if got := historyLine(t, markdown, "10k notes", "Delete note"); got != "| Delete note | – | – |" {
+		t.Errorf("missing scenario row = %q", got)
+	}
+	section := historySection(markdown)
+	for _, label := range []string{"Startup heap", "Load notes", "Navigate j/k", "Save note", "Archive", "Error"} {
+		if !strings.Contains(section, "| "+label+" |") {
+			t.Errorf("history lacks row %q", label)
+		}
+	}
+}
+
+func TestHistoryKeepsProcessAndTypingRowsOnlyInTheTenThousandTable(t *testing.T) {
+	run := sampleRun("v1.2.6", "def5678", 700e6)
+	run.Results = append(run.Results, Result{Name: "Startup/notes=1000", Metrics: map[string]float64{"ns/op": 95e6, "B/op": 13e6}})
+	markdown := Markdown(run, "")
+	if got := historyLine(t, markdown, "1k notes", "Startup"); got != "| Startup | 95 ms · 12.4 MB |" {
+		t.Errorf("1k startup row = %q", got)
+	}
+	for _, label := range []string{"Process start", "Peak memory", "Typing 10000 lines, cursor bottom"} {
+		if got := historyLine(t, markdown, "1k notes", label); got != "" {
+			t.Errorf("1k table should not have %q: %q", label, got)
+		}
+	}
+	for label, want := range map[string]string{
+		"Process start":                     "| Process start | 9.5 ms |",
+		"Peak memory":                       "| Peak memory | 14.2 MB |",
+		"Typing 10000 lines, cursor bottom": "| Typing 10000 lines, cursor bottom | 84.9 ms · 37.2 MB |",
+		"Typing 500 lines, cursor top":      "| Typing 500 lines, cursor top | – |",
+	} {
+		if got := historyLine(t, markdown, "10k notes", label); got != want {
+			t.Errorf("10k %s = %q, want %q", label, got, want)
+		}
+	}
+}
+
+func TestHistoryTablesRoundTrip(t *testing.T) {
 	run := sampleRun("v1.2.5", "abc1234", 812e6)
-	markdown := Markdown(run, []string{HistoryRow(run)}) + "\n| stray | row |\n"
-	rows := HistoryRows(markdown)
-	if len(rows) != 1 || rows[0] != HistoryRow(run) {
-		t.Errorf("rows = %q", rows)
+	run.CPU = "Apple | M1"
+	markdown := Markdown(run, "")
+	tables := historyTables(markdown)
+	tenThousand := tables["10k notes"]
+	if len(tenThousand.columns) != 1 {
+		t.Fatalf("columns = %+v", tenThousand.columns)
 	}
-	if rows := HistoryRows("no markers here\n| a | b |\n"); len(rows) != 0 {
-		t.Errorf("rows without markers = %q", rows)
+	column := tenThousand.columns[0]
+	if column.version != "v1.2.5" || column.date != "2026-10-08" || column.commit != "abc1234" || column.machine != "Apple | M1" {
+		t.Errorf("column = %+v", column)
+	}
+	if column.cells["Startup"] != "812 ms · 87.7 MB" || column.cells["Peak memory"] != "14.2 MB" {
+		t.Errorf("cells = %v", column.cells)
+	}
+	if again := Markdown(run, markdown); historySection(again) != historySection(markdown) {
+		t.Errorf("re-rendering the same version should not change history:\n%s\nvs\n%s", historySection(again), historySection(markdown))
 	}
 }
 
-func TestRecordAddsEachRunOnTopAndShowsOnlyTheLatestTables(t *testing.T) {
+func TestHistoryTablesIgnoreRowsOutsideTheMarkers(t *testing.T) {
+	markdown := Markdown(sampleRun("v1.2.5", "abc1234", 812e6), "") + "\n| Startup | 1 s |\n"
+	if got := historyTables(markdown)["10k notes"].columns[0].cells["Startup"]; got != "812 ms · 87.7 MB" {
+		t.Errorf("startup = %q", got)
+	}
+	if tables := historyTables("no markers here\n| a | b |\n"); len(tables) != 0 {
+		t.Errorf("tables without markers = %+v", tables)
+	}
+}
+
+const legacyHistory = `## History
+
+<!-- history:start -->
+| Date | Version | Commit | Machine | Process start | Peak memory | Startup | Typing | Navigate | Save |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-08 | v1.3.0 | ` + "`30db267`" + ` | Apple M1 (Virtual) | 30.4 ms | 17.5 MB | 273 ms | 121 ms | 42.9 ms | 367 ms |
+| 2026-10-07 | v1.2.5 | working tree | Apple \| M1 Pro | 18.4 ms | 18.1 MB | 978 ms | 81.3 ms | 21.8 ms | 979 ms |
+<!-- history:end -->
+`
+
+func TestHistoryTablesImportTheOldFlatHistoryIntoTheTenThousandTable(t *testing.T) {
+	tables := historyTables(legacyHistory)
+	if len(tables["1k notes"].columns) != 0 {
+		t.Errorf("1k columns = %+v", tables["1k notes"].columns)
+	}
+	columns := tables["10k notes"].columns
+	if len(columns) != 2 {
+		t.Fatalf("columns = %+v", columns)
+	}
+	if columns[0].version != "v1.3.0" || columns[0].commit != "30db267" || columns[0].machine != "Apple M1 (Virtual)" {
+		t.Errorf("first column = %+v", columns[0])
+	}
+	if columns[1].version != "v1.2.5" || columns[1].commit != "" || columns[1].machine != "Apple | M1 Pro" || columns[1].date != "2026-10-07" {
+		t.Errorf("second column = %+v", columns[1])
+	}
+	want := map[string]string{
+		"Process start":                     "30.4 ms",
+		"Peak memory":                       "17.5 MB",
+		"Startup":                           "273 ms",
+		"Typing 10000 lines, cursor bottom": "121 ms",
+		"Navigate j/k":                      "42.9 ms",
+		"Save note":                         "367 ms",
+	}
+	for label, value := range want {
+		if columns[0].cells[label] != value {
+			t.Errorf("%s = %q, want %q", label, columns[0].cells[label], value)
+		}
+	}
+	markdown := Markdown(sampleRun("v1.3.1", "fff0000", 700e6), legacyHistory)
+	if got := historyLine(t, markdown, "10k notes", "Save note"); got != "| Save note | – | 367 ms | 979 ms |" {
+		t.Errorf("save row = %q", got)
+	}
+	if strings.Contains(markdown, legacyHistoryHeader) {
+		t.Errorf("old header should be gone:\n%s", markdown)
+	}
+}
+
+func TestHistoryReplacesTheColumnOfARecordedVersion(t *testing.T) {
+	markdown := Markdown(sampleRun("v1.2.5", "abc1234", 812e6), "")
+	markdown = Markdown(sampleRun("v1.2.6", "def5678", 700e6), markdown)
+	markdown = Markdown(sampleRun("v1.2.5", "abc9999", 600e6), markdown)
+	columns := historyTables(markdown)["10k notes"].columns
+	if len(columns) != 2 || columns[0].commit != "abc9999" || columns[1].version != "v1.2.6" {
+		t.Fatalf("columns = %+v", columns)
+	}
+	if columns[0].cells["Startup"] != "600 ms · 87.7 MB" {
+		t.Errorf("startup = %q", columns[0].cells["Startup"])
+	}
+}
+
+func TestHistoryAddsAColumnForEveryWorkingTreeRun(t *testing.T) {
+	markdown := Markdown(sampleRun("", "", 812e6), "")
+	markdown = Markdown(sampleRun("", "", 700e6), markdown)
+	columns := historyTables(markdown)["10k notes"].columns
+	if len(columns) != 2 || columns[0].cells["Startup"] != "700 ms · 87.7 MB" || columns[1].cells["Startup"] != "812 ms · 87.7 MB" {
+		t.Fatalf("columns = %+v", columns)
+	}
+	if header := historyLine(t, markdown, "10k notes", "Scenario"); strings.Count(header, "working tree") < 2 {
+		t.Errorf("header should label both runs working tree: %q", header)
+	}
+}
+
+func TestRecordWritesTheDocsFileAndAddsEachRunAsANewColumn(t *testing.T) {
 	root := t.TempDir()
 	if err := Record(root, sampleRun("v1.2.5", "abc1234", 812e6)); err != nil {
 		t.Fatal(err)
@@ -111,28 +269,25 @@ func TestRecordAddsEachRunOnTopAndShowsOnlyTheLatestTables(t *testing.T) {
 	if err := Record(root, sampleRun("v1.2.6", "def5678", 700e6)); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, MarkdownFile))
+	data, err := os.ReadFile(filepath.Join(root, "docs", "benchmark", "BENCHMARK.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	markdown := string(data)
-	rows := HistoryRows(markdown)
-	if len(rows) != 2 || !strings.Contains(rows[0], "def5678") || !strings.Contains(rows[1], "abc1234") {
-		t.Fatalf("rows = %q", rows)
+	columns := historyTables(markdown)["10k notes"].columns
+	if len(columns) != 2 || columns[0].commit != "def5678" || columns[1].commit != "abc1234" {
+		t.Fatalf("columns = %+v", columns)
 	}
 	latest := markdown[:strings.Index(markdown, "## History")]
 	if !strings.Contains(latest, "700 ms") || strings.Contains(latest, "812 ms") {
 		t.Errorf("latest tables should show only the newest run:\n%s", latest)
-	}
-	if _, err := os.Stat(filepath.Join(root, "benchmarks", "history.csv")); !os.IsNotExist(err) {
-		t.Errorf("history.csv should not be written, stat err = %v", err)
 	}
 }
 
 func TestMarkdownEscapesPipes(t *testing.T) {
 	run := sampleRun("v1.2.5", "abc1234", 1e6)
 	run.CPU = "Apple | M1"
-	markdown := Markdown(run, []string{HistoryRow(run)})
+	markdown := Markdown(run, "")
 	if strings.Contains(markdown, "Apple | M1") || !strings.Contains(markdown, `Apple \| M1`) {
 		t.Errorf("pipe not escaped:\n%s", markdown)
 	}
@@ -140,7 +295,7 @@ func TestMarkdownEscapesPipes(t *testing.T) {
 
 func TestMarkdownNamesAnUncommittedRunTheWorkingTree(t *testing.T) {
 	run := sampleRun("v1.2.5", "", 1e6)
-	markdown := Markdown(run, []string{HistoryRow(run)})
+	markdown := Markdown(run, "")
 	if strings.Contains(markdown, "``") || !strings.Contains(markdown, "working tree") {
 		t.Errorf("uncommitted run should say working tree:\n%s", markdown)
 	}

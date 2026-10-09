@@ -14,8 +14,8 @@ import (
 func gitStripTestModel(t *testing.T) Model {
 	t.Helper()
 	m := syncTestModel(t)
-	m.yesterdayGitRepo = []*GitRepoStat{{Name: "alpha"}, {Name: "beta"}}
-	m.todayGitRepos = []*GitRepoStat{{Name: "gamma"}}
+	m.git.yesterdayGitRepo = []*GitRepoStat{{Name: "alpha"}, {Name: "beta"}}
+	m.git.todayGitRepos = []*GitRepoStat{{Name: "gamma"}}
 	m.notes = []*model.Note{{Summary: "carried", Created: m.currentDate.AddDate(0, 0, -1), Source: model.SourceManual}}
 	return m
 }
@@ -28,7 +28,7 @@ func selectedRepoName(m Model) string {
 	return item.GitRepo.Name
 }
 
-func TestBoardShowsYesterdayThenGitThenToday(t *testing.T) {
+func TestBoardShowsYesterdayThenTodayThenGit(t *testing.T) {
 	m := gitStripTestModel(t)
 	lines := plainLines(m.renderDashboardBody())
 	yesterdayLine, stripLine, captionLine, sharedLine, todayLine := -1, -1, -1, -1, -1
@@ -46,7 +46,7 @@ func TestBoardShowsYesterdayThenGitThenToday(t *testing.T) {
 			todayLine = index
 		}
 	}
-	if yesterdayLine < 0 || stripLine < yesterdayLine || captionLine < stripLine || sharedLine < captionLine || todayLine < sharedLine {
+	if yesterdayLine < 0 || todayLine < yesterdayLine || stripLine < todayLine || captionLine < stripLine || sharedLine < captionLine {
 		t.Fatalf("yesterday %d strip %d captions %d shared %d today %d:\n%s", yesterdayLine, stripLine, captionLine, sharedLine, todayLine, strings.Join(lines, "\n"))
 	}
 	if body := strings.Join(lines, "\n"); strings.Contains(body, "Git Updates") || strings.Contains(body, "/ Git") {
@@ -59,10 +59,10 @@ func TestNavOrderFollowsBoard(t *testing.T) {
 	yesterday := m.currentDate.AddDate(0, 0, -1)
 	m.notes = append(m.notes, &model.Note{Summary: "done yesterday", Status: model.StatusDone, Created: yesterday, Updated: yesterday, Source: model.SourceManual})
 	items := m.allNavItems()
-	if items[0].Kind != KindYesterdayDone || items[1].GitRepo == nil || items[1].GitRepo.Name != "alpha" {
-		t.Fatalf("first items = %+v, %+v", items[0], items[1])
+	if items[0].Kind != KindYesterdayDone || items[1].Kind != KindCarriedNote || items[2].GitRepo == nil || items[2].GitRepo.Name != "alpha" {
+		t.Fatalf("first items = %+v, %+v, %+v", items[0], items[1], items[2])
 	}
-	m.selected = 2
+	m.selected = 3
 	if m = press(t, m, runes("l")); selectedRepoName(m) != "gamma" {
 		t.Errorf("l from beta should land on gamma, got %q", selectedRepoName(m))
 	}
@@ -73,6 +73,7 @@ func TestNavOrderFollowsBoard(t *testing.T) {
 
 func TestGitStripNavigation(t *testing.T) {
 	m := gitStripTestModel(t)
+	m.selected = 1
 	var order []string
 	for range 3 {
 		order = append(order, selectedRepoName(m))
@@ -81,7 +82,7 @@ func TestGitStripNavigation(t *testing.T) {
 	if strings.Join(order, ",") != "alpha,beta,gamma" {
 		t.Fatalf("j order = %v", order)
 	}
-	m.selected = 1
+	m.selected = 2
 	if m = press(t, m, runes("l")); selectedRepoName(m) != "gamma" {
 		t.Errorf("l from beta should clamp to gamma, got %q", selectedRepoName(m))
 	}
@@ -91,8 +92,8 @@ func TestGitStripNavigation(t *testing.T) {
 	if m = press(t, m, runes("h")); selectedRepoName(m) != "alpha" {
 		t.Errorf("h in the yesterday column should do nothing, got %q", selectedRepoName(m))
 	}
-	m.selected = 3
-	if m = press(t, m, runes("l")); m.selected != 3 {
+	m.selected = 0
+	if m = press(t, m, runes("l")); m.selected != 0 {
 		t.Errorf("l outside the strip should do nothing, selected %d", m.selected)
 	}
 }
@@ -100,7 +101,7 @@ func TestGitStripNavigation(t *testing.T) {
 func TestGitStripArrowKeysSwitchColumnsWithoutChangingDay(t *testing.T) {
 	m := gitStripTestModel(t)
 	startDate := m.currentDate
-	m.selected = 1
+	m.selected = 2
 	if m = press(t, m, tea.KeyMsg{Type: tea.KeyRight}); selectedRepoName(m) != "gamma" {
 		t.Errorf("right from beta should clamp to gamma, got %q", selectedRepoName(m))
 	}
@@ -135,8 +136,8 @@ func TestDashboardScrollKeepsSelectedNoteVisible(t *testing.T) {
 func TestGitStripColumnsStayAlignedWhenNarrow(t *testing.T) {
 	m := gitStripTestModel(t)
 	m.width = 80
-	m.yesterdayGitRepo = []*GitRepoStat{{Name: "digest", Commits: 5, Reviewed: 1, Assigned: 2}, {Name: "a-very-long-repository-name", Commits: 7}}
-	m.todayGitRepos = []*GitRepoStat{{Name: "web-console", Commits: 1}}
+	m.git.yesterdayGitRepo = []*GitRepoStat{{Name: "digest", Commits: 5, Reviewed: 1, Assigned: 2}, {Name: "a-very-long-repository-name", Commits: 7}}
+	m.git.todayGitRepos = []*GitRepoStat{{Name: "web-console", Commits: 1}}
 	lines, _ := m.renderGitStrip(m.width-4, false, m.groupNotes())
 	dividerColumn := -1
 	for _, line := range lines[2:] {
@@ -153,7 +154,7 @@ func TestGitStripColumnsStayAlignedWhenNarrow(t *testing.T) {
 			t.Errorf("divider at %d, want %d: %q", column, dividerColumn, string(plain))
 		}
 	}
-	if row := stripANSI(m.renderGitRepoRow(m.todayGitRepos[0], false, 36)); !strings.Contains(row, "web-console ") {
+	if row := stripANSI(m.renderGitRepoRow(m.git.todayGitRepos[0], false, 36)); !strings.Contains(row, "web-console ") {
 		t.Errorf("name and stats need a gap: %q", row)
 	}
 }

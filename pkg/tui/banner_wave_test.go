@@ -49,7 +49,7 @@ func TestBannerWaveIgnoresGitSyncWave(t *testing.T) {
 func TestHeaderShowsDigestBanner(t *testing.T) {
 	m := bannerTestModel(t)
 	m.bannerWaveActive = false
-	header := m.renderHeader()
+	header := headerSection{}.Render(m)
 	for _, row := range []string{bannerTopRow, bannerMiddleRow, bannerBottomRow} {
 		if !strings.Contains(header, row) {
 			t.Errorf("header missing banner row %q", row)
@@ -63,7 +63,7 @@ func TestHeaderShowsDigestBanner(t *testing.T) {
 func TestHeaderTextSitsOnMiddleLogoRow(t *testing.T) {
 	m := bannerTestModel(t)
 	m.bannerWaveActive = false
-	lines := plainLines(m.renderHeader())
+	lines := plainLines(headerSection{}.Render(m))
 	if !strings.Contains(lines[2], strings.TrimSpace(bannerMiddleRow)) || !strings.Contains(lines[2], "— ") {
 		t.Errorf("date should share the middle logo row:\n%s", strings.Join(lines, "\n"))
 	}

@@ -35,7 +35,7 @@ func pendingItem(number int) GitPRItem {
 func TestSelectedJobSurvivesPRLoad(t *testing.T) {
 	m := selectionTestModel(t)
 	selectNavItem(t, &m, "job:repo sync")
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pendingItem(1), pendingItem(2), pendingItem(3)}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pendingItem(1), pendingItem(2), pendingItem(3)}})
 	items := m.allNavItems()
 	if m.selected >= len(items) || navItemKey(items[m.selected]) != "job:repo sync" {
 		t.Fatalf("selected %d is not the repo sync job", m.selected)
@@ -44,9 +44,9 @@ func TestSelectedJobSurvivesPRLoad(t *testing.T) {
 
 func TestSelectedPRSurvivesReorder(t *testing.T) {
 	m := selectionTestModel(t)
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pendingItem(1), pendingItem(2)}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pendingItem(1), pendingItem(2)}})
 	selectNavItem(t, &m, "pr:"+pendingItem(2).URL)
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pendingItem(3), pendingItem(1), pendingItem(2)}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pendingItem(3), pendingItem(1), pendingItem(2)}})
 	items := m.allNavItems()
 	if navItemKey(items[m.selected]) != "pr:"+pendingItem(2).URL {
 		t.Fatalf("selected %q", navItemKey(items[m.selected]))
@@ -55,9 +55,9 @@ func TestSelectedPRSurvivesReorder(t *testing.T) {
 
 func TestSelectionClampsWhenRowDisappears(t *testing.T) {
 	m := selectionTestModel(t)
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pendingItem(1)}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pendingItem(1)}})
 	selectNavItem(t, &m, "pr:"+pendingItem(1).URL)
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration})
 	if m.selected < 0 || m.selected >= len(m.allNavItems()) {
 		t.Fatalf("selected %d out of range", m.selected)
 	}

@@ -97,7 +97,7 @@ func TestTypingInTheEditorDoesNotStartTheHintTimer(t *testing.T) {
 
 func BenchmarkPulseWhileEditingALongNote(b *testing.B) {
 	m := editLongNote(benchModel(b), 500)
-	m.loadingGit = true
+	m.git.loadingGit = true
 	m.syncPulseRunning = true
 	b.ReportAllocs()
 	b.ResetTimer()

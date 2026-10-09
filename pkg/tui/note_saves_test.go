@@ -183,7 +183,7 @@ func TestAFailedSaveUndoesTheChangeAndShowsTheErrorInTheHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(active.FilePath, 0o600) })
-	m.loadingGit = true
+	m.git.loadingGit = true
 	m.postMessage(messageSourceGit, messageProgress, "syncing")
 	selectSummary(t, &m, "active")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
@@ -195,7 +195,7 @@ func TestAFailedSaveUndoesTheChangeAndShowsTheErrorInTheHeader(t *testing.T) {
 	if m.mode == ViewError {
 		t.Error("a save error should show in the header, not a popup")
 	}
-	header := stripANSI(m.renderHeader())
+	header := stripANSI(headerSection{}.Render(m))
 	if !strings.Contains(header, "save failed") || strings.Contains(header, "syncing") {
 		t.Errorf("header should show the error instead of the sync status: %q", header)
 	}
@@ -204,7 +204,7 @@ func TestAFailedSaveUndoesTheChangeAndShowsTheErrorInTheHeader(t *testing.T) {
 	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(Model)
-	if header := stripANSI(m.renderHeader()); !strings.Contains(header, "syncing") || cmd == nil {
+	if header := stripANSI(headerSection{}.Render(m)); !strings.Contains(header, "syncing") || cmd == nil {
 		t.Errorf("esc should bring the animated sync status back: %q", header)
 	}
 }

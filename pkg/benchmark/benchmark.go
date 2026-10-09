@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	MarkdownFile   = "BENCHMARK.md"
+	MarkdownFile   = "docs/benchmark/BENCHMARK.md"
 	scenarioPrefix = "BenchmarkScenario"
 	historyStart   = "<!-- history:start -->"
 	historyEnd     = "<!-- history:end -->"
@@ -71,29 +71,13 @@ func ParseGoBench(output string) ([]Result, string) {
 }
 
 func Record(root string, run Run) error {
-	path := filepath.Join(root, MarkdownFile)
+	path := filepath.Join(root, filepath.FromSlash(MarkdownFile))
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	rows := append([]string{HistoryRow(run)}, HistoryRows(string(existing))...)
-	return os.WriteFile(path, []byte(Markdown(run, rows)), 0o644)
-}
-
-func HistoryRows(markdown string) []string {
-	_, afterStart, found := strings.Cut(markdown, historyStart)
-	if !found {
-		return nil
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
-	body, _, found := strings.Cut(afterStart, historyEnd)
-	if !found {
-		return nil
-	}
-	var rows []string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "| ") && line != historyHeader {
-			rows = append(rows, line)
-		}
-	}
-	return rows
+	return os.WriteFile(path, []byte(Markdown(run, string(existing))), 0o644)
 }

@@ -31,7 +31,7 @@ func freshView(m Model) string {
 
 func TestAnimationTicksReuseTheDashboardContent(t *testing.T) {
 	m := gitStripTestModel(t)
-	m.loadingGit, m.syncPulseRunning = true, true
+	m.git.loadingGit, m.syncPulseRunning = true, true
 	builds := countDashboardBuilds(t)
 	for range 2 * pulsePhaseCount {
 		m = update(m, syncPulseTickMsg{})

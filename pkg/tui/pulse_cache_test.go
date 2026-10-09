@@ -16,10 +16,10 @@ func TestPulseTicksReuseTheDashboardButStillAnimateTheHeader(t *testing.T) {
 	m := reviewTestModel(t)
 	m.mode = ViewDashboard
 	m.width, m.height = 160, 50
-	markRunning(t, m, m.ghPendingPRs[0].PR.Ref)
+	markRunning(t, m, m.git.ghPendingPRs[0].PR.Ref)
 	writeLivePID(t, filepath.Join(getLogsDir(), "janitor.pid"))
 	m = update(m, reviewPollTickMsg{snapshot: m.loadReviewPollSnapshot()})
-	m.loadingGit = true
+	m.git.loadingGit = true
 	m.postMessage(messageSourceGit, messageProgress, "syncing")
 	builds := countDashboardBuilds(t)
 	frames := map[string]bool{}
@@ -58,11 +58,11 @@ func TestSelectedReviewingRowStaysUnderlinedThroughTheLabel(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(originalProfile) })
 	m := reviewTestModel(t)
-	markRunning(t, m, m.ghPendingPRs[0].PR.Ref)
+	markRunning(t, m, m.git.ghPendingPRs[0].PR.Ref)
 	m = update(m, reviewPollTickMsg{snapshot: m.loadReviewPollSnapshot()})
 	m.mode = ViewDashboard
 	m.width, m.height = 160, 50
-	selectNavItem(t, &m, "pr:"+m.ghPendingPRs[0].PR.Ref.URL)
+	selectNavItem(t, &m, "pr:"+m.git.ghPendingPRs[0].PR.Ref.URL)
 	var row string
 	for _, line := range strings.Split(m.View(), "\n") {
 		if strings.Contains(line, "reviewing...") {

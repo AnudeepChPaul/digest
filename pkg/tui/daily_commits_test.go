@@ -13,13 +13,13 @@ func TestDailyCommitsHiddenWhenDisabled(t *testing.T) {
 	m := syncTestModel(t)
 	disabled := false
 	m.cfg.ShowDailyCommits = &disabled
-	m.ghReviewedYesterday = []GitPRItem{reviewedItem("console", 1)}
-	m.localCommitsYesterday = map[string][]GitPRItem{"console": {commitItem("console")}, "tool": {commitItem("tool")}}
+	m.git.ghReviewedYesterday = []GitPRItem{reviewedItem("console", 1)}
+	m.git.localCommitsYesterday = map[string][]GitPRItem{"console": {commitItem("console")}, "tool": {commitItem("tool")}}
 	m.rebuildGitRepoStats()
-	if len(m.yesterdayGitRepo) != 1 || m.yesterdayGitRepo[0].Commits != 0 {
-		t.Fatalf("repos = %+v; commits must not create rows or counts", m.yesterdayGitRepo)
+	if len(m.git.yesterdayGitRepo) != 1 || m.git.yesterdayGitRepo[0].Commits != 0 {
+		t.Fatalf("repos = %+v; commits must not create rows or counts", m.git.yesterdayGitRepo)
 	}
-	if row := m.renderGitRepoRow(m.yesterdayGitRepo[0], false, 100); strings.Contains(row, "commits") {
+	if row := m.renderGitRepoRow(m.git.yesterdayGitRepo[0], false, 100); strings.Contains(row, "commits") {
 		t.Errorf("row shows commits: %q", row)
 	}
 	if view := m.View(); strings.Contains(view, "commits") {
@@ -29,12 +29,12 @@ func TestDailyCommitsHiddenWhenDisabled(t *testing.T) {
 
 func TestDailyCommitsShownByDefault(t *testing.T) {
 	m := syncTestModel(t)
-	m.localCommitsYesterday = map[string][]GitPRItem{"console": {commitItem("console")}}
+	m.git.localCommitsYesterday = map[string][]GitPRItem{"console": {commitItem("console")}}
 	m.rebuildGitRepoStats()
-	if len(m.yesterdayGitRepo) != 1 || m.yesterdayGitRepo[0].Commits != 1 {
-		t.Fatalf("repos = %+v", m.yesterdayGitRepo)
+	if len(m.git.yesterdayGitRepo) != 1 || m.git.yesterdayGitRepo[0].Commits != 1 {
+		t.Fatalf("repos = %+v", m.git.yesterdayGitRepo)
 	}
-	if row := m.renderGitRepoRow(m.yesterdayGitRepo[0], false, 100); !strings.Contains(row, "1 commits") {
+	if row := m.renderGitRepoRow(m.git.yesterdayGitRepo[0], false, 100); !strings.Contains(row, "1 commits") {
 		t.Errorf("row = %q", row)
 	}
 }

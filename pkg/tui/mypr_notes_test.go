@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,21 +145,42 @@ func TestMyPRNoteClosedMarksDoneAndForgetsPR(t *testing.T) {
 	}
 }
 
-func TestMyPRNoteDeletedByUserIsNotRecreated(t *testing.T) {
+func TestMyPRNoteDeletedInAppIsNotRecreated(t *testing.T) {
 	noteStore := store.New(t.TempDir())
 	seenPath := filepath.Join(t.TempDir(), "seen.json")
 	now := time.Date(2026, 10, 6, 10, 0, 0, 0, time.Local)
 	pr := myPR(4, nil)
 	runMyPRNotes(t, noteStore, seenPath, []review.QueuedPR{pr}, nil, now)
-	if err := noteStore.Delete(onlyMyPRNote(t, noteStore)); err != nil {
+	deleted := onlyMyPRNote(t, noteStore)
+	if err := noteStore.Delete(deleted); err != nil {
 		t.Fatal(err)
 	}
+	forgetWrittenPRNote(noteStore, *deleted)
 	approved := myPR(4, func(pr *review.QueuedPR) {
 		pr.Reviews = []review.PRReview{{Author: "alice", State: "APPROVED", SubmittedAt: now.Add(time.Minute)}}
 	})
 	runMyPRNotes(t, noteStore, seenPath, []review.QueuedPR{approved}, nil, now.Add(time.Hour))
 	if notes, _ := noteStore.List(); len(notes) != 0 {
 		t.Errorf("deleted note came back: %+v", notes)
+	}
+}
+
+func TestMyPRNoteDeletedOutsideAppIsReported(t *testing.T) {
+	noteStore := store.New(t.TempDir())
+	seenPath := filepath.Join(t.TempDir(), "seen.json")
+	now := time.Date(2026, 10, 6, 10, 0, 0, 0, time.Local)
+	pr := myPR(4, nil)
+	runMyPRNotes(t, noteStore, seenPath, []review.QueuedPR{pr}, nil, now)
+	gone := onlyMyPRNote(t, noteStore)
+	if err := os.Remove(gone.FilePath); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := myPRNotesCmd(noteStore, seenPath, []review.QueuedPR{pr}, nil, nil, now.Add(time.Hour))().(myPRNotesMsg)
+	if msg.err != nil || !errors.Is(msg.missing, os.ErrNotExist) || !strings.Contains(msg.missing.Error(), gone.Ref) {
+		t.Fatalf("a gone file should be reported as missing with its ref, got %#v", msg)
+	}
+	if notes, _ := noteStore.List(); len(notes) != 0 {
+		t.Errorf("gone note came back: %+v", notes)
 	}
 }
 

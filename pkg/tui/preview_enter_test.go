@@ -21,10 +21,10 @@ func recordOpenedURLs(t *testing.T) *[]string {
 func TestEnterInMyPRModalOpensPR(t *testing.T) {
 	opened := recordOpenedURLs(t)
 	m := myPRStripModel(t)
-	m.selected = 3
+	m.selected = 4
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(*opened) != 1 || (*opened)[0] != m.myPRs[0].Ref.URL || m.mode != ViewPreview {
+	if len(*opened) != 1 || (*opened)[0] != m.git.myPRs[0].Ref.URL || m.mode != ViewPreview {
 		t.Errorf("opened=%v mode=%v", *opened, m.mode)
 	}
 }
@@ -32,7 +32,7 @@ func TestEnterInMyPRModalOpensPR(t *testing.T) {
 func TestEnterInPRReviewModalOpensPRUnlessPostingFindings(t *testing.T) {
 	opened := recordOpenedURLs(t)
 	m := reviewTestModel(t)
-	url := m.ghPendingPRs[0].URL
+	url := m.git.ghPendingPRs[0].URL
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(*opened) != 1 || (*opened)[0] != url || m.mode != ViewPreview {
 		t.Fatalf("details tab: opened=%v mode=%v", *opened, m.mode)

@@ -44,14 +44,14 @@ func addBenchGitData(m *Model) {
 		ref := review.PRRef{Host: "github.com", Owner: "o", Repo: fmt.Sprintf("repo%d", i%6), Number: i, URL: fmt.Sprintf("https://github.com/o/repo%d/pull/%d", i%6, i)}
 		pending = append(pending, sourcecontrol.NewPRItem(review.QueuedPR{Ref: ref, Title: "Some PR title here", CIState: "SUCCESS", DirectRequest: true, RequestedAt: now.Add(-time.Duration(i) * time.Hour)}, "Pending Review"))
 	}
-	m.ghPendingPRs = pending
-	m.pendingGitAction = pending
+	m.git.ghPendingPRs = pending
+	m.git.pendingGitAction = pending
 	for i := 0; i < 8; i++ {
-		m.todayGitRepos = append(m.todayGitRepos, &GitRepoStat{Name: fmt.Sprintf("repo%d", i), Reviewed: i, Assigned: 1})
-		m.yesterdayGitRepo = append(m.yesterdayGitRepo, &GitRepoStat{Name: fmt.Sprintf("repo%d", i), Reviewed: i})
+		m.git.todayGitRepos = append(m.git.todayGitRepos, &GitRepoStat{Name: fmt.Sprintf("repo%d", i), Reviewed: i, Assigned: 1})
+		m.git.yesterdayGitRepo = append(m.git.yesterdayGitRepo, &GitRepoStat{Name: fmt.Sprintf("repo%d", i), Reviewed: i})
 	}
 	for i := 0; i < 6; i++ {
-		m.myPRs = append(m.myPRs, review.QueuedPR{Ref: review.PRRef{Repo: "mine", Number: i}, HeadRef: "feature/x", CreatedAt: now})
+		m.git.myPRs = append(m.git.myPRs, review.QueuedPR{Ref: review.PRRef{Repo: "mine", Number: i}, HeadRef: "feature/x", CreatedAt: now})
 	}
 	m.refreshLocalReviews()
 }
@@ -72,7 +72,7 @@ func BenchmarkKeyDownPlusView(b *testing.B) {
 
 func BenchmarkPulseTickPlusView(b *testing.B) {
 	m := benchModel(b)
-	m.loadingGit = true
+	m.git.loadingGit = true
 	m.syncPulseRunning = true
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -122,7 +122,7 @@ func BenchmarkRenderHeader(b *testing.B) {
 	m := benchModel(b)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = m.renderHeader()
+		_ = headerSection{}.Render(m)
 	}
 }
 
@@ -170,14 +170,14 @@ func BenchmarkRenderHeaderSettled(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.renderHeader()
+		_ = headerSection{}.Render(m)
 	}
 }
 
 func BenchmarkPulseTickPlusViewSettled(b *testing.B) {
 	m := benchModel(b)
 	m.bannerWaveActive = false
-	m.loadingGit = true
+	m.git.loadingGit = true
 	m.syncPulseRunning = true
 	b.ReportAllocs()
 	b.ResetTimer()

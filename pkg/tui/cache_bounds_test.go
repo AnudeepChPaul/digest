@@ -20,7 +20,7 @@ func TestMarkdownRendererCacheStaysSmall(t *testing.T) {
 
 func TestRelatedHistoryKeepsOnlyListedPRs(t *testing.T) {
 	m := reviewTestModel(t)
-	listed := m.ghPendingPRs[0].URL
+	listed := m.git.ghPendingPRs[0].URL
 	m.contextCache["https://github.com/o/gone/pull/1"] = "old history"
 	m = update(m, relatedHistoryMsg{url: listed, history: "fresh"})
 	if _, kept := m.contextCache["https://github.com/o/gone/pull/1"]; kept {

@@ -182,7 +182,7 @@ func (m Model) cancelAutomation(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) applyAutomationRuns(runs map[string]automation.Run) tea.Cmd {
-	var reloadNotes bool
+	var createdNoteIDs []string
 	selectedKey, selectedOccurrence := m.selectedNavKey()
 	if runs == nil {
 		runs = map[string]automation.Run{}
@@ -203,7 +203,7 @@ func (m *Model) applyAutomationRuns(runs map[string]automation.Run) tea.Cmd {
 				m.showError("AUTOMATION ERROR", err)
 			}
 			delete(runs, noteID)
-			reloadNotes = true
+			createdNoteIDs = append(createdNoteIDs, noteID)
 		case finished && run.Status == automation.RunNeedsReauth:
 			m.showError("RE-AUTH NEEDED", errors.New(m.reauthHint(run)+"\n\n"+reauthRetryHint))
 		case finished && run.Status == automation.RunFailed:
@@ -223,10 +223,27 @@ func (m *Model) applyAutomationRuns(runs map[string]automation.Run) tea.Cmd {
 		}
 		m.updatePreviewViewport()
 	}
-	if reloadNotes {
-		return m.loadNotesCmd
+	if len(createdNoteIDs) > 0 {
+		return m.reloadNotesByIDCmd(createdNoteIDs)
 	}
 	return nil
+}
+
+func (m Model) reloadNotesByIDCmd(noteIDs []string) tea.Cmd {
+	noteStore := m.store
+	return func() tea.Msg {
+		var changed []model.Note
+		var missing []error
+		for _, noteID := range noteIDs {
+			note, err := noteStore.LoadByID(noteID)
+			if err != nil {
+				missing = append(missing, err)
+				continue
+			}
+			changed = append(changed, *note)
+		}
+		return notesChangedMsg{notes: changed, err: errors.Join(missing...)}
+	}
 }
 
 func (m Model) reauthHint(run automation.Run) string {

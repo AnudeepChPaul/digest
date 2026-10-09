@@ -163,72 +163,6 @@ func (m Model) renderScreen() string {
 	return composeDashboard(m)
 }
 
-func (m Model) renderGitDetailsModal(modalWidth, innerWidth int) string {
-	if m.gitPopupRepo == nil {
-		return composeDashboard(m)
-	}
-
-	titleText := modalTitleStyle.Render(fmt.Sprintf(" GIT DETAILS: %s ", m.gitPopupRepo.Name))
-
-	tabNames := []string{"All", "Reviewed", "Assigned", "Commits"}
-	var renderedTabs []string
-	for i, name := range tabNames {
-		if i == m.gitPopupTab {
-			renderedTabs = append(renderedTabs, tabActiveStyle.Render(name))
-		} else {
-			renderedTabs = append(renderedTabs, tabInactiveStyle.Render(name))
-		}
-	}
-	tabsRow := strings.Join(renderedTabs, " ")
-
-	footerText := renderModalFooter(footerItemsFrom(gitDetailsBindings()), modalWidth-6)
-	fixedHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, titleText, "\n"+tabsRow, "", "", footerText))
-	listRows := max(1, previewContentHeight(m.height)-fixedHeight)
-
-	var listLines []string
-	items := m.filteredGitItems()
-
-	if len(items) == 0 {
-		listLines = append(listLines, "  "+mutedStyle.Render("(no items in this tab)"))
-	} else {
-		firstRow, lastRow := visibleGitRows(m.gitPopupSelected, len(items), listRows)
-		for i := firstRow; i < lastRow; i++ {
-			item := items[i]
-			prefix := "  "
-			kindTag := fmt.Sprintf("[%s]", item.Kind)
-
-			titleWidth := innerWidth - len(kindTag) - 6
-			title := item.Title
-			if titleWidth > 5 {
-				title = ansi.Truncate(title, titleWidth, "…")
-			}
-			gap := max(titleWidth-ansi.StringWidth(title), 1)
-
-			if i == m.gitPopupSelected {
-				renderedTitle := selectedTitle(title)
-				listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, renderedTitle, safeRepeat(" ", gap), underlined(mutedStyle.Render(kindTag))))
-			} else {
-				listLines = append(listLines, fmt.Sprintf("%s%s%s %s", prefix, itemStyle.Render(title), safeRepeat(" ", gap), mutedStyle.Render(kindTag)))
-			}
-		}
-	}
-	for len(listLines) < listRows {
-		listLines = append(listLines, "")
-	}
-
-	popupContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleText,
-		"\n"+tabsRow,
-		"",
-		strings.Join(listLines, "\n"),
-		"",
-		footerText,
-	)
-
-	return m.framedPopup(popupContent, modalWidth)
-}
-
 func (m Model) renderDeleteConfirmModal(modalWidth int) string {
 	var titleText string
 	var prompt string
@@ -264,29 +198,6 @@ func (m Model) renderDeleteConfirmModal(modalWidth int) string {
 		titleText,
 		"",
 		prompt,
-		"",
-		footerText,
-	)
-
-	return m.framedPopup(popupContent, modalWidth)
-}
-
-func (m Model) renderArchivedModal(modalWidth int) string {
-	titleText := modalTitleStyle.Render(" ARCHIVED NOTES ")
-
-	innerHeight := m.height - 10 - footerLineCount(archiveFooterItems)
-	if innerHeight < 4 {
-		innerHeight = 4
-	}
-	m.archivedViewport.Height = innerHeight
-
-	footerText := renderModalFooter(archiveFooterItems, modalWidth-6)
-
-	popupContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleText,
-		"",
-		m.archivedViewport.View(),
 		"",
 		footerText,
 	)
@@ -401,23 +312,6 @@ func (m Model) renderPreviewModal(modalWidth, innerWidth int) string {
 	m.previewViewport.Height = max(3, previewContentHeight(m.height)-fixedHeight)
 	previewParts := append(append(partsAbove, m.previewViewport.View()), partsBelow...)
 	popupContent := lipgloss.JoinVertical(lipgloss.Left, previewParts...)
-
-	return m.framedPopup(popupContent, modalWidth)
-}
-
-func (m Model) renderEditModal(modalWidth int) string {
-	titleText := modalTitleStyle.Render(" ADD / EDIT NOTE ")
-
-	footerText := renderModalFooter(footerItemsFrom(editBindings()), modalWidth-6)
-
-	popupContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleText,
-		"",
-		m.editorView(),
-		"",
-		footerText,
-	)
 
 	return m.framedPopup(popupContent, modalWidth)
 }

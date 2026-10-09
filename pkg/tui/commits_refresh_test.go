@@ -41,10 +41,10 @@ func TestCommitsLoadWithoutGitSync(t *testing.T) {
 	}
 	next, _ := m.Update(msg)
 	updated := next.(Model)
-	if len(updated.localCommitsToday["console"]) != 1 || len(updated.localCommitsYesterday["console"]) != 1 {
-		t.Errorf("commits not applied: %+v %+v", updated.localCommitsToday, updated.localCommitsYesterday)
+	if len(updated.git.localCommitsToday["console"]) != 1 || len(updated.git.localCommitsYesterday["console"]) != 1 {
+		t.Errorf("commits not applied: %+v %+v", updated.git.localCommitsToday, updated.git.localCommitsYesterday)
 	}
-	if updated.fetchGeneration != m.fetchGeneration {
+	if updated.git.fetchGeneration != m.git.fetchGeneration {
 		t.Errorf("loading commits must not start a git sync")
 	}
 }
@@ -53,9 +53,9 @@ func TestStaleCommitsIgnored(t *testing.T) {
 	stubDayCommits(t)
 	m := syncTestModel(t)
 	msg := m.loadCommitsCmd()().(commitsLoadedMsg)
-	m.commitsGeneration++
+	m.git.commitsGeneration++
 	next, _ := m.Update(msg)
-	if len(next.(Model).localCommitsToday) != 0 {
+	if len(next.(Model).git.localCommitsToday) != 0 {
 		t.Errorf("stale commits applied")
 	}
 }
@@ -72,22 +72,22 @@ func TestCommitsDisabledLoadsNothing(t *testing.T) {
 func TestCommitRefreshTriggers(t *testing.T) {
 	stubDayCommits(t)
 	m := syncTestModel(t)
-	generation, fetches := m.commitsGeneration, m.fetchGeneration
+	generation, fetches := m.git.commitsGeneration, m.git.fetchGeneration
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	afterC := next.(Model)
-	if afterC.commitsGeneration != generation+1 || afterC.fetchGeneration != fetches || cmd == nil {
-		t.Errorf("c: commits gen %d→%d, fetch gen %d→%d", generation, afterC.commitsGeneration, fetches, afterC.fetchGeneration)
+	if afterC.git.commitsGeneration != generation+1 || afterC.git.fetchGeneration != fetches || cmd == nil {
+		t.Errorf("c: commits gen %d→%d, fetch gen %d→%d", generation, afterC.git.commitsGeneration, fetches, afterC.git.fetchGeneration)
 	}
 
 	next, _ = afterC.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	afterG := next.(Model)
-	if afterG.commitsGeneration != afterC.commitsGeneration+1 || afterG.fetchGeneration != fetches+1 {
+	if afterG.git.commitsGeneration != afterC.git.commitsGeneration+1 || afterG.git.fetchGeneration != fetches+1 {
 		t.Errorf("g should refresh git and commits")
 	}
 
 	next, _ = afterG.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
-	if next.(Model).commitsGeneration != afterG.commitsGeneration+1 {
+	if next.(Model).git.commitsGeneration != afterG.git.commitsGeneration+1 {
 		t.Errorf("date change should reload commits")
 	}
 }
@@ -107,7 +107,7 @@ func settledCommitsModel(t *testing.T) Model {
 func TestCommitRefreshShowsSyncingInTheHeaderUntilCommitsLand(t *testing.T) {
 	stubDayCommits(t)
 	m := settledCommitsModel(t)
-	m.loadingGit = false
+	m.git.loadingGit = false
 	m = press(t, m, runes("c"))
 	if !strings.Contains(headerTopRow(m), "syncing") || strings.Contains(gitStripHeader(m), "syncing") {
 		t.Errorf("c should show syncing in the header only: %q / %q", headerTopRow(m), gitStripHeader(m))
@@ -121,13 +121,13 @@ func TestCommitRefreshShowsSyncingInTheHeaderUntilCommitsLand(t *testing.T) {
 func TestGitStripIgnoresGlobalGitSync(t *testing.T) {
 	stubDayCommits(t)
 	m := settledCommitsModel(t)
-	m.loadingGit = true
-	m.yesterdayGitRepo, m.todayGitRepos = nil, nil
+	m.git.loadingGit = true
+	m.git.yesterdayGitRepo, m.git.todayGitRepos = nil, nil
 	lines, _ := m.renderGitStrip(m.width-4, false, m.groupNotes())
 	if strip := stripANSI(strings.Join(lines, "\n")); strings.Contains(strip, "syncing") || strings.Contains(strip, "checking") {
 		t.Errorf("global git sync must not affect the strip:\n%s", strip)
 	}
-	m.loadingGit = false
+	m.git.loadingGit = false
 	m = press(t, m, runes("c"))
 	if body := stripANSI(m.renderDashboardBody()); strings.Contains(body, "syncing") {
 		t.Errorf("sync progress belongs in the header only:\n%s", body)
@@ -137,14 +137,14 @@ func TestGitStripIgnoresGlobalGitSync(t *testing.T) {
 func TestDateChangeDropsOldCommitsAndFetchesNewDates(t *testing.T) {
 	days := stubDayCommits(t)
 	m := settledCommitsModel(t)
-	if len(m.localCommitsToday) == 0 {
+	if len(m.git.localCommitsToday) == 0 {
 		t.Fatal("setup: commits missing")
 	}
 	m = press(t, m, runes("p"))
-	if len(m.localCommitsToday) != 0 || len(m.localCommitsYesterday) != 0 {
+	if len(m.git.localCommitsToday) != 0 || len(m.git.localCommitsYesterday) != 0 {
 		t.Errorf("old dates' commits should be cleared on date change")
 	}
-	for _, repo := range append(m.todayGitRepos, m.yesterdayGitRepo...) {
+	for _, repo := range append(m.git.todayGitRepos, m.git.yesterdayGitRepo...) {
 		if repo.Commits != 0 {
 			t.Errorf("repo %s still shows old commits", repo.Name)
 		}

@@ -337,7 +337,7 @@ func TestSelectedBragRowHighlightsOnlyTitleAndStatus(t *testing.T) {
 func TestMondayNoticeSitsRightOfHeaderDate(t *testing.T) {
 	monday := time.Date(2026, 10, 5, 9, 0, 0, 0, time.Local)
 	m, _ := bragTestModel(t, monday)
-	headerTop := plainLines(m.renderHeader())[2]
+	headerTop := plainLines(headerSection{}.Render(m))[2]
 	dateAt := strings.Index(headerTop, "— ")
 	noticeAt := strings.Index(headerTop, "Last week (W40) isn't bragged — press b")
 	if dateAt < 0 || noticeAt <= dateAt || !strings.HasSuffix(strings.TrimRight(headerTop, " │"), "press b") {

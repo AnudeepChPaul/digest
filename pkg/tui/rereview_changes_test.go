@@ -18,12 +18,12 @@ func reReviewModel(t *testing.T, compare func(ctx context.Context, ref review.PR
 	compareSince = compare
 	t.Cleanup(func() { compareSince = original })
 	m := reviewTestModel(t)
-	pr := *m.ghPendingPRs[0].PR
+	pr := *m.git.ghPendingPRs[0].PR
 	pr.HeadSHA = "def5678aaaa"
 	if err := review.WriteMeta(review.StateDir(m.reviewRoot(), pr.Ref), review.Meta{Ref: pr.Ref, HeadSHA: "abc1234bbbb"}); err != nil {
 		t.Fatal(err)
 	}
-	m.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(pr, sourcecontrol.ReReviewKind)}
+	m.git.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(pr, sourcecontrol.ReReviewKind)}
 	m.rebuildGitRepoStats()
 	m.mode = ViewDashboard
 	return m

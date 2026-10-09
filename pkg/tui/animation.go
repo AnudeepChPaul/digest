@@ -32,7 +32,7 @@ func (m *Model) ensureSyncPulse() tea.Cmd {
 }
 
 func (m Model) headerAnimating() bool {
-	if !m.loadingGit && !m.loadingCommits {
+	if !m.git.loadingGit && !m.git.loadingCommits {
 		return false
 	}
 	message, found := m.activeMessage()

@@ -319,7 +319,7 @@ func TestPRRowOffersNvimOnlyOnceTheCloneExists(t *testing.T) {
 func TestMyPRRowHintsOpen(t *testing.T) {
 	m := syncTestModel(t)
 	m.cfg.ShowKeyHints = true
-	m.myPRs = []review.QueuedPR{myOpenPR("console", 4, "fix/a", "SUCCESS")}
+	m.git.myPRs = []review.QueuedPR{myOpenPR("console", 4, "fix/a", "SUCCESS")}
 	m.contentVersion++
 	for index, item := range m.allNavItems() {
 		if item.Kind == KindMyPR {

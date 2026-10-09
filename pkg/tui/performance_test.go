@@ -43,7 +43,7 @@ func TestSyncPulseRunsAsOneLoop(t *testing.T) {
 		t.Error("a second start should not add another pulse loop")
 	}
 	m.cancelGitSync()
-	m.loadingGit, m.loadingCommits = false, false
+	m.git.loadingGit, m.git.loadingCommits = false, false
 	next, cmd := m.Update(syncPulseTickMsg{})
 	if cmd != nil || next.(Model).syncPulseRunning {
 		t.Error("the pulse should stop once nothing is syncing")
@@ -52,7 +52,7 @@ func TestSyncPulseRunsAsOneLoop(t *testing.T) {
 	if stopped.ensureSyncPulse() != nil {
 		t.Error("the pulse should stay stopped while nothing animates")
 	}
-	stopped.loadingGit = true
+	stopped.git.loadingGit = true
 	stopped.postMessage(messageSourceGit, messageProgress, "syncing")
 	if stopped.ensureSyncPulse() == nil {
 		t.Error("a stopped pulse should start again once syncing starts")
@@ -143,7 +143,7 @@ func TestRedrawsUseCachedRunStates(t *testing.T) {
 	m.mode = ViewDashboard
 	m.width, m.height = 160, 50
 	m.refreshReviewRuns()
-	markRunning(t, m, m.ghPendingPRs[0].PR.Ref)
+	markRunning(t, m, m.git.ghPendingPRs[0].PR.Ref)
 	writeLivePID(t, filepath.Join(getLogsDir(), "janitor.pid"))
 	if strings.Contains(m.View(), "reviewing...") {
 		t.Error("a redraw should not read review state from disk")
@@ -191,7 +191,7 @@ func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 	t.Cleanup(func() { writeGitCache = original })
 	m := syncTestModel(t)
 	m.startLoadGitStatsCmd()
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	today := m.currentDate.Format("2006-01-02")
 	var cmds []tea.Cmd
 	for _, msg := range []tea.Msg{
@@ -199,7 +199,7 @@ func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 		gitPendingMsg{generation: generation, pending: []GitPRItem{pendingItem(1)}},
 		gitDaySectionMsg{generation: generation, day: gitDayToday, date: today, reviewed: []GitPRItem{reviewedItem("console", 2)}},
 		gitMyPRsMsg{generation: generation, partOfSync: true},
-		commitsLoadedMsg{generation: m.commitsGeneration},
+		commitsLoadedMsg{generation: m.git.commitsGeneration},
 	} {
 		next, cmd := m.Update(msg)
 		m = next.(Model)
@@ -227,12 +227,12 @@ func TestPRHistoryLoadsInTheBackground(t *testing.T) {
 	}
 	t.Cleanup(func() { gitLogForFiles = original })
 	m := reviewTestModel(t)
-	pr := m.ghPendingPRs[0].PR
+	pr := m.git.ghPendingPRs[0].PR
 	pr.Files = []string{"a.ts"}
 	if err := os.MkdirAll(filepath.Join(review.CloneDir(m.reviewRoot(), pr.Ref), ".git"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	m.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(*pr, "Pending Review")}
+	m.git.ghPendingPRs = []GitPRItem{sourcecontrol.NewPRItem(*pr, "Pending Review")}
 	m.rebuildGitRepoStats()
 	m.mode = ViewDashboard
 	m.height = 200
@@ -256,7 +256,7 @@ func TestReviewPollReadsRunStatesInTheBackground(t *testing.T) {
 	m := reviewTestModel(t)
 	m.mode = ViewDashboard
 	m.width, m.height = 160, 50
-	ref := m.ghPendingPRs[0].PR.Ref
+	ref := m.git.ghPendingPRs[0].PR.Ref
 	markRunning(t, m, ref)
 	msg := m.tickReviewPollCmd()()
 	if err := os.Remove(filepath.Join(review.StateDir(m.reviewRoot(), ref), "review.pid")); err != nil {

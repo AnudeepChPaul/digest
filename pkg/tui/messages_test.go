@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/AnudeepChPaul/digest/pkg/config"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func latestMessageText(m Model) string {
@@ -17,7 +19,7 @@ func latestMessageText(m Model) string {
 }
 
 func headerTopRow(m Model) string {
-	return stripANSI(strings.Split(m.renderHeader(), "\n")[1])
+	return stripANSI(strings.Split(headerSection{}.Render(m), "\n")[1])
 }
 
 func TestErrorsShowInTheHeaderAndStayUntilEsc(t *testing.T) {
@@ -57,19 +59,19 @@ func TestGitSyncShowsProgressThenSyncedInTheHeader(t *testing.T) {
 	showGit := true
 	m.cfg.ShowGit = &showGit
 	m.cfg.GitRepositoryRoots = []string{t.TempDir()}
-	m.loadingCommits = false
+	m.git.loadingCommits = false
 	m.beginGitFetch()
 	if row := headerTopRow(m); !strings.Contains(row, "syncing") {
 		t.Errorf("sync should show progress in the header: %q", row)
 	}
-	m.gitSectionsPending = 1
+	m.git.gitSectionsPending = 1
 	m.finishGitSection()
 	if row := headerTopRow(m); !strings.Contains(row, "synced") {
 		t.Errorf("finished sync should say synced: %q", row)
 	}
 	m.beginGitFetch()
 	m.recordSectionError(sectionPending, errors.New("gh: rate limited"))
-	m.gitSectionsPending = 1
+	m.git.gitSectionsPending = 1
 	m.finishGitSection()
 	if row := headerTopRow(m); !strings.Contains(row, "rate limited") {
 		t.Errorf("failed sync should show the error: %q", row)
@@ -105,5 +107,34 @@ func TestStartupErrorGoesToTheHeader(t *testing.T) {
 	m.width, m.height = 120, 40
 	if m.mode == ViewError || !strings.Contains(headerTopRow(m), "git_repository_roots") {
 		t.Errorf("startup errors should be a header message: mode %v %q", m.mode, headerTopRow(m))
+	}
+}
+
+func TestEscClearsErrorsAndSyncRecordsButKeepsProgress(t *testing.T) {
+	m := syncTestModel(t)
+	m.postMessage("jobs", messageProgress, "running janitor")
+	m.postMessage(messageSourceGit, messageError, "sync failed")
+	m.recordSectionError(sectionMyPRs, errors.New("timeout"))
+	m, _ = pressKey(t, m, "esc")
+	if strings.Contains(headerTopRow(m), "sync failed") {
+		t.Errorf("esc should hide the error: %q", headerTopRow(m))
+	}
+	if len(m.git.syncErrors) != 0 {
+		t.Errorf("esc should clear the sync records, got %v", m.git.syncErrors)
+	}
+	if !strings.Contains(headerTopRow(m), "running janitor") {
+		t.Errorf("esc should keep progress messages: %q", headerTopRow(m))
+	}
+}
+
+func TestEscWithoutErrorsFallsThrough(t *testing.T) {
+	m := syncTestModel(t)
+	m.postMessage("jobs", messageProgress, "running janitor")
+	binding, found := m.resolveKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if !found || binding.action != actionDismissErrors {
+		t.Fatalf("esc should resolve to dismiss errors, got %v %v", found, binding.action)
+	}
+	if _, _, handled := (headerSection{}).ApplyKeystrokes(m, binding, tea.KeyMsg{Type: tea.KeyEsc}); handled {
+		t.Errorf("esc with no error or sync record should fall through")
 	}
 }

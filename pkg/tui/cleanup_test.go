@@ -67,7 +67,7 @@ func TestReviewFindingsLoadOncePerReviewChange(t *testing.T) {
 
 func TestNavKeyBuildsTheDashboardOnce(t *testing.T) {
 	m := selectionTestModel(t)
-	m.ghPendingPRs = []GitPRItem{pendingItem(1), pendingItem(2), pendingItem(3)}
+	m.git.ghPendingPRs = []GitPRItem{pendingItem(1), pendingItem(2), pendingItem(3)}
 	m.rebuildGitRepoStats()
 	builds := 0
 	original := dashboardContentBuilder
@@ -85,7 +85,7 @@ func TestNavKeyBuildsTheDashboardOnce(t *testing.T) {
 
 func TestSyncDoesNotTickAHiddenSpinner(t *testing.T) {
 	m := syncTestModel(t)
-	m.loadingGit = true
+	m.git.loadingGit = true
 	if _, cmd := m.Update(spinner.TickMsg{}); cmd != nil {
 		t.Error("a spinner that is never drawn should not tick")
 	}
@@ -101,8 +101,8 @@ func TestNewPendingPRsReadTheirReviewStateOnce(t *testing.T) {
 		return original(stateDir)
 	}
 	t.Cleanup(func() { readLocalReview = original })
-	fresh := []GitPRItem{m.ghPendingPRs[0], sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 8), Title: "New"}, "Pending Review")}
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: fresh})
+	fresh := []GitPRItem{m.git.ghPendingPRs[0], sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 8), Title: "New"}, "Pending Review")}
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: fresh})
 	m.View()
 	if reads != 2 {
 		t.Errorf("review states read %d times for 2 PRs", reads)
@@ -160,7 +160,7 @@ func TestSortToggleSavesInTheBackground(t *testing.T) {
 	}
 	t.Cleanup(func() { writeGitCache = original })
 	m := syncTestModel(t)
-	m.loadingGit = false
+	m.git.loadingGit = false
 	next, cmd := m.Update(runes("s"))
 	if writes != 0 || cmd == nil {
 		t.Fatalf("the sort key wrote the cache on the UI thread (%d writes)", writes)
@@ -205,8 +205,8 @@ func TestRecordedReviewNotesSkipReloadingTheStore(t *testing.T) {
 	m := syncTestModel(t)
 	reviewedAt := time.Now().Add(-time.Hour)
 	approval := []review.ActivityPR{{Number: 4, Title: "Same", URL: prRef("console", 4).URL, Repository: "console", State: "APPROVED", ReviewedAt: reviewedAt}}
-	if _, ok := reviewNotesCmd(m.store, approval)().(loadNotesMsg); !ok {
-		t.Fatal("a new review should reload the notes")
+	if changed, ok := reviewNotesCmd(m.store, approval)().(notesChangedMsg); !ok || len(changed.notes) != 1 {
+		t.Fatal("a new review should send back only the note it saved")
 	}
 	if msg := reviewNotesCmd(m.store, approval)(); msg != nil {
 		t.Errorf("an already recorded review should not reload the notes, got %T", msg)
@@ -228,7 +228,7 @@ func TestOpeningAURLReapsTheOpener(t *testing.T) {
 func TestQuitCancelsCommitLoading(t *testing.T) {
 	m := syncTestModel(t)
 	m.refreshCommitsCmd()
-	commitsCtx := m.commitsCtx
+	commitsCtx := m.git.commitsCtx
 	for range 3 {
 		m = update(m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	}
@@ -260,21 +260,21 @@ func TestOldJobLogArchivesArePruned(t *testing.T) {
 
 func TestSyncTrimsPRDetailsToListedPRs(t *testing.T) {
 	m := syncTestModel(t)
-	m.prDetails = map[string]json.RawMessage{"https://github.com/o/gone/pull/1": json.RawMessage(`{}`)}
+	m.git.prDetails = map[string]json.RawMessage{"https://github.com/o/gone/pull/1": json.RawMessage(`{}`)}
 	m.startLoadGitStatsCmd()
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	listed := pendingItem(1)
 	for _, msg := range []tea.Msg{
 		gitDaySectionMsg{generation: generation, day: gitDayYesterday},
 		gitDaySectionMsg{generation: generation, day: gitDayToday, date: m.currentDate.Format("2006-01-02")},
 		gitPendingMsg{generation: generation, pending: []GitPRItem{listed}, details: map[string]json.RawMessage{listed.URL: json.RawMessage(`{}`)}},
 		gitMyPRsMsg{generation: generation, partOfSync: true},
-		commitsLoadedMsg{generation: m.commitsGeneration},
+		commitsLoadedMsg{generation: m.git.commitsGeneration},
 	} {
 		m = update(m, msg)
 	}
-	if _, kept := m.prDetails["https://github.com/o/gone/pull/1"]; kept || len(m.prDetails) != 1 {
-		t.Errorf("details = %v, want only the listed PR", m.prDetails)
+	if _, kept := m.git.prDetails["https://github.com/o/gone/pull/1"]; kept || len(m.git.prDetails) != 1 {
+		t.Errorf("details = %v, want only the listed PR", m.git.prDetails)
 	}
 }
 

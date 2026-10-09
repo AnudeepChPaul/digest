@@ -32,9 +32,9 @@ func run(args []string) error {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	sizes := flags.String("sizes", "1,100,1000,10000", "comma-separated note counts")
 	benchtime := flags.String("benchtime", "200ms", "go test -benchtime per scenario")
-	root := flags.String("root", ".", "repository root that holds BENCHMARK.md")
-	version := flags.String("version", "", "release version for the history row")
-	commit := flags.String("commit", "", "commit hash for the history row")
+	root := flags.String("root", ".", "repository root that holds "+benchmark.MarkdownFile)
+	version := flags.String("version", "", "release version for the history column")
+	commit := flags.String("commit", "", "commit hash for the history column")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func run(args []string) error {
 	measured := benchmark.Run{Date: time.Now(), Version: *version, Commit: *commit, CPU: cpu, Results: append(results, process)}
 
 	if args[0] == "run" {
-		fmt.Print(benchmark.Markdown(measured, []string{benchmark.HistoryRow(measured)}))
+		fmt.Print(benchmark.Markdown(measured, ""))
 		return nil
 	}
 	if err := benchmark.Record(*root, measured); err != nil {

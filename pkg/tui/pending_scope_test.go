@@ -21,13 +21,13 @@ func scopeTestModel(t *testing.T) Model {
 		queued := review.QueuedPR{Ref: prRef("console", number), Title: "PR", CIState: "SUCCESS", DirectRequest: direct, CreatedAt: base.Add(-age), UpdatedAt: base.Add(-age)}
 		return sourcecontrol.NewPRItem(queued, "Pending Review")
 	}
-	m.ghPendingPRs = []GitPRItem{pr(1, false, 1*time.Hour), pr(2, true, 2*time.Hour), pr(3, true, 3*time.Hour)}
+	m.git.ghPendingPRs = []GitPRItem{pr(1, false, 1*time.Hour), pr(2, true, 2*time.Hour), pr(3, true, 3*time.Hour)}
 	m.rebuildGitRepoStats()
 	return m
 }
 
 func shownPending(model tea.Model) []int {
-	return pendingNumbers(model.(Model).pendingGitAction)
+	return pendingNumbers(model.(Model).git.pendingGitAction)
 }
 
 func TestMeKeyTogglesExplicitlyRequestedPRs(t *testing.T) {
@@ -67,7 +67,7 @@ func TestMeOnlyIsNeitherCachedNorSaved(t *testing.T) {
 		}
 	}
 	fresh := NewModel(next.(Model).cfg, nil)
-	if fresh.pendingMeOnly {
+	if fresh.git.pendingMeOnly {
 		t.Errorf("a new launch should start in me + team")
 	}
 }
@@ -87,8 +87,8 @@ func TestPendingHeaderShowsScopeIcons(t *testing.T) {
 
 func TestMeOnlyEmptyStateMessage(t *testing.T) {
 	m := scopeTestModel(t)
-	m.loadingGit = false
-	m.ghPendingPRs = m.ghPendingPRs[:1]
+	m.git.loadingGit = false
+	m.git.ghPendingPRs = m.git.ghPendingPRs[:1]
 	m.rebuildGitRepoStats()
 	next, _ := m.Update(runes("m"))
 	content, _ := next.(Model).dashboardContent()

@@ -24,18 +24,18 @@ func gitOffModel(t *testing.T) Model {
 	}
 	m = NewModel(m.cfg, nil)
 	m.width, m.height = 120, 50
-	m.yesterdayGitRepo = []*GitRepoStat{{Name: "alpha"}}
-	m.todayGitRepos = []*GitRepoStat{{Name: "gamma"}}
-	m.myPRs = []review.QueuedPR{{Ref: prRef("acme/web", 7)}}
-	m.pendingGitAction = []GitPRItem{reviewedItem("acme/web", 9)}
+	m.git.yesterdayGitRepo = []*GitRepoStat{{Name: "alpha"}}
+	m.git.todayGitRepos = []*GitRepoStat{{Name: "gamma"}}
+	m.git.myPRs = []review.QueuedPR{{Ref: prRef("acme/web", 7)}}
+	m.git.pendingGitAction = []GitPRItem{reviewedItem("acme/web", 9)}
 	m.notes = []*model.Note{{ID: "note-1", Summary: "write docs", Created: m.currentDate, Source: model.SourceManual}}
 	return m
 }
 
 func TestGitOffSkipsEveryFetch(t *testing.T) {
 	m := gitOffModel(t)
-	if m.syncOnLoad || m.loadingGit || m.loadingMyPRs || m.loadingCommits {
-		t.Errorf("git off: syncOnLoad=%v loadingGit=%v loadingMyPRs=%v loadingCommits=%v, want all false", m.syncOnLoad, m.loadingGit, m.loadingMyPRs, m.loadingCommits)
+	if m.git.syncOnLoad || m.git.loadingGit || m.git.loadingMyPRs || m.git.loadingCommits {
+		t.Errorf("git off: syncOnLoad=%v loadingGit=%v loadingMyPRs=%v loadingCommits=%v, want all false", m.git.syncOnLoad, m.git.loadingGit, m.git.loadingMyPRs, m.git.loadingCommits)
 	}
 	if m.gitFetchCmd() != nil || m.myPRsFetchCmd() != nil {
 		t.Errorf("git off: fetch commands should be nil")

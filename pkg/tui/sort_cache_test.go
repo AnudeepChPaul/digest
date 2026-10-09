@@ -50,12 +50,12 @@ func TestCachedPendingUsesSavedSort(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := NewModel(m.cfg, nil)
-	assertNumbers(t, "displayed pending", fresh.pendingGitAction, []int{3, 2, 1})
+	assertNumbers(t, "displayed pending", fresh.git.pendingGitAction, []int{3, 2, 1})
 }
 
 func TestSyncedPendingUsesSavedSort(t *testing.T) {
 	m := syncTestModel(t)
-	m.pendingSort = sourcecontrol.Sort{ByCreated: true, Ascending: true}
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: outOfOrderPending()})
-	assertNumbers(t, "displayed pending", m.pendingGitAction, []int{1, 2, 3})
+	m.git.pendingSort = sourcecontrol.Sort{ByCreated: true, Ascending: true}
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: outOfOrderPending()})
+	assertNumbers(t, "displayed pending", m.git.pendingGitAction, []int{1, 2, 3})
 }

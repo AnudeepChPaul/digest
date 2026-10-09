@@ -29,12 +29,12 @@ func blankLinesBefore(lines []string, index int) int {
 
 func TestSectionsAreEquallySpaced(t *testing.T) {
 	m := syncTestModel(t)
-	m.loadingGit = false
+	m.git.loadingGit = false
 	m.notes = []*model.Note{
 		{Summary: "yesterday-done", Created: m.currentDate.AddDate(0, 0, -1), Status: model.StatusDone, Updated: m.currentDate.AddDate(0, 0, -1)},
 		{Summary: "carried-note", Created: m.currentDate.AddDate(0, 0, -3)},
 	}
-	m.ghPendingPRs = []GitPRItem{
+	m.git.ghPendingPRs = []GitPRItem{
 		sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 1), Title: "One", CIState: "SUCCESS"}, "Pending Review"),
 		sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("digest", 2), Title: "Two", CIState: "SUCCESS"}, "Pending Review"),
 	}
@@ -42,7 +42,7 @@ func TestSectionsAreEquallySpaced(t *testing.T) {
 	content, _ := m.dashboardContent()
 	lines := strings.Split(stripANSI(content), "\n")
 
-	for _, section := range []string{"G I T", "T O D A Y", "Added Today", "Closed Today", "Pending Git Actions", "Jobs"} {
+	for _, section := range []string{"G I T", "jobs ◆", "Added Today", "Closed Today", "Pending Git Actions", "Jobs"} {
 		if gap := blankLinesBefore(lines, lastLineContaining(lines, section)); gap != 2 {
 			t.Errorf("%q should have 2 blank lines before it, got %d", section, gap)
 		}
@@ -63,7 +63,7 @@ func TestEmptyYesterdayKeepsTheSectionGap(t *testing.T) {
 	m := syncTestModel(t)
 	content, _ := m.dashboardContent()
 	lines := strings.Split(stripANSI(content), "\n")
-	if gap := blankLinesBefore(lines, lastLineContaining(lines, "T O D A Y")); gap != 2 {
+	if gap := blankLinesBefore(lines, lastLineContaining(lines, "jobs ◆")); gap != 2 {
 		t.Errorf("TODAY should stay 2 blank lines below an empty YESTERDAY, got %d", gap)
 	}
 }

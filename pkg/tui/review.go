@@ -195,7 +195,7 @@ func (m Model) localReviewFor(stateDir string) localReviewState {
 
 func (m Model) listedReviewRefs() []review.PRRef {
 	var refs []review.PRRef
-	for _, items := range [][]GitPRItem{m.ghPendingPRs, m.ghReviewedToday, m.ghReviewedYesterday} {
+	for _, items := range [][]GitPRItem{m.git.ghPendingPRs, m.git.ghReviewedToday, m.git.ghReviewedYesterday} {
 		for i := range items {
 			if queued, err := queuedFor(&items[i]); err == nil {
 				refs = append(refs, queued.Ref)
@@ -785,7 +785,7 @@ func (m Model) handleReviewSubmitted(msg reviewSubmittedMsg) (tea.Model, tea.Cmd
 	}
 	var notesCmd tea.Cmd
 	if msg.pr.Ref.URL != "" {
-		notesCmd = reviewNotesCmd(m.store, []review.ActivityPR{submittedReviewRecord(msg, time.Now())})
+		notesCmd = m.reviewNotesCmd([]review.ActivityPR{submittedReviewRecord(msg, time.Now())})
 	}
 	if msg.event == review.EventApprove {
 		return m, tea.Batch(notesCmd, tea.Tick(approvalSyncDelay, func(time.Time) tea.Msg { return approvalSyncMsg{} }))
@@ -1046,15 +1046,16 @@ func isRepeatOfLatest(note *model.Note, summary string, reviewedAt time.Time) bo
 
 var reviewNotesMu sync.Mutex
 
-func prReviewNotes(noteStore *store.NoteStore) (prNoteIndex, error) {
-	notes, err := noteStore.List()
-	if err != nil {
-		return prNoteIndex{}, err
-	}
-	return indexPRNotes(notes, ""), nil
+func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea.Cmd {
+	return knownReviewNotesCmd(noteStore, prNoteIndex{}, reviews)
 }
 
-func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea.Cmd {
+func (m Model) reviewNotesCmd(reviews []review.ActivityPR) tea.Cmd {
+	known := m.prNoteSnapshot("")
+	return knownReviewNotesCmd(m.store, known, reviews)
+}
+
+func knownReviewNotesCmd(noteStore *store.NoteStore, known prNoteIndex, reviews []review.ActivityPR) tea.Cmd {
 	if len(reviews) == 0 {
 		return nil
 	}
@@ -1063,16 +1064,18 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 	return func() tea.Msg {
 		reviewNotesMu.Lock()
 		defer reviewNotesMu.Unlock()
-		notesByRef, err := prReviewNotes(noteStore)
-		if err != nil {
-			return loadNotesMsg{err: err}
-		}
-		saved := false
+		finder := newPRNoteFinder(noteStore, "", known)
+		var changed []model.Note
+		var missing []error
 		for _, pr := range ordered {
 			ref := prNoteRef(activityOwner(pr), pr.Repository, pr.Number)
 			reviewedAt := pr.ReviewedAt.Local()
 			summary := reviewNoteSummary(pr.State, pr.Repository, pr.Number, pr.Title)
-			note, exists := notesByRef.find(ref, pr.Repository, pr.Number, reviewNoteID(pr.Repository, pr.Number))
+			note, exists, err := finder.find(ref, pr.Repository, pr.Number, reviewNoteID(pr.Repository, pr.Number))
+			if err != nil {
+				missing = append(missing, err)
+				continue
+			}
 			switch {
 			case !exists:
 				created := pr.CreatedAt.Local()
@@ -1105,52 +1108,61 @@ func reviewNotesCmd(noteStore *store.NoteStore, reviews []review.ActivityPR) tea
 				note.Ref = ref
 			}
 			if err := noteStore.Save(note); err != nil {
-				return loadNotesMsg{err: err}
+				return notesChangedMsg{notes: changed, err: err}
 			}
-			notesByRef.remember(note)
-			saved = true
+			finder.remember(note)
+			changed = append(changed, *note)
 		}
-		if !saved {
+		if len(changed) == 0 && len(missing) == 0 {
 			return nil
 		}
-		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err, complete: true}
+		return notesChangedMsg{notes: changed, err: errors.Join(missing...)}
 	}
 }
 
 func reopenApprovedNotesCmd(noteStore *store.NoteStore, pending []GitPRItem, requestedSince time.Time) tea.Cmd {
+	return knownReopenApprovedNotesCmd(noteStore, prNoteIndex{}, pending, requestedSince)
+}
+
+func (m Model) reopenApprovedNotesCmd(pending []GitPRItem, requestedSince time.Time) tea.Cmd {
+	known := m.prNoteSnapshot("")
+	return knownReopenApprovedNotesCmd(m.store, known, pending, requestedSince)
+}
+
+func knownReopenApprovedNotesCmd(noteStore *store.NoteStore, known prNoteIndex, pending []GitPRItem, requestedSince time.Time) tea.Cmd {
 	if len(pending) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
 		reviewNotesMu.Lock()
 		defer reviewNotesMu.Unlock()
-		notesByRef, err := prReviewNotes(noteStore)
-		if err != nil {
-			return loadNotesMsg{err: err}
-		}
-		reopened := false
+		finder := newPRNoteFinder(noteStore, "", known)
+		var reopened []model.Note
+		var missing []error
 		for _, item := range pending {
 			owner := ""
 			if item.PR != nil {
 				owner = item.PR.Ref.Owner
 			}
-			note, exists := notesByRef.find(prNoteRef(owner, item.Repository, item.Number), item.Repository, item.Number, reviewNoteID(item.Repository, item.Number))
+			note, exists, err := finder.find(prNoteRef(owner, item.Repository, item.Number), item.Repository, item.Number, reviewNoteID(item.Repository, item.Number))
+			if err != nil {
+				missing = append(missing, err)
+				continue
+			}
 			if !exists || note.Source != model.SourcePRReview || note.Status != model.StatusDone || !isApprovedSummary(note.Summary) || !note.Updated.Before(requestedSince) {
 				continue
 			}
 			note.Status = model.StatusActive
 			note.Updated = time.Now()
 			if err := noteStore.Save(note); err != nil {
-				return loadNotesMsg{err: err}
+				return notesChangedMsg{notes: reopened, err: err}
 			}
-			reopened = true
+			reopened = append(reopened, *note)
 		}
-		if !reopened {
+		if len(reopened) == 0 && len(missing) == 0 {
 			return nil
 		}
-		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err, complete: true}
+		return notesChangedMsg{notes: reopened, err: errors.Join(missing...)}
 	}
 }
 

@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 
+	"github.com/AnudeepChPaul/digest/pkg/automation"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -58,7 +60,7 @@ func (m Model) buildDashboardFrame() *dashboardFrame {
 func (m Model) currentDashboardFrame() *dashboardFrame {
 	if m.frames == nil {
 		frame := m.buildDashboardFrame()
-		frame.header, frame.footer = m.renderHeader(), m.renderFooter()
+		frame.header, frame.footer = headerSection{}.Render(m), m.renderFooter()
 		return frame
 	}
 	key := m.dashboardFrameKey()
@@ -73,7 +75,7 @@ func (m Model) currentDashboardFrame() *dashboardFrame {
 		cached = m.buildDashboardFrame()
 		m.frames.frames[key] = cached
 	}
-	return &dashboardFrame{header: m.renderHeader(), footer: m.renderFooter(), content: cached.content, selectedLine: cached.selectedLine}
+	return &dashboardFrame{header: headerSection{}.Render(m), footer: m.renderFooter(), content: cached.content, selectedLine: cached.selectedLine}
 }
 
 func (m Model) frameBodyHeight(frame *dashboardFrame) int {
@@ -81,7 +83,7 @@ func (m Model) frameBodyHeight(frame *dashboardFrame) int {
 }
 
 func (m Model) showsDashboard() bool {
-	return m.mode == ViewDashboard || m.mode == ViewInlineEdit || (m.mode == ViewGitDetails && m.gitPopupRepo == nil)
+	return m.mode == ViewDashboard || m.mode == ViewInlineEdit || (m.mode == ViewGitDetails && m.git.gitPopupRepo == nil)
 }
 
 func (m *Model) settleScroll() {
@@ -115,4 +117,69 @@ func (m *Model) settleScroll() {
 	if m.scrollOffset > totalLines-bodyHeight && totalLines > bodyHeight {
 		m.scrollOffset = totalLines - bodyHeight
 	}
+}
+
+type dashboardBuilder struct {
+	board        strings.Builder
+	selected     int
+	navIndex     int
+	selectedLine int
+	innerWidth   int
+	rowWidth     int
+}
+
+func (builder *dashboardBuilder) lineCount() int {
+	return strings.Count(builder.board.String(), "\n")
+}
+
+func (builder *dashboardBuilder) emitRow(render func(selected bool) string) {
+	selected := builder.navIndex == builder.selected
+	if selected {
+		builder.selectedLine = builder.lineCount()
+	}
+	builder.board.WriteString(render(selected))
+	builder.navIndex++
+}
+
+func (builder *dashboardBuilder) selectedWithin(start, end int) bool {
+	return builder.selected >= start && builder.selected < end
+}
+
+type dashboardData struct {
+	groups         noteGroups
+	pendingGroups  []PendingRepoGroup
+	drafts         []*JobDraft
+	automationRuns []automation.Run
+	jobsCount      int
+	previousEnd    int
+	carriedEnd     int
+	addedEnd       int
+	closedEnd      int
+	gitStripEnd    int
+	pendingEnd     int
+	jobsEnd        int
+}
+
+func (m Model) dashboardData() dashboardData {
+	data := dashboardData{
+		groups:         m.groupNotes(),
+		pendingGroups:  m.getPendingGitGroups(),
+		drafts:         m.getJobDrafts(),
+		automationRuns: m.runningAutomations(),
+	}
+	data.jobsCount = len(data.drafts) + len(m.reviewRuns) + len(m.bragRuns) + len(data.automationRuns)
+	data.previousEnd = len(data.groups.previousDone)
+	data.carriedEnd = data.previousEnd + len(data.groups.carried)
+	data.addedEnd = data.carriedEnd + len(data.groups.today)
+	data.closedEnd = data.addedEnd + len(data.groups.todayDone)
+	data.gitStripEnd = data.closedEnd
+	if m.cfg.GitEnabled() {
+		data.gitStripEnd += len(m.git.yesterdayGitRepo) + len(m.git.todayGitRepos) + len(m.git.myPRs)
+	}
+	data.pendingEnd = data.gitStripEnd
+	for _, group := range data.pendingGroups {
+		data.pendingEnd += len(group.Items)
+	}
+	data.jobsEnd = data.pendingEnd + data.jobsCount
+	return data
 }

@@ -197,77 +197,12 @@ var startDryRunBackground = func(spec config.JobSpec) error {
 	return nil
 }
 
-func tickRunStatePollCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return runStatePollTickMsg{}
-	})
-}
-
-func (m *Model) ensureRunStatePoll() tea.Cmd {
-	if m.runStatePolling {
-		return nil
-	}
-	m.runStatePolling = true
-	return tickRunStatePollCmd()
-}
-
-func (m *Model) refreshJobStates() {
-	runningPIDs := make(map[string]int)
-	inFlight := make(map[string]bool)
-	if m.cfg != nil {
-		for _, j := range m.cfg.JobList() {
-			if pid, running := runningJobPID(j.Name); running {
-				runningPIDs[j.Name] = pid
-			}
-			if isDryRunInFlight(j.Name) {
-				inFlight[j.Name] = true
-			}
-		}
-	}
-	m.runningJobPIDs, m.dryRunsInFlight = runningPIDs, inFlight
-}
-
 func (m Model) jobRunning(jobName string) bool {
 	return m.runningJobPIDs[jobName] > 0
 }
 
 func (m Model) isAnyDryRunInFlight() bool {
 	return len(m.dryRunsInFlight) > 0
-}
-
-func (m *Model) refreshDryRunResults() {
-	m.refreshJobStates()
-	if m.cfg == nil {
-		return
-	}
-	if m.jobDryRunOutputs == nil {
-		m.jobDryRunOutputs = make(map[string]string)
-		m.jobDryRunExitCodes = make(map[string]int)
-		m.jobDryRunHasRun = make(map[string]bool)
-	}
-	if m.dryRunLogStamps == nil {
-		m.dryRunLogStamps = make(map[string]string)
-	}
-	for _, j := range m.cfg.JobList() {
-		if m.dryRunsInFlight[j.Name] {
-			continue
-		}
-		stamp := dryRunStamp(j.Name)
-		if previous, seen := m.dryRunLogStamps[j.Name]; seen && previous == stamp {
-			continue
-		}
-		m.dryRunLogStamps[j.Name] = stamp
-		output, exitCode, ok := loadDryRunResult(j.Name)
-		if !ok {
-			delete(m.jobDryRunOutputs, j.Name)
-			delete(m.jobDryRunExitCodes, j.Name)
-			delete(m.jobDryRunHasRun, j.Name)
-			continue
-		}
-		m.jobDryRunOutputs[j.Name] = output
-		m.jobDryRunExitCodes[j.Name] = exitCode
-		m.jobDryRunHasRun[j.Name] = true
-	}
 }
 
 type previewedJob struct {
@@ -559,20 +494,6 @@ func tickCtrlCResetCmd() tea.Cmd {
 	})
 }
 
-func tickJobLogCmd() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
-		return jobLogTickMsg{}
-	})
-}
-
-func (m *Model) ensureJobLogRefresh() tea.Cmd {
-	if m.jobLogRunning {
-		return nil
-	}
-	m.jobLogRunning = true
-	return tickJobLogCmd()
-}
-
 func jobLogStampFor(jobName string, running bool) string {
 	stamp := strconv.FormatBool(running)
 	for _, path := range []string{filepath.Join(getLogsDir(), jobName+".log"), dryRunFilePath(jobName, "log")} {
@@ -595,32 +516,6 @@ func (m Model) previewedRunningJob() string {
 		return item.Draft.Name
 	}
 	return ""
-}
-
-func (m Model) handleJobLogTick() (tea.Model, tea.Cmd) {
-	jobName := m.previewedRunningJob()
-	if jobName == "" {
-		m.jobLogRunning = false
-		return m, nil
-	}
-	m.refreshJobStates()
-	running := m.jobRunning(jobName)
-	if stamp := jobLogStampFor(jobName, running); stamp != m.jobLogStamp {
-		m.jobLogStamp = stamp
-		wasAtBottom := m.previewViewport.AtBottom()
-		previousOffset := m.previewViewport.YOffset
-		m.updatePreviewViewport()
-		if wasAtBottom {
-			m.previewViewport.GotoBottom()
-		} else {
-			m.previewViewport.SetYOffset(previousOffset)
-		}
-	}
-	if !running {
-		m.jobLogRunning = false
-		return m, nil
-	}
-	return m, tickJobLogCmd()
 }
 
 func (m *Model) startJobDryRunCmd(jobName string) tea.Cmd {

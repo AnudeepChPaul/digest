@@ -14,12 +14,12 @@ import (
 func myPRStripModel(t *testing.T) Model {
 	t.Helper()
 	m := gitStripTestModel(t)
-	m.myPRs = []review.QueuedPR{
+	m.git.myPRs = []review.QueuedPR{
 		myOpenPR("console", 4, "fix/a", "SUCCESS"),
 		myOpenPR("console", 3, "feat/b", "FAILURE"),
 		myOpenPR("digest", 9, "main-ui", "PENDING"),
 	}
-	sortMyPRs(m.myPRs)
+	sortMyPRs(m.git.myPRs)
 	return m
 }
 
@@ -33,8 +33,8 @@ func selectedMyPRNumber(m Model) int {
 
 func TestMyPRBlockSitsBelowDaysAtFullWidth(t *testing.T) {
 	m := myPRStripModel(t)
-	m.myPRs[0].ChangedFiles = 12
-	m.myPRs[0].CreatedAt = time.Now().Add(-49 * time.Hour)
+	m.git.myPRs[0].ChangedFiles = 12
+	m.git.myPRs[0].CreatedAt = time.Now().Add(-49 * time.Hour)
 	lines := plainLines(m.renderDashboardBody())
 	body := strings.Join(lines, "\n")
 	for _, want := range []string{"M Y   P R ( S )", "#4", "fix/a", "12 files", "2d ago", "✓", "#3", "feat/b", "✗", "digest", "#9", "main-ui", "◌"} {
@@ -61,14 +61,14 @@ func TestMyPRBlockSitsBelowDaysAtFullWidth(t *testing.T) {
 			todayLine = index
 		}
 	}
-	if sharedLine < 0 || titleLine < sharedLine || consoleRow < titleLine || firstPRRow != consoleRow+1 || todayLine < firstPRRow {
+	if todayLine < 0 || sharedLine < todayLine || titleLine < sharedLine || consoleRow < titleLine || firstPRRow != consoleRow+1 {
 		t.Errorf("shared %d title %d console %d first PR %d today %d:\n%s", sharedLine, titleLine, consoleRow, firstPRRow, todayLine, body)
 	}
 }
 
 func TestEmptyMyPRColumnSaysSo(t *testing.T) {
 	m := gitStripTestModel(t)
-	m.loadingMyPRs = false
+	m.git.loadingMyPRs = false
 	if body := strings.Join(plainLines(m.renderDashboardBody()), "\n"); !strings.Contains(body, "(no open PRs)") {
 		t.Errorf("empty column has no hint:\n%s", body)
 	}
@@ -76,7 +76,7 @@ func TestEmptyMyPRColumnSaysSo(t *testing.T) {
 
 func TestColumnKeysStayWithinDaysAndJKFlowIntoMyPRs(t *testing.T) {
 	m := myPRStripModel(t)
-	m.selected = 2
+	m.selected = 3
 	if m = press(t, m, tea.KeyMsg{Type: tea.KeyRight}); selectedRepoName(m) != "gamma" {
 		t.Fatalf("right in today should do nothing, got %q", selectedRepoName(m))
 	}
@@ -91,7 +91,7 @@ func TestColumnKeysStayWithinDaysAndJKFlowIntoMyPRs(t *testing.T) {
 			t.Errorf("%s in my PRs should do nothing, got %d", key, selectedMyPRNumber(m))
 		}
 	}
-	m.selected = 3
+	m.selected = 4
 	if m = press(t, m, runes("k")); selectedRepoName(m) != "gamma" {
 		t.Errorf("k from the first my PR should land on today, got %q", selectedRepoName(m))
 	}
@@ -106,22 +106,22 @@ func TestEnterOpensMyPRInBrowser(t *testing.T) {
 	}
 	t.Cleanup(func() { openURL = originalOpen })
 	m := myPRStripModel(t)
-	m.selected = 3
+	m.selected = 4
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(opened) != 1 || opened[0] != m.myPRs[0].Ref.URL || m.mode != ViewDashboard {
+	if len(opened) != 1 || opened[0] != m.git.myPRs[0].Ref.URL || m.mode != ViewDashboard {
 		t.Errorf("opened=%v mode=%v", opened, m.mode)
 	}
 }
 
 func TestTabOpensMyPRDetails(t *testing.T) {
 	m := myPRStripModel(t)
-	m.myPRs[0].Title = "Fix the picker"
-	m.myPRs[0].Body = "Long **description**"
-	m.myPRs[0].ReviewDecision = "APPROVED"
-	m.myPRs[0].ChangedFiles = 7
-	m.myPRs[0].CreatedAt = time.Date(2026, 10, 1, 9, 30, 0, 0, time.Local)
-	m.myPRs[0].Reviews = []review.PRReview{{Author: "alice", State: "APPROVED", SubmittedAt: time.Now()}, {Author: "bob", State: "CHANGES_REQUESTED", SubmittedAt: time.Now()}}
-	m.selected = 3
+	m.git.myPRs[0].Title = "Fix the picker"
+	m.git.myPRs[0].Body = "Long **description**"
+	m.git.myPRs[0].ReviewDecision = "APPROVED"
+	m.git.myPRs[0].ChangedFiles = 7
+	m.git.myPRs[0].CreatedAt = time.Date(2026, 10, 1, 9, 30, 0, 0, time.Local)
+	m.git.myPRs[0].Reviews = []review.PRReview{{Author: "alice", State: "APPROVED", SubmittedAt: time.Now()}, {Author: "bob", State: "CHANGES_REQUESTED", SubmittedAt: time.Now()}}
+	m.selected = 4
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.mode != ViewPreview {
 		t.Fatalf("mode = %v", m.mode)
@@ -142,8 +142,8 @@ func TestTabOpensMyPRDetails(t *testing.T) {
 
 func TestApprovedMyPRShowsHandOkayBeforeCI(t *testing.T) {
 	m := myPRStripModel(t)
-	m.myPRs[0].ReviewDecision = "APPROVED"
-	m.myPRs[1].ReviewDecision = "CHANGES_REQUESTED"
+	m.git.myPRs[0].ReviewDecision = "APPROVED"
+	m.git.myPRs[1].ReviewDecision = "CHANGES_REQUESTED"
 	approvedRow, otherRow := "", ""
 	for _, line := range plainLines(m.renderDashboardBody()) {
 		switch {
@@ -159,7 +159,7 @@ func TestApprovedMyPRShowsHandOkayBeforeCI(t *testing.T) {
 	if strings.Contains(otherRow, myPRApprovedGlyph) || lipgloss.Width(otherRow[:strings.Index(otherRow, "✗")]) != lipgloss.Width(approvedRow[:strings.Index(approvedRow, "✓")]) {
 		t.Errorf("non-approved row should keep CI aligned without the icon:\n%q\n%q", approvedRow, otherRow)
 	}
-	m.selected = 3
+	m.selected = 4
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if content := stripANSI(m.previewViewport.View()); !strings.Contains(content, myPRApprovedGlyph+" approved") {
 		t.Errorf("modal should show the approval icon:\n%s", content)

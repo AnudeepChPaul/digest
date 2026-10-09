@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,6 +203,53 @@ func (s *NoteStore) Delete(n *model.Note) error {
 	}
 	if err := os.Remove(n.FilePath); err != nil {
 		return fmt.Errorf("failed to delete note file: %w", err)
+	}
+	return nil
+}
+
+func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
+	monthDir := ""
+	if IsStemID(id) {
+		createdMillis, _ := strconv.ParseInt(id[11:], 10, 64)
+		created := time.UnixMilli(createdMillis).Local()
+		monthDir = filepath.Join(s.Root, created.Format("2006"), created.Format("01"))
+		if note := loadNamedNote(monthDir, id); note != nil {
+			return note, nil
+		}
+	}
+	monthDirs, _ := filepath.Glob(filepath.Join(s.Root, "*", "*"))
+	for _, dir := range monthDirs {
+		if dir == monthDir {
+			continue
+		}
+		if note := loadNamedNote(dir, id); note != nil {
+			return note, nil
+		}
+	}
+	return nil, fmt.Errorf("note %s: %w", id, os.ErrNotExist)
+}
+
+func loadNamedNote(dir, id string) *model.Note {
+	matches, _ := filepath.Glob(filepath.Join(dir, id+"*"))
+	activeName := id + noteExtension
+	slices.SortFunc(matches, func(first, second string) int {
+		firstActive, secondActive := filepath.Base(first) == activeName, filepath.Base(second) == activeName
+		if firstActive != secondActive {
+			if firstActive {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(first, second)
+	})
+	for _, path := range matches {
+		name := filepath.Base(path)
+		if name != activeName && !strings.HasPrefix(name, id+"-") {
+			continue
+		}
+		if note, err := Load(path); err == nil {
+			return note
+		}
 	}
 	return nil
 }

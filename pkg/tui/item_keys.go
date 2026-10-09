@@ -118,51 +118,6 @@ func hiddenCopies(bindings []keyBinding) []keyBinding {
 	return copies
 }
 
-func (m Model) runSelectedJob(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	item, found := m.selectedNavItem()
-	if !found || item.Kind != KindJobDraft || item.Draft == nil || isJobRunning(item.Draft.Name) {
-		return m, nil
-	}
-	m.jobToExecute = item.Draft.Name
-	m.deleteTargetNotes = nil
-	m.deleteReturnMode = m.mode
-	m.mode = ViewDeleteConfirm
-	return m, nil
-}
-
-func (m Model) dryRunSelectedJob(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	item, found := m.selectedNavItem()
-	if !found || item.Kind != KindJobDraft || item.Draft == nil || isJobRunning(item.Draft.Name) || !jobHasDryRun(item.Draft.Name, item.Draft.DryRunCommand) {
-		return m, nil
-	}
-	return m, m.startJobDryRunCmd(item.Draft.Name)
-}
-
-func (m Model) stopSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	item, found := m.selectedNavItem()
-	if !found {
-		return m, nil
-	}
-	switch {
-	case item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning:
-		return m.beginReviewRunConfirm(reviewActionStop, item.ReviewRun.Meta.Ref)
-	case item.Kind == KindBragRun && item.BragRun != nil && brag.IsRunning(m.bragRoot(), item.BragRun.Meta.ID):
-		run := *item.BragRun
-		m.bragRunToStop = &run
-		return m.beginStopConfirm(), nil
-	case item.Kind == KindBragRun && item.BragRun != nil:
-		return m.stopOrDismissBragRun(item.BragRun)
-	case item.Kind == KindAutomationRun && item.AutomationRun != nil && m.automationJobRunning(item.AutomationRun):
-		run := *item.AutomationRun
-		m.automationRunToStop = &run
-		return m.beginStopConfirm(), nil
-	case item.Kind == KindJobDraft && item.Draft != nil && isJobRunning(item.Draft.Name):
-		m.jobToAbort = item.Draft.Name
-		return m.beginStopConfirm(), nil
-	}
-	return m, nil
-}
-
 func (m Model) beginStopConfirm() Model {
 	m.deleteTargetNotes = nil
 	m.deleteReturnMode = m.mode

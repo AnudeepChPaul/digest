@@ -87,7 +87,7 @@ func TestHeaderShowsVersionBetweenLogoAndDate(t *testing.T) {
 	appVersion = "9.9.9"
 	t.Cleanup(func() { appVersion = original })
 	m := syncTestModel(t)
-	middle := plainLines(m.renderHeader())[2]
+	middle := plainLines(headerSection{}.Render(m))[2]
 	assertOrder(t, middle, strings.TrimSpace(bannerMiddleRow), "v9.9.9", "— ")
 }
 
@@ -157,7 +157,7 @@ func TestReReviewIconComesFirst(t *testing.T) {
 func TestHeaderDateStaysOnTodayWhileBrowsing(t *testing.T) {
 	m := syncTestModel(t)
 	m.currentDate = m.currentDate.AddDate(0, 0, -3)
-	middle := plainLines(m.renderHeader())[2]
+	middle := plainLines(headerSection{}.Render(m))[2]
 	if today := time.Now().Format("Monday 02 Jan"); !strings.Contains(middle, today) {
 		t.Errorf("header should show today %q: %q", today, middle)
 	}
@@ -183,7 +183,7 @@ func TestPRTagsHugTheRightEdgeWithoutPadding(t *testing.T) {
 	oneIcon.Title, threeIcons.Title, noIcons.Title = "One icon PR", "Three icons PR", "No icons PR"
 	oneIcon.PR.CodeOwner = true
 	threeIcons.Kind, threeIcons.PR.DirectRequest, threeIcons.PR.CodeOwner = sourcecontrol.ReReviewKind, true, true
-	m.ghPendingPRs = []GitPRItem{oneIcon, threeIcons, noIcons}
+	m.git.ghPendingPRs = []GitPRItem{oneIcon, threeIcons, noIcons}
 	m.rebuildGitRepoStats()
 	selectNavItem(t, &m, "pr:"+threeIcons.URL)
 	lines := plainLines(m.View())
@@ -197,7 +197,7 @@ func TestPRTagsHugTheRightEdgeWithoutPadding(t *testing.T) {
 			t.Errorf("%s: tags should end at the right edge without padding: %q", title, lines[row])
 		}
 	}
-	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.ghPendingPRs[2]))+"  "+firstReviewIcon) {
+	if row := lines[slicesIndex(lines, "No icons PR")]; !strings.HasSuffix(strings.TrimSuffix(strings.TrimSuffix(row, "│"), " "), string(m.prState(&m.git.ghPendingPRs[2]))+"  "+firstReviewIcon) {
 		t.Errorf("a row with no audience should end with status then the first-review marker: %q", row)
 	}
 }

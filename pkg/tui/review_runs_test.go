@@ -63,7 +63,7 @@ func TestReviewRunsListedUnderJobsOnStartup(t *testing.T) {
 
 func TestPulseStopsWhenOnlyAReviewRuns(t *testing.T) {
 	m, _, _ := reviewRunsModel(t)
-	m.loadingGit = false
+	m.git.loadingGit = false
 	m.messages = nil
 	if _, cmd := m.Update(syncPulseTickMsg{}); cmd != nil {
 		t.Errorf("pulse kept ticking with no animated header icon")
@@ -72,7 +72,7 @@ func TestPulseStopsWhenOnlyAReviewRuns(t *testing.T) {
 
 func TestPulseKeepsTickingWhileTheHeaderSyncSpinnerShows(t *testing.T) {
 	m, _, _ := reviewRunsModel(t)
-	m.messages, m.loadingGit = nil, true
+	m.messages, m.git.loadingGit = nil, true
 	m.postMessage(messageSourceGit, messageProgress, "syncing")
 	next, cmd := m.Update(syncPulseTickMsg{})
 	if cmd == nil || next.(Model).syncPulseFrame != m.syncPulseFrame+1 {
@@ -112,7 +112,7 @@ func TestReReviewsFollowPendingInRepoGroup(t *testing.T) {
 	pending := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 10), CIState: "SUCCESS"}, "Pending Review")
 	otherRepo := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("web-console", 11), CIState: "SUCCESS"}, "Pending Review")
 	reReview := sourcecontrol.NewPRItem(review.QueuedPR{Ref: prRef("console", 12), CIState: "SUCCESS"}, sourcecontrol.ReReviewKind)
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pending, otherRepo, reReview}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pending, otherRepo, reReview}})
 	groups := m.getPendingGitGroups()
 	if len(groups) != 2 || groups[0].Name != "console" || len(groups[0].Items) != 2 || groups[0].Items[1].URL != reReview.URL {
 		t.Fatalf("groups = %+v", groups)

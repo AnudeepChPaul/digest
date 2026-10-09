@@ -38,7 +38,7 @@ func TestEDoesNothingOnAnyRow(t *testing.T) {
 	t.Cleanup(func() { openURL = originalOpen })
 	m := selectionTestModel(t)
 	m.notes = []*model.Note{{ID: "n1", Summary: "note", Status: model.StatusActive, Created: m.currentDate, Updated: m.currentDate}}
-	m.applyGitPending(gitPendingMsg{generation: m.fetchGeneration, pending: []GitPRItem{pendingItem(1)}})
+	m.applyGitPending(gitPendingMsg{generation: m.git.fetchGeneration, pending: []GitPRItem{pendingItem(1)}})
 	for _, key := range []string{"note:", "pr:" + pendingItem(1).URL, "job:janitor"} {
 		found := false
 		for index, item := range m.allNavItems() {

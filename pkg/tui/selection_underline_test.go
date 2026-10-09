@@ -92,7 +92,7 @@ func TestSelectedRowsUnderlineTheWholeRightBlock(t *testing.T) {
 	draft := &JobDraft{Name: "nightly", HasRunDryRun: true}
 	assertUnderlinedRightBlock(t, "job", m.renderDraftRow(draft, true, 80), m.renderDraftRow(draft, false, 80), "#job   success")
 
-	m.myPRs[0].ReviewDecision, m.myPRs[0].ChangedFiles, m.myPRs[0].CreatedAt = "APPROVED", 12, time.Now().Add(-49*time.Hour)
+	m.git.myPRs[0].ReviewDecision, m.git.myPRs[0].ChangedFiles, m.git.myPRs[0].CreatedAt = "APPROVED", 12, time.Now().Add(-49*time.Hour)
 	myPRRow := func(selected int) string {
 		m.selected = selected
 		return m.renderMyPRBlock(3, 80)[1].text

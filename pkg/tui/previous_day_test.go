@@ -93,15 +93,15 @@ func TestCommitsLoadForThePreviousDay(t *testing.T) {
 func TestNotesMovingThePreviousDayRefetchIt(t *testing.T) {
 	m := syncTestModel(t)
 	notes := []*model.Note{manualNote("old", dayBefore(m, 3))}
-	generation := m.fetchGeneration
+	generation := m.git.fetchGeneration
 	next, cmd := m.Update(loadNotesMsg{notes: notes})
 	m = next.(Model)
-	if cmd == nil || m.fetchGeneration == generation || !isSameDay(m.fetchedPreviousDay, dayBefore(m, 3)) {
-		t.Fatalf("moving the previous day should refetch it: generation %d→%d fetched %s", generation, m.fetchGeneration, m.fetchedPreviousDay.Format("2006-01-02"))
+	if cmd == nil || m.git.fetchGeneration == generation || !isSameDay(m.git.fetchedPreviousDay, dayBefore(m, 3)) {
+		t.Fatalf("moving the previous day should refetch it: generation %d→%d fetched %s", generation, m.git.fetchGeneration, m.git.fetchedPreviousDay.Format("2006-01-02"))
 	}
-	generation = m.fetchGeneration
+	generation = m.git.fetchGeneration
 	next, _ = m.Update(loadNotesMsg{notes: notes})
-	if next.(Model).fetchGeneration != generation {
+	if next.(Model).git.fetchGeneration != generation {
 		t.Error("an unchanged previous day should not refetch")
 	}
 }
