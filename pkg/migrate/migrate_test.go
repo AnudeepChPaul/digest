@@ -278,7 +278,12 @@ func TestMigrateRecomputesFirstNoteCreatedInAnExistingAppState(t *testing.T) {
 	if want := "would set first_note_created to " + earliest.Format(time.RFC3339); !strings.Contains(f.output.String(), want) {
 		t.Errorf("dry run output missing %q:\n%s", want, f.output.String())
 	}
-	if unchanged, _, _ := appstate.Load(f.root); !reflect.DeepEqual(unchanged, stored) {
+	unchanged, _, _ := appstate.Load(f.root)
+	if !unchanged.FirstNoteCreated.Equal(stored.FirstNoteCreated) {
+		t.Errorf("a dry run should not touch first_note_created: %v", unchanged.FirstNoteCreated)
+	}
+	unchanged.FirstNoteCreated = stored.FirstNoteCreated
+	if !reflect.DeepEqual(unchanged, stored) {
 		t.Errorf("a dry run should not touch the app state: %+v", unchanged)
 	}
 

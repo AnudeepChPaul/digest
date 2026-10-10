@@ -83,3 +83,16 @@ func TestPickLineRotatesByDayAndSlot(t *testing.T) {
 		t.Errorf("the same slot on the same day should be stable")
 	}
 }
+
+func TestStreakCountsNotesSavedInAnotherZone(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.FixedZone("IST", 5*3600+1800))
+	for name, zone := range map[string]*time.Location{"utc": time.UTC, "fixed offset": time.FixedZone("PDT", -7*3600)} {
+		notes := []*model.Note{
+			{Status: model.StatusDone, Updated: time.Date(2026, 10, 9, 10, 0, 0, 0, now.Location()).In(zone)},
+			{Status: model.StatusDone, Updated: time.Date(2026, 10, 8, 10, 0, 0, 0, now.Location()).In(zone)},
+		}
+		if got := Streak(notes, now, weekdaysOnly); got != 2 {
+			t.Errorf("%s: streak = %d, want 2", name, got)
+		}
+	}
+}

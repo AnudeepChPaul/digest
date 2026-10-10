@@ -71,7 +71,7 @@ func Streak(notes []*model.Note, now time.Time, isWorkDay func(time.Weekday) boo
 	closedDays := map[time.Time]bool{}
 	for _, note := range notes {
 		if note.Status == model.StatusDone {
-			closedDays[startOfDay(note.Updated)] = true
+			closedDays[startOfDay(note.Updated.In(now.Location()))] = true
 		}
 	}
 	day := startOfDay(now)
