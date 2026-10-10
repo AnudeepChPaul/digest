@@ -106,7 +106,7 @@ formula_path="${TAP_DIR:?set TAP_DIR to the homebrew-tap checkout}/Formula/diges
 release_tag="v$(cat .version)"
 tarball_url="https://github.com/achandrapaul/digest/archive/refs/tags/$release_tag.tar.gz"
 tarball_sha=$(curl -fsSL "$tarball_url" | shasum -a 256 | cut -d' ' -f1)
-sed -i '' -E "s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
+sed -i '' -E "s#github\.com/AnudeepChPaul/digest#github.com/achandrapaul/digest#g; s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
 printf '\033[32m✓\033[0m formula points at %s (%s)\n' "$release_tag" "$tarball_sha"
 '''
 
