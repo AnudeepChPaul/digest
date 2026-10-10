@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -46,37 +47,78 @@ type RepoSyncJob struct {
 	Logger  *log.Logger
 }
 
-func DiscoverRepos(roots []string) ([]string, error) {
+func discoverReposUnder(root string) ([]string, error) {
+	expanded, err := paths.Expand(root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := system.Stat(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("repository root %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("repository root %s is not a directory", root)
+	}
 	var repos []string
-	for _, root := range roots {
-		expanded := paths.Expand(root)
-		if _, err := system.Stat(expanded); os.IsNotExist(err) {
-			continue
-		}
-
-		_ = system.Walk(expanded, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				if path != expanded && strings.HasPrefix(d.Name(), ".") {
-					return filepath.SkipDir
-				}
-
-				gitDir := filepath.Join(path, ".git")
-				if system.Exists(gitDir) {
-					repos = append(repos, path)
-					return filepath.SkipDir // Stop traversing deeper into this repository
-				}
+	walkErr := system.Walk(expanded, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if path == expanded {
+				return err
 			}
 			return nil
-		})
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if path != expanded && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if system.Exists(filepath.Join(path, ".git")) {
+			repos = append(repos, path)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return repos, fmt.Errorf("repository root %s: %w", root, walkErr)
 	}
 	return repos, nil
 }
 
+func DiscoverRepos(roots []string) ([]string, error) {
+	var repos []string
+	var failures []error
+	for _, root := range roots {
+		found, err := discoverReposUnder(root)
+		repos = append(repos, found...)
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return repos, errors.Join(failures...)
+}
+
+func remoteDefaultBranch(repo string) string {
+	if res := gitCmd(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); res.Ok {
+		return strings.TrimPrefix(res.Stdout, "origin/")
+	}
+	if res := gitCmd(repo, "ls-remote", "--symref", "origin", "HEAD"); res.Ok {
+		for _, line := range strings.Split(res.Stdout, "\n") {
+			if target, found := strings.CutPrefix(line, "ref: refs/heads/"); found {
+				return strings.TrimSuffix(target, "\tHEAD")
+			}
+		}
+	}
+	for _, candidate := range []string{"main", "master"} {
+		if gitCmd(repo, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+candidate).Ok {
+			return candidate
+		}
+	}
+	return "main"
+}
+
 func ClassifyRepo(repo string, dryRun bool) RepoInfo {
-	if !gitCmd(repo, "remote").Ok {
+	if remotes := gitCmd(repo, "remote"); !remotes.Ok || remotes.Stdout == "" {
 		return RepoInfo{Path: repo, State: NoRemote}
 	}
 	if !gitCmdTimeout(repo, 10*time.Second, fetchArgs(dryRun, "origin")...).Ok {
@@ -88,10 +130,7 @@ func ClassifyRepo(repo string, dryRun bool) RepoInfo {
 		return RepoInfo{Path: repo, State: Detached, Branch: branch}
 	}
 
-	defaultBranch := "main"
-	if res := gitCmd(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); res.Ok {
-		defaultBranch = strings.TrimPrefix(res.Stdout, "origin/")
-	}
+	defaultBranch := remoteDefaultBranch(repo)
 
 	if branch != defaultBranch {
 		return RepoInfo{Path: repo, State: OffDefault, Branch: branch, Detail: fmt.Sprintf("on %s, default is %s", branch, defaultBranch)}
@@ -101,7 +140,7 @@ func ClassifyRepo(repo string, dryRun bool) RepoInfo {
 		return RepoInfo{Path: repo, State: NoUpstream, Branch: branch}
 	}
 
-	if gitCmd(repo, "status", "--porcelain").Stdout != "" {
+	if hasTrackedChanges(repo) {
 		return RepoInfo{Path: repo, State: Dirty, Branch: branch}
 	}
 
@@ -130,18 +169,37 @@ func (j *RepoSyncJob) Run(dryRun bool) (*JobResult, error) {
 
 	logger.Info("Discovering repositories", "roots", strings.Join(j.Roots, ", "))
 
-	repos, err := DiscoverRepos(j.Roots)
-	if err != nil {
-		return nil, err
+	var repos, rootFailures []string
+	var rootErrors []error
+	for _, root := range j.Roots {
+		found, err := discoverReposUnder(root)
+		if err != nil {
+			logger.Error("Skipping repository root", "err", err)
+			rootFailures = append(rootFailures, err.Error())
+			rootErrors = append(rootErrors, err)
+			continue
+		}
+		repos = append(repos, found...)
+	}
+	if len(rootErrors) == len(j.Roots) && len(rootErrors) > 0 {
+		return nil, errors.Join(rootErrors...)
+	}
+	rootsNote := ""
+	if len(rootFailures) == 1 {
+		rootsNote = " · 1 root unusable"
+	} else if len(rootFailures) > 1 {
+		rootsNote = fmt.Sprintf(" · %d roots unusable", len(rootFailures))
 	}
 
 	total := len(repos)
 	if total == 0 {
 		logger.Warn("No repositories found under roots", "roots", j.Roots)
 		return &JobResult{
-			Changed: false,
-			Summary: "0 repositories discovered",
-			Details: fmt.Sprintf("No Git repositories found under roots: %v", j.Roots),
+			Changed:  len(rootFailures) > 0,
+			Degraded: len(rootFailures) > 0,
+			Summary:  "0 repositories discovered" + rootsNote,
+			Details:  strings.Join(append([]string{fmt.Sprintf("No Git repositories found under roots: %v", j.Roots)}, rootFailures...), "\n"),
+			Drafts:   rootFailures,
 		}, nil
 	}
 
@@ -196,8 +254,9 @@ func (j *RepoSyncJob) Run(dryRun bool) (*JobResult, error) {
 
 	logger.Info("Evaluating fast-forward actions")
 
-	var actions, drafts []string
-	degraded := false
+	var actions []string
+	drafts := rootFailures
+	degraded := len(rootFailures) > 0
 
 	for info := range resultsChan {
 		rel := filepath.Base(info.Path)
@@ -226,7 +285,7 @@ func (j *RepoSyncJob) Run(dryRun bool) (*JobResult, error) {
 		verb = "fast-forwarded"
 	}
 
-	summary := fmt.Sprintf("%d repositories · %d %s · %d need attention", total, len(actions), verb, len(drafts))
+	summary := fmt.Sprintf("%d repositories · %d %s · %d need attention", total, len(actions), verb, len(drafts)-len(rootFailures)) + rootsNote
 
 	return &JobResult{
 		Changed:      len(actions) > 0 || len(drafts) > 0,

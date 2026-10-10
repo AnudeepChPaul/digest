@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -35,6 +35,9 @@ func assertRowMatchesPreview(t *testing.T, name string, m Model) {
 	previewHints := map[string]string{}
 	for _, hint := range hintsFromBindings(preview.previewBindings()) {
 		previewHints[hint.key] = hint.label
+		for _, previewKey := range strings.Split(hint.key, "|") {
+			previewHints[previewKey] = hint.label
+		}
 	}
 	checked := 0
 	for _, hint := range hints {
@@ -175,6 +178,10 @@ func TestDOnIdleJobDryRunsOnlyThatJob(t *testing.T) {
 			m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 		}
 		m = press(t, m, runes("d"))
+		if m.mode != ViewDeleteConfirm || len(*dryRun) != 0 {
+			t.Fatalf("preview %v: d should ask before the dry run, mode = %v dryRun = %v", fromPreview, m.mode, *dryRun)
+		}
+		m = press(t, m, runes("y"))
 		if len(*dryRun) != 1 || (*dryRun)[0] != "nightly" || len(*executed) != 0 || m.mode == ViewDeleteConfirm {
 			t.Errorf("preview %v: dryRun = %v executed = %v mode = %v", fromPreview, *dryRun, *executed, m.mode)
 		}
@@ -331,4 +338,57 @@ func TestMyPRRowHintsOpen(t *testing.T) {
 		}
 	}
 	t.Fatal("no my PR row")
+}
+
+func TestEnterOnJobRowOpensThePreviewWithoutRunning(t *testing.T) {
+	m, executed, dryRun := jobTestModel(t)
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ViewPreview || len(*executed) != 0 || len(*dryRun) != 0 || m.jobToExecute != "" {
+		t.Errorf("enter on the row: mode = %v executed = %v dryRun = %v jobToExecute = %q", m.mode, *executed, *dryRun, m.jobToExecute)
+	}
+}
+
+func TestJobPreviewFooterShowsEnterRunsTheJob(t *testing.T) {
+	m, _, _ := jobTestModel(t)
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if footer := footerText(footerItemsFrom(m.previewBindings())); !strings.Contains(footer, "r|⏎ run") {
+		t.Errorf("job preview footer = %q", footer)
+	}
+}
+
+func TestJobPreviewWithoutOutputNamesTheKeys(t *testing.T) {
+	m, _, _ := jobTestModel(t)
+	m.width, m.height = 120, 40
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.updatePreviewViewport()
+	view := strings.Join(strings.Fields(stripANSI(m.View())), " ")
+	if !strings.Contains(view, "(d) dry-run (r) run") || strings.Contains(view, "Press [r] on dashboard") {
+		t.Errorf("job preview without output:\n%s", view)
+	}
+}
+
+func TestDOnJobDoesNothingWhileItsDryRunIsInFlight(t *testing.T) {
+	for _, fromPreview := range []bool{false, true} {
+		m, executed, dryRun := jobTestModel(t)
+		markDryRunInFlight(t, &m, "nightly")
+		selectNavItem(t, &m, "job:nightly")
+		startMode := ViewDashboard
+		if fromPreview {
+			m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+			startMode = ViewPreview
+		}
+		m = press(t, m, runes("d"))
+		if len(*dryRun) != 0 || len(*executed) != 0 || m.mode != startMode {
+			t.Errorf("preview %v: dryRun = %v executed = %v mode = %v", fromPreview, *dryRun, *executed, m.mode)
+		}
+	}
+}
+
+func markDryRunInFlight(t *testing.T, m *Model, jobName string) {
+	t.Helper()
+	if err := os.WriteFile(dryRunFilePath(jobName, "pid"), []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.dryRunsInFlight = map[string]bool{jobName: true}
+	m.contentVersion++
 }

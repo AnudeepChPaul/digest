@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -24,7 +24,7 @@ const (
 
 var searchCSVHeader = []string{"updated", "created", "status", "tags", "summary", "body"}
 
-var searchExportDir = func() string { return paths.Expand("~/Downloads") }
+var searchExportDir = func() (string, error) { return paths.Expand("~/Downloads") }
 
 var copyExportPath = copyToClipboard
 
@@ -72,13 +72,16 @@ func writeSearchCSV(dir string, notes []*model.Note, now time.Time) (string, err
 }
 
 func (m Model) exportSearchCmd(results []*model.Note) tea.Cmd {
-	dir := searchExportDir()
+	dir, dirErr := searchExportDir()
 	notes := make([]*model.Note, len(results))
 	for index, note := range results {
 		noteCopy := *note
 		notes[index] = &noteCopy
 	}
 	return func() tea.Msg {
+		if dirErr != nil {
+			return searchExportedMsg{count: len(notes), err: dirErr}
+		}
 		exportPath, err := writeSearchCSV(dir, notes, time.Now())
 		return searchExportedMsg{path: exportPath, count: len(notes), err: err}
 	}

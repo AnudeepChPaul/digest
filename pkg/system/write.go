@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/paths"
 )
 
 const logExtension = ".log"
@@ -220,12 +220,43 @@ func Remove(path string) error {
 }
 
 func RemoveAll(path string) error {
+	var failures []error
 	if Protected(path) {
-		if err := changeTree(path, false); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%w: %w", ErrUnlock, err)
+		for _, err := range changeTree(path, false) {
+			failures = append(failures, fmt.Errorf("%w: %w", ErrUnlock, err))
 		}
 	}
-	return os.RemoveAll(path)
+	failures = append(failures, removeTree(path)...)
+	if len(failures) > 0 {
+		return fmt.Errorf("remove %s: %d failed: %w", path, len(failures), errors.Join(failures...))
+	}
+	return nil
+}
+
+func removeTree(path string) []error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return []error{err}
+	}
+	var readErr error
+	if info.IsDir() {
+		var entries []fs.DirEntry
+		entries, readErr = os.ReadDir(path)
+		var childFailures []error
+		for _, entry := range entries {
+			childFailures = append(childFailures, removeTree(filepath.Join(path, entry.Name()))...)
+		}
+		if len(childFailures) > 0 {
+			return childFailures
+		}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return []error{errors.Join(readErr, err)}
+	}
+	return nil
 }
 
 func Chmod(path string, mode fs.FileMode) error {
@@ -245,7 +276,7 @@ func Symlink(target, link string) error {
 
 func LockTree(root string) (int, error) {
 	locked := 0
-	err := walkFiles(root, func(path string) error {
+	failures := walkFiles(root, func(path string) error {
 		if !Protected(path) {
 			return nil
 		}
@@ -255,40 +286,37 @@ func LockTree(root string) (int, error) {
 		locked++
 		return nil
 	})
-	return locked, err
+	if len(failures) > 0 {
+		return locked, fmt.Errorf("%d locked, %d failed: %w", locked, len(failures), errors.Join(failures...))
+	}
+	return locked, nil
 }
 
 func UnlockTree(root string) error {
-	return changeTree(root, false)
+	return errors.Join(changeTree(root, false)...)
 }
 
-func changeTree(root string, locked bool) error {
+func changeTree(root string, locked bool) []error {
 	return walkFiles(root, func(path string) error {
 		return setLocked(path, locked)
 	})
 }
 
-func walkFiles(root string, visit func(path string) error) error {
-	info, err := os.Lstat(root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		if info.Mode().IsRegular() {
-			return visit(root)
+func walkFiles(root string, visit func(path string) error) []error {
+	var failures []error
+	record := func(err error) {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			failures = append(failures, err)
 		}
-		return nil
 	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return err
-		}
-		if entry.Type().IsRegular() {
-			return visit(path)
+			record(err)
+		} else if entry.Type().IsRegular() {
+			record(visit(path))
 		}
 		return nil
 	})
+	record(walkErr)
+	return failures
 }

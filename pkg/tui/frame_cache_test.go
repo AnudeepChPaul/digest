@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

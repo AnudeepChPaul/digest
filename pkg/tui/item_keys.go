@@ -1,9 +1,11 @@
 package tui
 
 import (
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"slices"
+
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -19,17 +21,27 @@ func (m Model) itemBindings(item NavItem, onDashboard bool) []keyBinding {
 		if m.jobRunning(item.Draft.Name) {
 			return []keyBinding{newKeyBinding(actionStopSelectedItem, []string{"d"}, "d", "stop").warning()}
 		}
-		bindings := []keyBinding{
-			newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "run"),
+		runKeyLabel := "r"
+		if !onDashboard {
+			runKeyLabel = "r|⏎"
 		}
-		if jobHasDryRun(item.Draft.Name, item.Draft.DryRunCommand) {
+		bindings := []keyBinding{
+			newKeyBinding(actionRunSelectedJob, []string{"r"}, runKeyLabel, "run"),
+		}
+		if jobHasDryRun(item.Draft.DryRunCommand) {
 			bindings = append(bindings, newKeyBinding(actionDryRunSelectedJob, []string{"d"}, "d", "dry run").shownWhen(!item.Draft.DryRunInFlight))
 		}
 		return bindings
 	case KindReviewRun, KindBragRun, KindAutomationRun:
-		if label := m.runStopLabel(item); label != "" {
-			return []keyBinding{newKeyBinding(actionStopSelectedItem, []string{"d"}, "d", label).warning()}
+		label := m.runStopLabel(item)
+		if label == "" {
+			return nil
 		}
+		bindings := []keyBinding{newKeyBinding(actionStopSelectedItem, []string{"d"}, "d", label).warning()}
+		if label == "dismiss" {
+			bindings = append(bindings, newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "retry"))
+		}
+		return bindings
 	case KindPendingGit:
 		if item.PendingGitPR == nil {
 			return nil
@@ -73,12 +85,16 @@ func (m Model) runStopLabel(item NavItem) string {
 	switch {
 	case item.Kind == KindReviewRun && item.ReviewRun != nil && item.ReviewRun.Status == review.RunRunning:
 		return "stop"
+	case item.Kind == KindReviewRun && item.ReviewRun != nil:
+		return "dismiss"
 	case item.Kind == KindBragRun && item.BragRun != nil && item.BragRun.Status == brag.RunRunning:
 		return "stop"
 	case item.Kind == KindBragRun && item.BragRun != nil:
 		return "dismiss"
 	case item.Kind == KindAutomationRun && item.AutomationRun != nil && m.automationJobRunning(item.AutomationRun):
 		return "stop"
+	case item.Kind == KindAutomationRun && item.AutomationRun != nil:
+		return "dismiss"
 	}
 	return ""
 }
@@ -88,10 +104,11 @@ func (m Model) selectedItemBindings(onDashboard bool) []keyBinding {
 	if !found {
 		return nil
 	}
+	bindings := m.itemBindings(item, onDashboard)
 	if onDashboard && item.Kind == KindPendingGit && !m.cfg.ShowKeyHints {
-		return nil
+		return slices.DeleteFunc(bindings, func(binding keyBinding) bool { return binding.action != actionStartReview })
 	}
-	return m.itemBindings(item, onDashboard)
+	return bindings
 }
 
 func hintsFromBindings(bindings []keyBinding) []keyHint {
@@ -130,6 +147,15 @@ func (m *Model) clearPendingConfirms() {
 	m.jobToAbort = ""
 	m.bragRunToStop = nil
 	m.automationRunToStop = nil
+	m.jobRunStopsDryRun = false
+	m.jobDryRunToStart = ""
+	m.staleJobToClear = ""
+	m.runToRetry = nil
+	m.draftToDelete = ""
+	m.discardingEdit = false
+	m.jobConfirmError = ""
+	m.confirmTitle, m.confirmPrompt = "", ""
+	m.restoreOnConfirm = false
 }
 
 func (m Model) stopTargetName() string {
@@ -149,8 +175,8 @@ func (m Model) confirmStopRun() (tea.Model, tea.Cmd) {
 	if m.mode == ViewPreview {
 		m.updatePreviewViewport()
 	}
-	if bragRun != nil && brag.IsRunning(m.bragRoot(), bragRun.Meta.ID) {
-		return m.stopOrDismissBragRun(bragRun)
+	if bragRun != nil {
+		return m.stopRunningBragRuns()
 	}
 	if automationRun != nil {
 		return m.stopAutomationRun(automationRun)

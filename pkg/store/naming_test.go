@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 )
 
 func savedNote(t *testing.T, noteStore *NoteStore, note *model.Note) *model.Note {

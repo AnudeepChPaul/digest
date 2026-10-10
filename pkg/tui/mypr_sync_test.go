@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func myOpenPR(repo string, number int, branch, ci string) review.QueuedPR {

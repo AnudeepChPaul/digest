@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -18,7 +18,7 @@ import (
 func noteSaveModel(t *testing.T, notes ...*model.Note) Model {
 	t.Helper()
 	showGit := false
-	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true, ShowGit: &showGit}
+	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true, ShowGit: &showGit, WorkDays: everyDay}
 	noteStore := store.New(cfg.NotesDir())
 	for _, note := range notes {
 		if err := noteStore.Save(note); err != nil {
@@ -65,7 +65,7 @@ func savedMessages(cmd tea.Cmd) []tea.Msg {
 	var found []tea.Msg
 	for _, msg := range collectMsgs(cmd) {
 		switch msg.(type) {
-		case notesSavedMsg, notesDeletedMsg, loadNotesMsg:
+		case notesSavedMsg, notesDeletedMsg, loadNotesMsg, browsedNotesMsg:
 			found = append(found, msg)
 		}
 	}
@@ -92,30 +92,25 @@ func dashboardNotes(now time.Time) []*model.Note {
 	}
 }
 
-func TestStartupReadsOnlyDashboardNotesThenEveryNoteInTheBackground(t *testing.T) {
+func TestStartupReadsOnlyDashboardNotes(t *testing.T) {
 	m := noteSaveModel(t, dashboardNotes(time.Now())...)
 	if got := loadedSummaries(m); !slices.Equal(got, []string{"active", "done yesterday"}) {
 		t.Errorf("startup notes = %q", got)
 	}
-	if !m.loadingAllNotes || m.ensureAllNotes() != nil {
-		t.Fatal("startup should already be loading every note in the background")
-	}
-	m, _ = applyNoteMessages(t, m, loadAllNotesCmd(m.store))
-	if got := loadedSummaries(m); len(got) != 4 || !m.notesComplete {
-		t.Errorf("after the background load notes = %q complete = %v", got, m.notesComplete)
-	}
-	if m.ensureAllNotes() != nil {
-		t.Error("a complete note list should not load again")
+	m, _ = applyNoteMessages(t, m, m.Init())
+	if got := loadedSummaries(m); !slices.Equal(got, []string{"active", "done yesterday"}) || m.browsedNotes != nil {
+		t.Errorf("startup should never load every note, notes = %q browsed = %d", got, len(m.browsedNotes))
 	}
 }
 
-func TestADashboardReloadNeverReplacesTheCompleteList(t *testing.T) {
+func TestADashboardReloadKeepsTheNotesSearchIsShowing(t *testing.T) {
 	m := noteSaveModel(t, dashboardNotes(time.Now())...)
-	m, _ = applyNoteMessages(t, m, loadAllNotesCmd(m.store))
+	next, cmd := m.openSearch(tea.KeyMsg{})
+	m, _ = applyNoteMessages(t, next.(Model), cmd)
 	partial := m.loadNotesCmd()
 	m = update(m, loadNotesMsg{notes: partial.(loadNotesMsg).notes[:1]})
-	if len(m.notes) != 4 {
-		t.Errorf("a partial reload replaced the complete list: %q", loadedSummaries(m))
+	if len(m.notes) != 1 || len(m.browsedNotes) != 4 {
+		t.Errorf("a dashboard reload should only replace the dashboard notes: %q browsed %d", loadedSummaries(m), len(m.browsedNotes))
 	}
 }
 
@@ -162,14 +157,15 @@ func TestSavingMergesTheNoteWithoutReloadingEveryNote(t *testing.T) {
 
 func TestDeletingRemovesTheNoteFromMemoryWithoutReloading(t *testing.T) {
 	m := noteSaveModel(t, dashboardNotes(time.Now())...)
-	m, _ = applyNoteMessages(t, m, loadAllNotesCmd(m.store))
-	archived := noteBySummary(t, m, "archived")
+	next, cmd := m.openArchive(tea.KeyMsg{})
+	m, _ = applyNoteMessages(t, next.(Model), cmd)
+	archived := m.getArchivedNotes()[0]
 	m.deleteTargetNotes, m.deleteReturnMode, m.mode = []*model.Note{archived}, ViewArchived, ViewDeleteConfirm
-	next, cmd := m.Update(runes("y"))
+	next, cmd = m.Update(runes("y"))
 	m = next.(Model)
 	m, _ = applyNoteMessages(t, m, cmd)
-	if slices.Contains(loadedSummaries(m), "archived") || len(m.notes) != 3 {
-		t.Errorf("notes after delete = %q", loadedSummaries(m))
+	if slices.Contains(browsedSummaries(m), "archived") || len(m.browsedNotes) != 3 || len(m.notes) != 2 {
+		t.Errorf("notes after delete = %q, archive list %q", loadedSummaries(m), browsedSummaries(m))
 	}
 	if _, err := os.Stat(archived.FilePath); !os.IsNotExist(err) {
 		t.Errorf("file should be gone: %v", err)
@@ -293,18 +289,39 @@ func collectMsgsWithoutTicks(cmd tea.Cmd) []tea.Msg {
 	}
 }
 
-func TestArchiveSearchAndBragLoadEveryNoteWhenTheListIsIncomplete(t *testing.T) {
+func TestArchiveSearchAndBragLoadEveryNoteWhenOpened(t *testing.T) {
 	for name, open := range map[string]func(Model) (tea.Model, tea.Cmd){
 		"archive": func(m Model) (tea.Model, tea.Cmd) { return m.openArchive(tea.KeyMsg{}) },
 		"search":  func(m Model) (tea.Model, tea.Cmd) { return m.openSearch(tea.KeyMsg{}) },
 		"brag":    func(m Model) (tea.Model, tea.Cmd) { return m.openBrag(tea.KeyMsg{}) },
 	} {
 		m := noteSaveModel(t, dashboardNotes(time.Now())...)
-		m.loadingAllNotes = false
 		next, cmd := open(m)
 		m, _ = applyNoteMessages(t, next.(Model), cmd)
-		if !m.notesComplete || !slices.Contains(loadedSummaries(m), "archived") {
-			t.Errorf("%s should load every note, got %q", name, loadedSummaries(m))
+		if len(m.browsedNotes) != 4 || !slices.Contains(browsedSummaries(m), "archived") {
+			t.Errorf("%s should load every note, got %q", name, browsedSummaries(m))
+		}
+	}
+}
+
+func TestDiscardingAMissingNoteFromThePreviewStaysInThePreview(t *testing.T) {
+	for _, discardKey := range []tea.KeyMsg{runes("n"), {Type: tea.KeyEsc}} {
+		now := time.Now()
+		m := noteSaveModel(t, append(dashboardNotes(now), &model.Note{Summary: "later", Status: model.StatusActive, Source: model.SourceManual, Created: now, Updated: now})...)
+		active := noteBySummary(t, m, "active")
+		removeNoteFile(t, active)
+		selectSummary(t, &m, "active")
+		m.mode = ViewPreview
+		next, _ := m.beginNoteEdit(active, ViewPreview)
+		m = next.(Model)
+		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+		m, _ = applyNoteMessages(t, next.(Model), cmd)
+		if m.mode != ViewRecreateConfirm {
+			t.Fatalf("mode = %v", m.mode)
+		}
+		m = press(t, m, discardKey)
+		if m.mode != ViewPreview || slices.Contains(loadedSummaries(m), "active") {
+			t.Errorf("%s: mode = %v, want the preview without the note", discardKey, m.mode)
 		}
 	}
 }

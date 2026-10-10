@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

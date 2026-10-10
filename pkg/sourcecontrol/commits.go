@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 )
 
 var maxConcurrentGitReads = max(runtime.NumCPU(), 2)

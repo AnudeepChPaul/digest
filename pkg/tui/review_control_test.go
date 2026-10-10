@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -151,24 +151,26 @@ func TestJobPreviewHeaderShowsPID(t *testing.T) {
 	}
 }
 
-func TestStoppingFromReviewRowPreviewReturnsToDashboard(t *testing.T) {
+func TestStoppingAReviewFromItsRowPreviewStaysOnTheFailedRun(t *testing.T) {
 	stubReviewControl(t)
 	m, running, _ := reviewRunsModel(t)
 	stopReview = func(root string, ref review.PRRef) error {
-		return os.Remove(filepath.Join(review.StateDir(root, ref), "review.pid"))
+		dir := review.StateDir(root, ref)
+		if err := os.Remove(filepath.Join(dir, "review.pid")); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "review.exit"), []byte("143"), 0644)
 	}
 	selectNavItem(t, &m, "review:"+running.URL)
 	m.mode = ViewPreview
 	m.updatePreviewViewport()
 	m = press(t, m, runes("d"))
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.mode != ViewDashboard {
-		t.Fatalf("mode = %v, want dashboard once the stopped row is gone", m.mode)
+	if key, _ := m.selectedNavKey(); m.mode != ViewPreview || key != "review:"+running.URL {
+		t.Fatalf("mode = %v selected = %q, want the preview on the stopped run", m.mode, key)
 	}
-	for _, item := range m.allNavItems() {
-		if navItemKey(item) == "review:"+running.URL {
-			t.Errorf("stopped review still listed")
-		}
+	if !strings.Contains(strings.Join(strings.Fields(stripANSI(m.View())), " "), "FAILED") {
+		t.Errorf("the stopped review should show as failed:\n%s", strings.Join(strings.Fields(stripANSI(m.View())), " "))
 	}
 }
 

@@ -3,7 +3,7 @@ package sourcecontrol
 import (
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func TestOutdatedCheckRunsOncePerPR(t *testing.T) {

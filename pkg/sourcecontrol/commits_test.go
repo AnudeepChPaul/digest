@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 )
 
 func TestDefaultCommitsCommandListsTodaysCommits(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )

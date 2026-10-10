@@ -2,11 +2,13 @@ package appstate
 
 import (
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/paths"
 )
 
 func weekdaysOnly(day time.Weekday) bool {
@@ -71,10 +73,10 @@ func TestMarkDone(t *testing.T) {
 	if !changed || next.Streak != 4 || next.LastDoneDay != "2026-10-09" {
 		t.Fatalf("first done today = %+v, %v", next, changed)
 	}
-	if again, changed := next.MarkDone(friday.Add(time.Hour), weekdaysOnly); changed || again != next {
+	if again, changed := next.MarkDone(friday.Add(time.Hour), weekdaysOnly); changed || !reflect.DeepEqual(again, next) {
 		t.Errorf("a second done the same day should change nothing: %+v, %v", again, changed)
 	}
-	if weekend, changed := next.MarkDone(friday.AddDate(0, 0, 1), weekdaysOnly); changed || weekend != next {
+	if weekend, changed := next.MarkDone(friday.AddDate(0, 0, 1), weekdaysOnly); changed || !reflect.DeepEqual(weekend, next) {
 		t.Errorf("a done on a non-work day should change nothing: %+v, %v", weekend, changed)
 	}
 	missed := State{Streak: 3, LastDoneDay: "2026-10-06"}
@@ -93,5 +95,22 @@ func TestFromNotes(t *testing.T) {
 	state := FromNotes(notes, friday, weekdaysOnly)
 	if !state.FirstNoteCreated.Equal(friday.AddDate(0, -2, 0)) || state.Streak != 2 || state.LastDoneDay != "2026-10-08" {
 		t.Errorf("state = %+v", state)
+	}
+}
+
+func TestActionMenuOrderRoundTripsAndStaysOptional(t *testing.T) {
+	root := t.TempDir()
+	if err := Save(root, State{ActionMenuOrder: []string{"jira", "notify"}}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := Load(root)
+	if err != nil || len(loaded.ActionMenuOrder) != 2 || loaded.ActionMenuOrder[0] != "jira" {
+		t.Fatalf("loaded = %+v, %v", loaded, err)
+	}
+	if err := Save(root, State{Streak: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(Path(root)); strings.Contains(string(data), "action_menu_order") {
+		t.Errorf("an empty order should not be written: %s", data)
 	}
 }

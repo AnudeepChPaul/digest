@@ -51,6 +51,7 @@ type KeyMap struct {
 	DeleteWordBackward      key.Binding
 	DeleteWordForward       key.Binding
 	InsertNewline           key.Binding
+	InsertTab               key.Binding
 	LineEnd                 key.Binding
 	LineNext                key.Binding
 	LinePrevious            key.Binding
@@ -82,6 +83,7 @@ var DefaultKeyMap = KeyMap{
 	DeleteAfterCursor:       key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "delete after cursor")),
 	DeleteBeforeCursor:      key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "delete before cursor")),
 	InsertNewline:           key.NewBinding(key.WithKeys("enter", "ctrl+m"), key.WithHelp("enter", "insert newline")),
+	InsertTab:               key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "insert tab")),
 	DeleteCharacterBackward: key.NewBinding(key.WithKeys("backspace", "ctrl+h"), key.WithHelp("backspace", "delete character backward")),
 	DeleteCharacterForward:  key.NewBinding(key.WithKeys("delete", "ctrl+d"), key.WithHelp("delete", "delete character forward")),
 	LineStart:               key.NewBinding(key.WithKeys("home", "ctrl+a"), key.WithHelp("home", "line start")),
@@ -1030,6 +1032,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 			m.col = clamp(m.col, 0, len(m.value[m.row]))
 			m.splitLine(m.row, m.col)
+		case key.Matches(msg, m.KeyMap.InsertTab):
+			m.insertRunesFromUserInput([]rune{'\t'})
 		case key.Matches(msg, m.KeyMap.LineEnd):
 			m.CursorEnd()
 		case key.Matches(msg, m.KeyMap.LineStart):

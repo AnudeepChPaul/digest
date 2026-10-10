@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -54,7 +54,7 @@ func TestPreviewIgnoresRemovedScrollKeys(t *testing.T) {
 		if m.previewViewport.YOffset != before || m.previewViewport.View() != longNotePreview(t).previewViewport.View() {
 			t.Errorf("%s scrolled the preview", name)
 		}
-		if m.mode != ViewPreview {
+		if name != "d" && m.mode != ViewPreview {
 			t.Errorf("%s changed mode to %v", name, m.mode)
 		}
 	}
@@ -117,10 +117,10 @@ func TestArchiveScrollKeys(t *testing.T) {
 	}
 	for _, name := range []string{"pgdown", "ctrl+d"} {
 		m := archiveModel(t)
-		before := m.archivedViewport.YOffset
+		before := m.archivedSelected
 		m = press(t, m, keyFor(name))
-		if m.archivedViewport.YOffset <= before {
-			t.Errorf("%s did not scroll the archive", name)
+		if m.archivedSelected <= before {
+			t.Errorf("%s did not move the archive selection", name)
 		}
 	}
 }
@@ -138,7 +138,7 @@ func TestFootersHideScrollKeysOutsideDashboard(t *testing.T) {
 		"pr":              prFooter,
 		"review-run":      footerText(reviewRunFooterItems(false)),
 		"review-run live": footerText(reviewRunFooterItems(true)),
-		"archive":         footerText(archiveFooterItems),
+		"archive":         footerText(archiveModel(t).archiveFooterItems()),
 	}
 	jobPreview := selectionTestModel(t)
 	selectNavItem(t, &jobPreview, "job:janitor")
@@ -154,7 +154,7 @@ func TestFootersHideScrollKeysOutsideDashboard(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(footerText(archiveFooterItems), "j|k nav") {
+	if !strings.Contains(footerText(archiveModel(t).archiveFooterItems()), "j|k nav") {
 		t.Errorf("archive footer lost j|k nav")
 	}
 	dashboard := selectionTestModel(t)
@@ -163,7 +163,7 @@ func TestFootersHideScrollKeysOutsideDashboard(t *testing.T) {
 		t.Errorf("dashboard footer should be gone; keys live in the ? shortcuts modal")
 	}
 	dashboard.mode = ViewHelp
-	if view := stripANSI(dashboard.View()); !strings.Contains(view, "ctrl+d") || !strings.Contains(view, "ctrl+u") || !strings.Contains(view, "search") || !strings.Contains(view, "←|→") {
+	if view := stripANSI(dashboard.View()); !strings.Contains(view, "ctrl+d") || !strings.Contains(view, "ctrl+u") || !strings.Contains(view, "search") || !strings.Contains(view, "pgup") || strings.Contains(view, "←|→") {
 		t.Errorf("shortcuts modal missing dashboard keys")
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -86,8 +86,11 @@ func TestBangOpensTheFullMessageLog(t *testing.T) {
 	long := strings.Repeat("very long automation failure ", 10) + "END"
 	m.showError("AUTOMATION ERROR", errors.New(long))
 	m, _ = pressKey(t, m, "!")
-	if m.mode != ViewError || !strings.Contains(strings.Join(m.errorLines, " "), "END") {
-		t.Fatalf("! should open the message log with the full text, mode %v", m.mode)
+	if m.mode != ViewError || !strings.Contains(strings.Join(m.messageLogLines(), " "), "END") || strings.Contains(stripANSI(m.View()), "END") {
+		t.Fatalf("! should open the message log trimmed to the popup, mode %v", m.mode)
+	}
+	if m, _ = pressKey(t, m, "!"); !strings.Contains(strings.Join(strings.Fields(stripANSI(m.View())), " "), "END") {
+		t.Fatalf("! in the log should show the full text:\n%s", stripANSI(m.View()))
 	}
 	if m, _ = pressKey(t, m, "esc"); m.mode != ViewDashboard {
 		t.Errorf("esc should close the log, mode %v", m.mode)

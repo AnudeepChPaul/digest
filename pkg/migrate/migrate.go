@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/appstate"
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/running"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/running"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 var (
@@ -37,10 +37,12 @@ type Options struct {
 	Root          string
 	AutomationDir string
 	TUIMarker     string
+	ConfigPath    string
 	Out           io.Writer
 	PRCreatedAt   func(url string) (time.Time, error)
 	IsWorkDay     func(time.Weekday) bool
 	Now           func() time.Time
+	DryRun        bool
 }
 
 type plannedNote struct {
@@ -56,9 +58,23 @@ func Run(options Options) (int, error) {
 	if automation.AnyRunning(options.AutomationDir) {
 		return 0, ErrAutomationRunning
 	}
+	if err := migrateJanitorOptions(options.ConfigPath, options.Out, options.DryRun); err != nil {
+		return 0, err
+	}
+	if err := migrateAutomations(options.ConfigPath, options.Out, options.DryRun); err != nil {
+		return 0, err
+	}
+	if err := migrateBuiltInJobs(options.ConfigPath, options.Out, options.DryRun); err != nil {
+		return 0, err
+	}
 	noteStore := store.New(options.NotesDir)
 	notes, err := noteStore.List()
-	if err != nil {
+	var skipped *store.SkippedNotesError
+	if errors.As(err, &skipped) {
+		for _, note := range skipped.Notes {
+			fmt.Fprintf(options.Out, "skipped %s: %v\n", note.File, note.Reason)
+		}
+	} else if err != nil {
 		return 0, err
 	}
 
@@ -104,29 +120,35 @@ func Run(options Options) (int, error) {
 		if !reIDed && before.Ref == note.Ref && originalName == store.FileName(note) {
 			continue
 		}
-		if err := noteStore.Save(note); err != nil {
-			return changed, fmt.Errorf("migrate %s: %w", originalName, err)
-		}
 		changed++
-		fmt.Fprintf(options.Out, "%s → %s\n", originalName, filepath.Base(note.FilePath))
+		if options.DryRun {
+			fmt.Fprintf(options.Out, "%s → %s\n", originalName, store.FileName(note))
+		} else {
+			if err := noteStore.Save(note); err != nil {
+				return changed, fmt.Errorf("migrate %s: %w", originalName, err)
+			}
+			fmt.Fprintf(options.Out, "%s → %s\n", originalName, filepath.Base(note.FilePath))
+		}
 		if note.Ref != before.Ref {
 			fmt.Fprintf(options.Out, "  ref %s\n", note.Ref)
 		}
 		if reIDed && originalID != "" {
-			if err := moveReminder(options.Root, originalID, note.ID); err != nil {
+			if err := moveReminder(options, originalID, note.ID); err != nil {
 				return changed, err
 			}
 		}
 	}
-	fmt.Fprintf(options.Out, "%d notes migrated\n", changed)
-	if _, found, err := appstate.Load(options.Root); err != nil {
-		return changed, err
-	} else if !found {
-		if err := appstate.Save(options.Root, appstate.FromNotes(notes, options.now(), options.isWorkDay)); err != nil {
-			return changed, fmt.Errorf("save %s: %w", appstate.Path(options.Root), err)
-		}
+	if options.DryRun {
+		fmt.Fprintf(options.Out, "%d notes would be migrated\n", changed)
+	} else {
+		fmt.Fprintf(options.Out, "%d notes migrated\n", changed)
 	}
-	if system.Protected(options.Root) {
+	if err := migrateAppState(options, notes); err != nil {
+		return changed, err
+	}
+	if system.Protected(options.Root) && options.DryRun {
+		fmt.Fprintf(options.Out, "would lock files in %s (reviews, logs, config.yaml and *.log files stay unlocked)\n", options.Root)
+	} else if system.Protected(options.Root) {
 		fmt.Fprintf(options.Out, "Locking files in %s (reviews, logs, config.yaml and *.log files stay unlocked)…\n", options.Root)
 		locked, err := system.LockTree(options.Root)
 		if err != nil {
@@ -207,14 +229,49 @@ func createdFor(note *model.Note, options Options) time.Time {
 	return fallback.Local()
 }
 
-func moveReminder(root, originalID, newID string) error {
-	entry, found := notify.Load(root, originalID)
+func moveReminder(options Options, originalID, newID string) error {
+	entry, found := notify.Load(options.Root, originalID)
 	if !found {
 		return nil
 	}
+	if options.DryRun {
+		fmt.Fprintf(options.Out, "  reminder %s → %s\n", originalID, newID)
+		return nil
+	}
 	entry.NoteID = newID
-	if err := notify.Save(root, entry); err != nil {
+	if err := notify.Save(options.Root, entry); err != nil {
 		return err
 	}
-	return notify.Remove(root, originalID)
+	return notify.Remove(options.Root, originalID)
+}
+
+func migrateAppState(options Options, notes []*model.Note) error {
+	stored, found, err := appstate.Load(options.Root)
+	if err != nil {
+		return err
+	}
+	fromNotes := appstate.FromNotes(notes, options.now(), options.isWorkDay)
+	if !found {
+		if options.DryRun {
+			fmt.Fprintf(options.Out, "would save %s\n", appstate.Path(options.Root))
+			return nil
+		}
+		return saveAppState(options.Root, fromNotes)
+	}
+	if fromNotes.FirstNoteCreated.IsZero() || fromNotes.FirstNoteCreated.Equal(stored.FirstNoteCreated) {
+		return nil
+	}
+	if options.DryRun {
+		fmt.Fprintf(options.Out, "would set first_note_created to %s\n", fromNotes.FirstNoteCreated.Format(time.RFC3339))
+		return nil
+	}
+	stored.FirstNoteCreated = fromNotes.FirstNoteCreated
+	return saveAppState(options.Root, stored)
+}
+
+func saveAppState(root string, state appstate.State) error {
+	if err := appstate.Save(root, state); err != nil {
+		return fmt.Errorf("save %s: %w", appstate.Path(root), err)
+	}
+	return nil
 }

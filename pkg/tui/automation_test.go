@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -203,7 +203,7 @@ func TestDraftTabShowsTheDraftAndCycles(t *testing.T) {
 			t.Errorf("draft tab misses %q:\n%s", want, view)
 		}
 	}
-	for _, label := range []string{"edit", "draft again", "run", "delete draft", "copy"} {
+	for _, label := range []string{"edit", "run", "delete draft", "copy"} {
 		if !footerHas(m, label) {
 			t.Errorf("draft tab footer misses %q: %+v", label, footerItemsFrom(m.activeBindings()))
 		}
@@ -231,20 +231,16 @@ func TestDraftTabRConfirmsThenRunsTheAutomation(t *testing.T) {
 	}
 }
 
-func TestDraftTabXConfirmsThenDraftsAgain(t *testing.T) {
+func TestDraftTabXDoesNothing(t *testing.T) {
 	m, started := automationTestModel(t)
 	m = withDraft(t, m, automation.RunFailed, automation.PhaseCreate)
 	m = openDraftTab(t, m)
 	m = press(t, m, runes("x"))
-	if view := stripANSI(m.View()); m.mode != ViewAutomationConfirm || !strings.Contains(view, "replaces") {
-		t.Fatalf("mode = %v view:\n%s", m.mode, view)
+	if m.mode != ViewPreview || m.previewTab != previewTabDraft || len(*started) != 0 {
+		t.Errorf("mode = %v tab = %v started = %+v", m.mode, m.previewTab, *started)
 	}
-	m = press(t, m, runes("y"))
-	if len(*started) != 1 || (*started)[0].phase != automation.PhaseDraft {
-		t.Fatalf("started = %+v", *started)
-	}
-	if m.mode != ViewPreview || m.previewTab != previewTabDraft {
-		t.Errorf("mode = %v tab = %v", m.mode, m.previewTab)
+	if footerHas(m, "draft again") {
+		t.Errorf("draft tab still offers x: %+v", footerItemsFrom(m.activeBindings()))
 	}
 }
 
@@ -328,6 +324,7 @@ func TestDDeletesTheDraft(t *testing.T) {
 	m = withDraft(t, m, automation.RunDraftReady, automation.PhaseDraft)
 	m = openDraftTab(t, m)
 	m = press(t, m, runes("d"))
+	m = press(t, m, runes("y"))
 	if _, err := os.Stat(automation.StateDir(m.cfg.AutomationDir(), "note-1")); !os.IsNotExist(err) {
 		t.Errorf("draft kept: %v", err)
 	}
@@ -417,6 +414,7 @@ func TestSucceededRunReloadsNotesAndTagsTheKind(t *testing.T) {
 	if !reloads {
 		t.Error("the automated note was not reloaded after the automation succeeded")
 	}
+	m.cfg.Automations = append(m.cfg.Automations, config.AutomationSpec{Name: config.AutomationGoogleDoc})
 	for kind, tag := range map[string]string{"ticket": "#ticket", "Doc": "#doc"} {
 		automated := *m.notes[len(m.notes)-1]
 		automated.Automated = kind
@@ -552,6 +550,9 @@ func TestDStopsTheAutomationJob(t *testing.T) {
 		if m.automationRuns["note-1"].Status != automation.RunFailed || m.mode == ViewError {
 			t.Errorf("preview %v run = %+v mode = %v", fromPreview, m.automationRuns["note-1"], m.mode)
 		}
+		if key, _ := m.selectedNavKey(); fromPreview && (m.mode != ViewPreview || key != automationNavKeyPrefix+"note-1" || !strings.Contains(stripANSI(m.View()), "FAILED")) {
+			t.Errorf("the preview should stay on the failed run, mode = %v selected = %q", m.mode, key)
+		}
 		if _, err := automation.LoadDraft(m.cfg.AutomationDir(), "note-1"); err != nil {
 			t.Errorf("stop removed the draft: %v", err)
 		}
@@ -576,5 +577,85 @@ func TestTypingEditsTheDraft(t *testing.T) {
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
 	if saved, _ := automation.LoadDraft(m.cfg.AutomationDir(), "note-1"); saved != "summary: Flaky deploys\nlabels: [ops]" {
 		t.Errorf("saved draft = %q", saved)
+	}
+}
+
+func failedJobsModel(t *testing.T, status automation.RunStatus) Model {
+	t.Helper()
+	m := runningJobsModel(t)
+	m.automationRuns["note-1"] = automation.Run{Meta: m.automationRuns["note-1"].Meta, Status: status, HasDraft: true}
+	m.contentVersion++
+	return m
+}
+
+func TestFailedAutomationRunsStayInJobs(t *testing.T) {
+	for status, rightLabel := range map[automation.RunStatus]string{automation.RunFailed: "failed", automation.RunNeedsReauth: "needs re-auth"} {
+		m := failedJobsModel(t, status)
+		m.cfg.ShowKeyHints = true
+		selectAutomationJob(t, &m)
+		var rowLine string
+		for _, line := range plainLines(m.renderDashboardBody()) {
+			if strings.Contains(line, "jira create: Flaky deploys") {
+				rowLine = line
+			}
+		}
+		if !strings.Contains(rowLine, rightLabel) || strings.Contains(rowLine, "running...") {
+			t.Errorf("status %v row = %q, want %q", status, rowLine, rightLabel)
+		}
+		if hint := hintText(m); !strings.Contains(hint, "(d)dismiss") || strings.Contains(hint, "(d)stop") {
+			t.Errorf("status %v hint = %q", status, hint)
+		}
+	}
+}
+
+func TestDDismissesAFailedAutomationRun(t *testing.T) {
+	for _, fromPreview := range []bool{false, true} {
+		m := failedJobsModel(t, automation.RunFailed)
+		var stopped []string
+		previous := stopAutomation
+		stopAutomation = func(root, noteID string) error {
+			stopped = append(stopped, noteID)
+			return nil
+		}
+		t.Cleanup(func() { stopAutomation = previous })
+		selectAutomationJob(t, &m)
+		if fromPreview {
+			m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+			if !footerHas(m, "dismiss") {
+				t.Errorf("failed automation preview footer misses dismiss: %+v", footerItemsFrom(m.activeBindings()))
+			}
+		}
+		m = press(t, m, runes("d"))
+		if m.mode == ViewDeleteConfirm || m.mode == ViewError || len(stopped) != 0 {
+			t.Fatalf("preview %v: dismiss should not ask or stop, mode = %v stopped = %v", fromPreview, m.mode, stopped)
+		}
+		if _, tracked := m.automationRuns["note-1"]; tracked {
+			t.Errorf("preview %v: run still tracked %+v", fromPreview, m.automationRuns["note-1"])
+		}
+		if _, err := os.Stat(automation.StateDir(m.cfg.AutomationDir(), "note-1")); !os.IsNotExist(err) {
+			t.Errorf("preview %v: dismiss left the automation state, err = %v", fromPreview, err)
+		}
+		for _, item := range m.allNavItems() {
+			if item.Kind == KindAutomationRun {
+				t.Errorf("preview %v: dismissed run still listed in Jobs", fromPreview)
+			}
+		}
+	}
+}
+
+func TestStoppedAutomationRunStaysInJobsAsFailed(t *testing.T) {
+	m := runningJobsModel(t)
+	previous := stopAutomation
+	stopAutomation = func(root, noteID string) error { return nil }
+	t.Cleanup(func() { stopAutomation = previous })
+	selectAutomationJob(t, &m)
+	m = press(t, m, runes("d"))
+	m = press(t, m, runes("y"))
+	listed := false
+	for _, item := range m.allNavItems() {
+		listed = listed || item.Kind == KindAutomationRun
+	}
+	if !listed {
+		t.Error("a stopped run should stay in Jobs until dismissed")
 	}
 }

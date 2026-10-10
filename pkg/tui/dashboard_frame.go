@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/automation"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -166,7 +166,7 @@ func (m Model) dashboardData() dashboardData {
 		groups:         m.groupNotes(),
 		pendingGroups:  m.getPendingGitGroups(),
 		drafts:         m.getJobDrafts(),
-		automationRuns: m.runningAutomations(),
+		automationRuns: m.automationJobRuns(),
 	}
 	data.jobsCount = len(data.drafts) + len(m.reviewRuns) + len(m.bragRuns) + len(data.automationRuns)
 	data.previousEnd = len(data.groups.previousDone)

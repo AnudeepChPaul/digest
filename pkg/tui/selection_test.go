@@ -3,9 +3,9 @@ package tui
 import (
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 )
 
 func selectionTestModel(t *testing.T) Model {

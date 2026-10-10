@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"

@@ -71,7 +71,9 @@ func renderModalFooter(items []footerItem, maxWidth int) string {
 	return strings.Join(renderedRows, "\n\n")
 }
 
-var archiveFooterItems = footerItemsFrom(archivedBindings())
+func (m Model) archiveFooterItems() []footerItem {
+	return footerItemsFrom(m.archivedBindings())
+}
 
 func (m Model) dashboardBodyHeight() int {
 	return m.height - lipgloss.Height(headerSection{}.Render(m)) - lipgloss.Height(m.renderFooter())

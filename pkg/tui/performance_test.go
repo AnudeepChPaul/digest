@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -174,13 +174,6 @@ func TestModalsSkipBuildingTheDashboard(t *testing.T) {
 	}
 }
 
-func TestMarkdownRendererIsReusedPerWidth(t *testing.T) {
-	first := markdownRendererFor(80)
-	if first == nil || markdownRendererFor(80) != first || markdownRendererFor(60) == first {
-		t.Error("renderers should be cached per width")
-	}
-}
-
 func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 	writes := 0
 	original := writeGitCache
@@ -221,9 +214,9 @@ func TestGitCacheIsWrittenOncePerSyncOffTheUIThread(t *testing.T) {
 func TestPRHistoryLoadsInTheBackground(t *testing.T) {
 	calls := 0
 	original := gitLogForFiles
-	gitLogForFiles = func(dir string, files []string) string {
+	gitLogForFiles = func(dir string, files []string) (string, error) {
 		calls++
-		return "abc123 touch the files"
+		return "abc123 touch the files", nil
 	}
 	t.Cleanup(func() { gitLogForFiles = original })
 	m := reviewTestModel(t)

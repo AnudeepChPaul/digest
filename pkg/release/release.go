@@ -17,6 +17,7 @@ const (
 )
 
 type Commit struct {
+	Hash    string
 	Subject string
 	Body    string
 }
@@ -25,7 +26,8 @@ const changelogTitle = "# Changelog\n\n"
 
 var (
 	conventionalSubject = regexp.MustCompile(`^(\w+)(?:\(([^)]+)\))?(!)?: (.+)$`)
-	releaseSubject      = regexp.MustCompile(`^chore: release v`)
+	releaseSubject      = regexp.MustCompile(`^(chore: release v|release:(patch|minor|major)$)`)
+	bookkeepingSubject  = regexp.MustCompile(`^(chore: (release|changelog|benchmark) v|release:(patch|minor|major)$)`)
 	breakingFooter      = regexp.MustCompile(`(?m)^BREAKING[ -]CHANGE: `)
 )
 
@@ -69,53 +71,35 @@ func NextLevel(commits []Commit) Level {
 	return level
 }
 
-func Changelog(version string, date time.Time, commits []Commit) string {
-	groups := []struct {
-		heading string
-		matches func(parsedCommit) bool
-		entries []string
-	}{
-		{heading: "Breaking changes", matches: func(c parsedCommit) bool { return c.breaking }},
-		{heading: "Features", matches: func(c parsedCommit) bool { return c.kind == "feat" }},
-		{heading: "Fixes", matches: func(c parsedCommit) bool { return c.kind == "fix" }},
-		{heading: "Performance", matches: func(c parsedCommit) bool { return c.kind == "perf" }},
-	}
-	for _, commit := range commits {
-		parsed, ok := parse(commit)
-		if !ok {
-			continue
-		}
-		entry := parsed.description
-		if parsed.scope != "" {
-			entry = parsed.scope + ": " + entry
-		}
-		for index := range groups {
-			if groups[index].matches(parsed) {
-				groups[index].entries = append(groups[index].entries, entry)
-				break
-			}
-		}
-	}
+func Changelog(version string, date time.Time, repoURL string, commits []Commit) string {
 	var section strings.Builder
 	fmt.Fprintf(&section, "## v%s — %s\n", version, date.Format("2006-01-02"))
-	for _, group := range groups {
-		if len(group.entries) == 0 {
+	listed := false
+	for _, commit := range commits {
+		if bookkeepingSubject.MatchString(commit.Subject) {
 			continue
 		}
-		fmt.Fprintf(&section, "\n### %s\n", group.heading)
-		for _, entry := range group.entries {
-			fmt.Fprintf(&section, "- %s\n", entry)
+		if !listed {
+			section.WriteString("\n### Changes\n")
+			listed = true
+		}
+		shortHash := commit.Hash[:min(7, len(commit.Hash))]
+		fmt.Fprintf(&section, "- [%s](%s/commit/%s) %s\n", shortHash, repoURL, commit.Hash, commit.Subject)
+		for line := range strings.SplitSeq(commit.Body, "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				fmt.Fprintf(&section, "  %s\n", trimmed)
+			}
 		}
 	}
 	return section.String()
 }
 
 func Prepend(existing, section string) string {
-	olderSections := strings.TrimPrefix(existing, changelogTitle)
+	olderSections := strings.TrimPrefix(existing, strings.TrimSpace(changelogTitle))
 	if strings.TrimSpace(olderSections) == "" {
 		return changelogTitle + section
 	}
-	return changelogTitle + section + "\n" + olderSections
+	return changelogTitle + section + "\n" + strings.TrimLeft(olderSections, "\n")
 }
 
 func LatestSection(changelog string) string {

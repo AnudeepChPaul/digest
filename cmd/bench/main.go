@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/benchmark"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/benchmark"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 const processStartRuns = 20

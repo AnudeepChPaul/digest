@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 const LaunchAgentLabel = "com.digest.notify"

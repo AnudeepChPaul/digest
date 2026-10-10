@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 var commandWaitDelay = 2 * time.Second

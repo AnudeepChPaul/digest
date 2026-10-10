@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func TestReviewCopyTextAddsFindingsBySeverity(t *testing.T) {

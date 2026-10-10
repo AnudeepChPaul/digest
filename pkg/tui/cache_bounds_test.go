@@ -2,22 +2,6 @@ package tui
 
 import "testing"
 
-func TestMarkdownRendererCacheStaysSmall(t *testing.T) {
-	for width := 40; width < 120; width++ {
-		markdownRendererFor(width)
-	}
-	markdownRenderersMu.Lock()
-	cached := len(markdownRenderers)
-	markdownRenderersMu.Unlock()
-	if cached > maxMarkdownRenderers {
-		t.Errorf("%d renderers cached after a resize drag", cached)
-	}
-	current := markdownRendererFor(80)
-	if markdownRendererFor(80) != current {
-		t.Error("the current width should stay cached")
-	}
-}
-
 func TestRelatedHistoryKeepsOnlyListedPRs(t *testing.T) {
 	m := reviewTestModel(t)
 	listed := m.git.ghPendingPRs[0].URL

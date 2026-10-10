@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/paths"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -21,7 +21,7 @@ func stubExport(t *testing.T) (string, *string) {
 	exportDir := filepath.Join(t.TempDir(), "Downloads")
 	copied := new(string)
 	originalDir, originalCopy := searchExportDir, copyExportPath
-	searchExportDir = func() string { return exportDir }
+	searchExportDir = func() (string, error) { return exportDir, nil }
 	copyExportPath = func(text string) error { *copied = text; return nil }
 	t.Cleanup(func() { searchExportDir, copyExportPath = originalDir, originalCopy })
 	return exportDir, copied

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/automation"
 )
 
 func TestDeletingANoteRemovesItsAutomationFiles(t *testing.T) {

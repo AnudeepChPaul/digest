@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,7 +21,7 @@ func searchTestModel(t *testing.T) Model {
 		{ID: "b", Summary: "Standup notes", Body: "retried the Flaky console test twice", Source: model.SourceStandup, Status: model.StatusDone, Updated: now.Add(-48 * time.Hour)},
 		{ID: "c", Summary: "Approved: console#12", Source: model.SourcePRReview, Subject: "console", Status: model.StatusDone, Updated: now.Add(-24 * time.Hour)},
 		{ID: "d", Summary: "Archived flaky", Source: model.SourceManual, Status: model.StatusArchived, Updated: now},
-		{ID: "e", Summary: "Inbox flaky", Source: model.SourceManual, Status: model.StatusInbox, Updated: now},
+		{ID: "e", Summary: "Inbox flaky", Source: model.SourceManual, Status: model.StatusArchived, Updated: now},
 	}
 	return press(t, m, runes("/"))
 }
@@ -52,7 +52,8 @@ func TestParseSearchQuery(t *testing.T) {
 func TestSearchResultsFilterAndSort(t *testing.T) {
 	m := searchTestModel(t)
 	for query, want := range map[string]string{
-		"":                   "a,c,b",
+		"":                   "",
+		"   ":                "",
 		"flaky":              "a,b",
 		"tag:pr-review":      "c",
 		"tag:manual":         "a",
@@ -131,7 +132,7 @@ func TestSearchPagingClamps(t *testing.T) {
 	for index := range 60 {
 		m.notes = append(m.notes, &model.Note{ID: fmt.Sprint(index), Summary: fmt.Sprintf("note %d", index), Status: model.StatusActive, Updated: time.Now().Add(-time.Duration(index) * time.Minute)})
 	}
-	m = press(t, m, runes("/"))
+	m = typeQuery(t, press(t, m, runes("/")), "note")
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
 	if m.searchSelected <= 1 {
 		t.Errorf("pgdown selected = %d", m.searchSelected)
@@ -162,12 +163,13 @@ func TestSearchPagingClamps(t *testing.T) {
 func TestSearchPreviewCycleAndEdit(t *testing.T) {
 	m := typeQuery(t, searchTestModel(t), "flaky")
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.mode != ViewSearchPreview || m.searchPreviewNote().ID != "a" {
+	if m.mode != ViewPreview || !m.searchPreviewing || m.searchPreviewNote().ID != "a" {
 		t.Fatalf("mode = %d", m.mode)
 	}
 	m = press(t, m, runes("n"))
-	if m.searchPreviewNote().ID != "b" || !strings.Contains(m.View(), "SEARCH PREVIEW") {
-		t.Fatalf("after n = %s", m.searchPreviewNote().ID)
+	view := stripANSI(m.View())
+	if m.searchPreviewNote().ID != "b" || !strings.Contains(view, "PREVIEW NOTE") || strings.Contains(view, "SEARCH PREVIEW") || !strings.Contains(view, "retried the Flaky console test") {
+		t.Fatalf("after n = %s:\n%s", m.searchPreviewNote().ID, view)
 	}
 	m = press(t, m, runes("n"))
 	m = press(t, m, runes("p"))
@@ -179,21 +181,71 @@ func TestSearchPreviewCycleAndEdit(t *testing.T) {
 		t.Fatalf("mode = %d", m.mode)
 	}
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if m.mode != ViewSearchPreview {
+	if m.mode != ViewPreview || m.searchPreviewNote().ID != "a" {
 		t.Fatalf("after save mode = %d", m.mode)
 	}
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.mode != ViewSearchPreview {
+	if m.mode != ViewPreview || !m.searchPreviewing {
+		t.Fatalf("after cancel mode = %d", m.mode)
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != ViewSearch || m.searchPreviewing {
+		t.Fatalf("esc preview mode = %d", m.mode)
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != ViewDashboard {
+		t.Fatalf("esc search mode = %d", m.mode)
+	}
+}
+
+func TestSearchPreviewUsesTheNotePreviewKeys(t *testing.T) {
+	m := typeQuery(t, searchTestModel(t), "flaky")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = press(t, m, runes("n"))
+	var shown []string
+	for _, item := range footerItemsFrom(m.previewBindings()) {
+		shown = append(shown, item.key+" "+item.action)
+	}
+	want := "enter edit,space active,esc|tab close,p|n prev/next,ctrl+y copy"
+	if strings.Join(shown, ",") != want {
+		t.Errorf("footer = %q, want %q", strings.Join(shown, ","), want)
+	}
+}
+
+func TestSpaceInTheSearchPreviewTogglesTheResult(t *testing.T) {
+	m := typeQuery(t, searchTestModel(t), "flaky")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m = press(t, m, runes(" "))
+	if m.notes[0].Status != model.StatusDone || m.mode != ViewPreview || !m.searchPreviewing {
+		t.Fatalf("status = %s mode = %d", m.notes[0].Status, m.mode)
+	}
+}
+
+func TestEnterOnASearchResultOpensItsEditorOverItsPreview(t *testing.T) {
+	m := typeQuery(t, searchTestModel(t), "flaky")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != ViewEdit || m.currentNote.ID != "b" {
+		t.Fatalf("mode = %d", m.mode)
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != ViewPreview || !m.searchPreviewing || m.searchPreviewNote().ID != "b" {
 		t.Fatalf("after cancel mode = %d", m.mode)
 	}
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != ViewSearch {
 		t.Fatalf("esc preview mode = %d", m.mode)
 	}
-	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.mode != ViewDashboard {
-		t.Fatalf("esc search mode = %d", m.mode)
+}
+
+func TestBlankSearchShowsNoResults(t *testing.T) {
+	m := typeQuery(t, searchTestModel(t), "  ")
+	if results := m.searchResults(); len(results) != 0 {
+		t.Fatalf("results = %s", resultIDs(results))
+	}
+	if strings.Contains(stripANSI(m.View()), "Fix flaky test") {
+		t.Error("blank query listed notes")
 	}
 }
 
@@ -256,19 +308,19 @@ func TestSearchPreviewDelete(t *testing.T) {
 	m := selectionTestModel(t)
 	now := time.Now()
 	m.notes = []*model.Note{savedNote("a", "alpha", now), savedNote("b", "beta", now.Add(-time.Hour))}
-	m = press(t, m, runes("/"))
+	m = typeQuery(t, press(t, m, runes("/")), "a")
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if !strings.Contains(stripANSI(m.View()), "Delete") {
 		t.Error("footer missing delete")
 	}
 	m = press(t, m, runes("d"))
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.mode != ViewSearchPreview || m.notes[0].Status != model.StatusActive {
+	if m.mode != ViewPreview || !m.searchPreviewing || m.notes[0].Status != model.StatusActive {
 		t.Fatalf("cancel mode = %d", m.mode)
 	}
 	m = press(t, m, runes("d"))
 	m = press(t, m, runes("y"))
-	if m.notes[0].Status != model.StatusArchived || m.mode != ViewSearchPreview || m.searchPreviewNote().ID != "b" {
+	if m.notes[0].Status != model.StatusArchived || m.mode != ViewPreview || m.searchPreviewNote().ID != "b" {
 		t.Fatalf("after delete mode = %d", m.mode)
 	}
 	m = press(t, m, runes("d"))
@@ -313,5 +365,27 @@ func TestDashboardPreviewDelete(t *testing.T) {
 	m.afterPreviewArchive(ViewPreview)
 	if m.mode != ViewDashboard || m.selected != len(m.allNavItems())-1 {
 		t.Errorf("no next item: mode = %d selected = %d", m.mode, m.selected)
+	}
+}
+
+func TestDateFiltersMatchCreatedOrUpdated(t *testing.T) {
+	m := selectionTestModel(t)
+	now := time.Now()
+	christmas := time.Date(2026, 12, 24, 15, 0, 0, 0, time.Local)
+	m.notes = []*model.Note{
+		{ID: "created-recent", Summary: "created recently", Source: model.SourceManual, Status: model.StatusActive, Created: now.AddDate(0, 0, -2), Updated: now.AddDate(0, 0, -40)},
+		{ID: "updated-recent", Summary: "updated recently", Source: model.SourceManual, Status: model.StatusActive, Created: now.AddDate(0, 0, -40), Updated: now.AddDate(0, 0, -2)},
+		{ID: "both-old", Summary: "both old", Source: model.SourceManual, Status: model.StatusActive, Created: now.AddDate(0, 0, -40), Updated: now.AddDate(0, 0, -30)},
+		{ID: "created-xmas", Summary: "created on christmas", Source: model.SourceManual, Status: model.StatusDone, Created: christmas, Updated: christmas.AddDate(0, 0, 3)},
+	}
+	for query, want := range map[string]string{
+		"date:7d":         "updated-recent,created-recent",
+		"date:24-12-2026": "created-xmas",
+		"date:27-12-2026": "created-xmas",
+	} {
+		m.searchInput.SetValue(query)
+		if got := resultIDs(m.searchResults()); got != want {
+			t.Errorf("%q = %q, want %q", query, got, want)
+		}
 	}
 }

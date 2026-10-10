@@ -5,12 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m *Model) clampScreenSelection() {
@@ -50,6 +51,7 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case ViewEdit, ViewBragEdit, ViewAutomationEdit:
 		*m.editor, cmd = m.editor.Update(msg)
+		m.editorNotice = ""
 		m.editorRevision++
 		return m, cmd
 	case ViewBragView:
@@ -63,9 +65,6 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchNotice = ""
 		}
 		return m, cmd
-	case ViewSearchPreview:
-		scrollViewport(&m.previewViewport, msg.String())
-		return m, nil
 	case ViewRejectComment:
 		*m.rejectInput, cmd = m.rejectInput.Update(msg)
 		return m, cmd
@@ -88,6 +87,9 @@ func (m Model) forwardUnboundKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) selectedNavItem() (NavItem, bool) {
+	if m.previewingSearch() {
+		return m.searchPreviewItem()
+	}
 	navItems := m.allNavItems()
 	if len(navItems) > 0 && m.selected < len(navItems) {
 		return navItems[m.selected], true
@@ -104,34 +106,34 @@ func (m Model) countCtrlCToQuit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
-	return m, tickCtrlCResetCmd()
+	m.ctrlCPressSequence++
+	return m, tickCtrlCResetCmd(m.ctrlCPressSequence)
+}
+
+func (m Model) dashboardPageSize() int {
+	return max(m.dashboardBodyHeight(), 5)
+}
+
+func (m Model) moveDashboardSelection(delta int) (tea.Model, tea.Cmd) {
+	m.selected = max(min(m.selected+delta, len(m.allNavItems())-1), 0)
+	m.updateScrollOffset()
+	return m, nil
 }
 
 func (m Model) dashboardHalfPageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	navItems := m.allNavItems()
-	bodyHeight := m.dashboardBodyHeight()
-	if bodyHeight < 5 {
-		bodyHeight = 5
-	}
-	m.selected += bodyHeight / 2
-	if len(navItems) > 0 && m.selected >= len(navItems) {
-		m.selected = len(navItems) - 1
-	}
-	m.updateScrollOffset()
-	return m, nil
+	return m.moveDashboardSelection(m.dashboardPageSize() / 2)
 }
 
 func (m Model) dashboardHalfPageUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	bodyHeight := m.dashboardBodyHeight()
-	if bodyHeight < 5 {
-		bodyHeight = 5
-	}
-	m.selected -= bodyHeight / 2
-	if m.selected < 0 {
-		m.selected = 0
-	}
-	m.updateScrollOffset()
-	return m, nil
+	return m.moveDashboardSelection(-m.dashboardPageSize() / 2)
+}
+
+func (m Model) dashboardPageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveDashboardSelection(m.dashboardPageSize())
+}
+
+func (m Model) dashboardPageUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveDashboardSelection(-m.dashboardPageSize())
 }
 
 func (m Model) jumpToToday(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -141,7 +143,7 @@ func (m Model) jumpToToday(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.currentDate = time.Now()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
+	return m, tea.Batch(m.scheduleDaySync(), m.loadNotesCmd)
 }
 
 func (m Model) openSelectedPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -156,15 +158,15 @@ func (m Model) openSelectedItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun || item.Kind == KindAutomationRun {
+	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun || item.Kind == KindAutomationRun || item.GitRepo != nil {
 		return m.openPreview(item)
 	}
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
-		_ = openURL(item.PendingGitPR.URL)
+		m.openLink(item.PendingGitPR.URL)
 		return m, nil
 	}
 	if item.Kind == KindMyPR && item.MyPR != nil {
-		_ = openURL(item.MyPR.Ref.URL)
+		m.openLink(item.MyPR.Ref.URL)
 		return m, nil
 	}
 	if item.Note != nil {
@@ -190,15 +192,18 @@ func (m Model) previousDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
+	return m, tea.Batch(m.scheduleDaySync(), m.loadNotesCmd)
 }
 
 func (m Model) nextDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !startOfDay(m.currentDate).Before(startOfDay(time.Now().AddDate(0, 0, 1))) {
+		return m, nil
+	}
 	m.currentDate = m.currentDate.AddDate(0, 0, 1)
 	m.resetCommitsForDate()
 	m.selected = 0
 	m.scrollOffset = 0
-	return m, tea.Batch(m.scheduleDaySync(), m.reloadNotesForDay())
+	return m, tea.Batch(m.scheduleDaySync(), m.loadNotesCmd)
 }
 
 func (m Model) dashboardCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -222,44 +227,28 @@ func (m Model) openSearch(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = ViewSearch
 	m.keepSearchSelectionVisible()
 	m.searchInput.Focus()
-	return m, tea.Batch(textinput.Blink, m.ensureAllNotes())
+	return m, tea.Batch(textinput.Blink, m.browseNotesCmd())
 }
 
 func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.jobToAbort != "" {
-		jobName := m.jobToAbort
-		m.jobToAbort = ""
-		m.mode = m.deleteReturnMode
-		if m.mode == ViewPreview {
-			m.updatePreviewViewport()
-		}
-		return m, abortJobCmd(jobName)
-	}
-
-	if m.jobToExecute != "" {
-		jobName := m.jobToExecute
-		m.jobToExecute = ""
-		execErr := executeJobBackground(m.cfg, jobName)
-		m.mode = m.deleteReturnMode
-		if m.mode == ViewPreview {
-			m.updatePreviewViewport()
-		}
-		if execErr != nil {
-			m.showError("JOB ERROR", execErr)
-		}
-		m.refreshJobStates()
-		return m, tea.Batch(m.ensureJobLogRefresh(), m.ensureSyncPulse(), m.ensureRunStatePoll())
-	}
-
-	if m.bragRunToStop != nil || m.automationRunToStop != nil {
-		return m.confirmStopRun()
+	if next, cmd, handled := m.confirmJobPrompt(); handled {
+		return next, cmd
 	}
 
 	targets := m.deleteTargetNotes
 	returnMode := m.deleteReturnMode
+	restoring := m.restoreOnConfirm
+	m.clearPendingConfirms()
 	m.archivedSelectedMap = make(map[int]bool)
 	m.deleteTargetNotes = nil
+	if restoring {
+		return m.restoreArchivedNotes(targets)
+	}
 	m.mode = returnMode
+	if targets = m.dropUnsavedNotes(targets); len(targets) == 0 {
+		m.afterPreviewArchive(returnMode)
+		return m, nil
+	}
 	if returnMode == ViewArchived {
 		return m, m.deleteNotesCmd(targets...)
 	}
@@ -268,7 +257,7 @@ func (m Model) confirmDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		n.Updated = m.currentDate
 	}
 	m.afterPreviewArchive(returnMode)
-	if returnMode == ViewPreview || returnMode == ViewSearchPreview {
+	if returnMode == ViewPreview {
 		return m, m.saveNotesFromPreviewCmd(targets...)
 	}
 	return m, m.saveNotesCmd(targets...)
@@ -281,28 +270,35 @@ func (m Model) cancelDelete(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) closePreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) closePreview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.previewingSearch() {
+		return m.closeSearchPreview(msg)
+	}
 	m.mode = ViewDashboard
 	return m, nil
 }
 
 func (m Model) previewPrevious(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.previewingSearch() {
+		m.showSearchPreviewAt(m.searchPreviewIndex(m.searchResults()) - 1)
+		return m, nil
+	}
 	if m.selected > 0 {
 		m.selected--
-		m.updateScrollOffset()
-		m.resetReviewView()
-		m.updatePreviewViewport()
+		return m.landPreviewOnSelection()
 	}
 	return m, m.changesSinceReviewCmd(m.currentPRItem())
 }
 
 func (m Model) previewNext(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.previewingSearch() {
+		m.showSearchPreviewAt(m.searchPreviewIndex(m.searchResults()) + 1)
+		return m, nil
+	}
 	navItems := m.allNavItems()
 	if len(navItems) > 0 && m.selected < len(navItems)-1 {
 		m.selected++
-		m.updateScrollOffset()
-		m.resetReviewView()
-		m.updatePreviewViewport()
+		return m.landPreviewOnSelection()
 	}
 	return m, m.changesSinceReviewCmd(m.currentPRItem())
 }
@@ -318,18 +314,16 @@ func (m Model) copyPreviewItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	} else if item.Note != nil {
 		textToCopy = fmt.Sprintf("%s\n\n%s", item.Note.Summary, item.Note.Body)
 	} else if item.Draft != nil {
-		if logText, _ := latestJobOutput(item.Draft.Name, m.jobDryRunOutputFor(item.Draft.Name)); logText != "" {
-			textToCopy = logText
-		} else {
-			textToCopy = item.Draft.Name
-		}
+		textToCopy, _ = latestJobOutput(item.Draft.Name, m.jobDryRunOutputFor(item.Draft.Name))
 	} else if item.PendingGitPR != nil {
 		_, findings := m.loadFindings(item.PendingGitPR)
 		textToCopy = reviewCopyText(item.PendingGitPR, findings)
 	} else if item.GitRepo != nil {
 		textToCopy = item.GitRepo.Name
+	} else if item.MyPR != nil || item.ReviewRun != nil || item.BragRun != nil || item.AutomationRun != nil {
+		textToCopy = m.previewPlainText
 	}
-	_ = copyToClipboard(strings.TrimSpace(textToCopy))
+	m.copyText(strings.TrimSpace(textToCopy))
 	return m, nil
 }
 
@@ -378,11 +372,11 @@ func (m Model) previewEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.runSelectedJob(tea.KeyMsg{})
 	}
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
-		_ = openURL(item.PendingGitPR.URL)
+		m.openLink(item.PendingGitPR.URL)
 		return m, nil
 	}
 	if item.Kind == KindMyPR && item.MyPR != nil {
-		_ = openURL(item.MyPR.Ref.URL)
+		m.openLink(item.MyPR.Ref.URL)
 		return m, nil
 	}
 	if item.Note != nil {
@@ -404,10 +398,6 @@ func (m Model) switchPreviewTab(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.refreshPreview(), nil
 }
 
-func (m Model) ignoreKey(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return m, nil
-}
-
 func (m Model) exportSearch(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	results := m.searchResults()
 	if len(results) == 0 {
@@ -420,7 +410,7 @@ func (m Model) exportSearch(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) closeSearch(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.searchNotice = ""
 	m.searchInput.Blur()
-	m.mode = ViewDashboard
+	m.searchPreviewing, m.mode = false, ViewDashboard
 	return m, nil
 }
 
@@ -448,62 +438,21 @@ func (m Model) searchHalfPageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.moveSearchSelection(max(1, m.searchPageSize()/2)), nil
 }
 
-func (m Model) openSearchPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if len(m.searchResults()) == 0 {
-		return m, nil
-	}
-	m.searchInput.Blur()
-	m.mode = ViewSearchPreview
-	m.showSearchPreviewAt(m.searchSelected)
-	return m, nil
-}
-
-func (m Model) closeSearchPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.mode = ViewSearch
-	m.keepSearchSelectionVisible()
-	m.searchInput.Focus()
-	return m, textinput.Blink
-}
-
-func (m Model) searchPreviewNext(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.showSearchPreviewAt(m.searchPreviewIndex(m.searchResults()) + 1)
-	return m, nil
-}
-
-func (m Model) searchPreviewPrevious(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.showSearchPreviewAt(m.searchPreviewIndex(m.searchResults()) - 1)
-	return m, nil
-}
-
-func (m Model) editSearchResult(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	note := m.searchPreviewNote()
-	if note == nil {
-		return m, nil
-	}
-	return m.beginNoteEdit(note, ViewSearchPreview)
-}
-
-func (m Model) deleteSearchResult(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if note := m.searchPreviewNote(); note != nil {
-		m.searchSelected = m.searchPreviewIndex(m.searchResults())
-		m.beginNoteDelete(note, ViewSearchPreview)
-	}
-	return m, nil
-}
-
-func (m Model) copySearchResult(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if note := m.searchPreviewNote(); note != nil {
-		_ = copyToClipboard(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
-	}
-	return m, nil
-}
-
 func (m Model) dismissError(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = m.errorReturnMode
 	m.errorTitle = ""
 	m.errorLines = nil
+	m.messageLogExpanded = false
 	if m.mode == ViewArchived {
 		m.refreshArchivedViewport()
 	}
 	return m, nil
+}
+
+func plainText(rendered string) string {
+	lines := strings.Split(ansi.Strip(rendered), "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(line, " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

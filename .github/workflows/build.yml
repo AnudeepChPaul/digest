@@ -1,0 +1,36 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths: [.version]
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DIGEST_DEPLOY_KEY }}
+      - uses: jdx/mise-action@v5
+      - run: |
+          mise run vet
+          mise run test
+      - run: |
+          release_tag="v$(cat .version)"
+          if git rev-parse -q --verify "refs/tags/$release_tag" > /dev/null; then
+            echo "$release_tag already tagged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -m "digest $release_tag" "$release_tag"
+          git push origin "$release_tag"

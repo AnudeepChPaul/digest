@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/notify"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -171,18 +172,22 @@ func TestNotifyAcceptsYToConfirm(t *testing.T) {
 	}
 }
 
-func TestNotifyRejectsAnIntervalOverThreeDays(t *testing.T) {
+func TestNotifyRefusesKeysThatMakeTheIntervalZeroOrOverThreeDays(t *testing.T) {
 	m, _ := actionsTestModel(t)
 	m, _ = pressKey(t, m, "@")
 	m, _ = pressKey(t, m, "enter")
-	m = typeText(t, m, "4d")
+	for typed, kept := range map[string]string{"4d": "4", "73h": "73", "4321m": "432m", "0": "", "3d": "3d", "72h": "72h", "4320m": "4320m"} {
+		m.notifyInput.SetValue("")
+		if m = typeText(t, m, typed); m.notifyInput.Value() != kept {
+			t.Errorf("typing %q kept %q, want %q", typed, m.notifyInput.Value(), kept)
+		}
+	}
+	m.notifyInput.SetValue("")
+	m = typeText(t, m, "73")
 	m, cmd := pressKey(t, m, "enter")
 	m = applyMsgs(t, m, cmd)
-	if m.mode != ViewNotifyInput || m.notifyNotice == "" {
-		t.Errorf("mode %v notice %q, want input with a notice", m.mode, m.notifyNotice)
-	}
-	if line := noteLine(m, "Flaky deploys"); !strings.Contains(line, "@notify:4d") || !strings.Contains(line, "at most 3d") {
-		t.Errorf("the error should show on the row: %q", line)
+	if m.mode != ViewNotifyInput || !strings.Contains(noteLine(m, "Flaky deploys"), "at most 3d") {
+		t.Errorf("73 hours should still be refused on enter: mode %v line %q", m.mode, noteLine(m, "Flaky deploys"))
 	}
 	if _, found := notify.Load(m.cfg.Root(), "note-1"); found {
 		t.Errorf("an invalid interval should not write an entry")
@@ -251,33 +256,52 @@ func TestCancellingAutomateFromTheMenuReturnsToTheDashboard(t *testing.T) {
 	}
 }
 
-func TestFrequentlyUsedActionsComeFirst(t *testing.T) {
+func TestActionMenuFollowsTheSavedOrder(t *testing.T) {
+	cases := []struct {
+		order []string
+		want  string
+	}{
+		{nil, "notify,jira"},
+		{[]string{"jira", "notify"}, "jira,notify"},
+		{[]string{"ghost", "jira"}, "jira,notify"},
+		{[]string{"ghost"}, "notify,jira"},
+	}
+	for _, testCase := range cases {
+		m, _ := actionsTestModel(t)
+		m.appState.ActionMenuOrder = testCase.order
+		if m, _ = pressKey(t, m, "@"); strings.Join(actionNames(m), ",") != testCase.want {
+			t.Errorf("order %v: actions = %v, want %s", testCase.order, actionNames(m), testCase.want)
+		}
+	}
+}
+
+func TestChoosingAnActionKeepsTheOrderAndWritesNoUsageFile(t *testing.T) {
 	m, _ := actionsTestModel(t)
-	for round, keys := range [][]string{{"@", "down", "enter"}, {"@", "enter"}} {
-		var cmd tea.Cmd
+	for _, keys := range [][]string{{"@", "down", "enter", "esc"}, {"@", "down", "enter", "esc"}} {
 		for _, key := range keys {
+			var cmd tea.Cmd
 			m, cmd = pressKey(t, m, key)
+			m = applyMsgs(t, m, cmd)
 		}
-		if m.mode != ViewAutomationConfirm {
-			t.Fatalf("round %d: mode %v, want automation confirm", round, m.mode)
-		}
-		m = applyMsgs(t, m, cmd)
-		m, _ = pressKey(t, m, "esc")
 	}
-	m, _ = pressKey(t, m, "@")
-	if strings.Join(actionNames(m), ",") != "jira,notify" {
-		t.Errorf("actions = %v, want jira first after using it most", actionNames(m))
+	if m, _ = pressKey(t, m, "@"); strings.Join(actionNames(m), ",") != "notify,jira" {
+		t.Errorf("actions = %v, want the default order", actionNames(m))
 	}
-	data, err := os.ReadFile(filepath.Join(m.cfg.CacheDir(), "action-usage.json"))
-	if err != nil || !strings.Contains(string(data), `"jira": 2`) {
-		t.Errorf("usage file = %s, %v", data, err)
+	if _, err := os.Stat(filepath.Join(m.cfg.CacheDir(), "action-usage.json")); !os.IsNotExist(err) {
+		t.Errorf("no usage file should be written: %v", err)
 	}
-	reloaded := NewModel(m.cfg, nil)
-	reloaded.notes = m.notes
-	selectNote(t, &reloaded, "note-1")
-	reloaded, _ = pressKey(t, reloaded, "@")
-	if strings.Join(actionNames(reloaded), ",") != "jira,notify" {
-		t.Errorf("after restart actions = %v, want the saved order", actionNames(reloaded))
+}
+
+func TestRunningAutomationsDoNotHideTheMenuItems(t *testing.T) {
+	m, _ := actionsTestModel(t)
+	m.automationRuns = map[string]automation.Run{"note-1": {Status: automation.RunRunning}}
+	if m, _ = pressKey(t, m, "@"); strings.Join(actionNames(m), ",") != "notify,jira" {
+		t.Errorf("actions = %v while an automation runs", actionNames(m))
+	}
+	m, _ = pressKey(t, m, "esc")
+	m.noteByID("note-1").Automated = "ticket"
+	if m, _ = pressKey(t, m, "@"); strings.Join(actionNames(m), ",") != "notify" {
+		t.Errorf("an automated note offers no automations: %v", actionNames(m))
 	}
 }
 
@@ -398,9 +422,9 @@ func TestNotifyEditStaysVisibleOnALongSummary(t *testing.T) {
 	if notifyAt, ageAt := strings.Index(line, "@notify:2"), strings.Index(line, "#manual"); notifyAt < 0 || notifyAt > ageAt {
 		t.Errorf("the input should sit in the tag area before the source tag: %q", line)
 	}
-	m = typeText(t, m, "0d")
+	m = typeText(t, m, "00")
 	m, _ = pressKey(t, m, "enter")
-	if line := noteLine(m, "Gathered"); !strings.Contains(line, "@notify:20d") || !strings.Contains(line, "at most 3d") {
+	if line := noteLine(m, "Gathered"); !strings.Contains(line, "@notify:200") || !strings.Contains(line, "at most 3d") {
 		t.Errorf("the error should show beside the tag: %q", line)
 	}
 }
@@ -445,10 +469,10 @@ func TestNotifyOffRemovesTheReminderOnly(t *testing.T) {
 		t.Errorf("no reminder yet, so no off action: %v", names)
 	}
 	m = setNotify(t, m, "2")
-	m.actionUsage = map[string]int{"jira": 9}
+	m.appState.ActionMenuOrder = []string{"jira", "notify"}
 	names := offeredActionNames(m)
-	if len(names) < 2 || names[0] != "notify:off" || names[1] != "jira" {
-		t.Fatalf("notify:off should come first, ahead of more used actions: %v", names)
+	if strings.Join(names, ",") != "notify:off,notify,jira" {
+		t.Fatalf("notify:off should come first, then notify: %v", names)
 	}
 	m, _ = pressKey(t, m, "@")
 	m, cmd := pressKey(t, m, "enter")
@@ -459,8 +483,31 @@ func TestNotifyOffRemovesTheReminderOnly(t *testing.T) {
 	if line := noteLine(m, "Flaky deploys"); strings.Contains(line, "@notify") || m.noteByID("note-1").Status == model.StatusDone {
 		t.Errorf("tag should go and the note stay pending: %q", line)
 	}
-	if m.actionUsage["notify:off"] != 0 {
-		t.Errorf("notify:off should not count as usage")
+}
+
+func TestNotifyOnARemindingNoteRewritesItsInterval(t *testing.T) {
+	m, _ := actionsTestModel(t)
+	m = setNotify(t, m, "2")
+	first, _ := notify.Load(m.cfg.Root(), "note-1")
+	m, _ = pressKey(t, m, "@")
+	m, _ = pressKey(t, m, "j")
+	m, _ = pressKey(t, m, "enter")
+	if m.mode != ViewNotifyInput || m.notifyInput.Value() != "2h" {
+		t.Fatalf("@notify should open the input with the current interval: mode %v value %q", m.mode, m.notifyInput.Value())
+	}
+	m.notifyInput.SetValue("")
+	m = typeText(t, m, "45m")
+	m, cmd := pressKey(t, m, "enter")
+	m = applyMsgs(t, m, cmd)
+	entry, found := notify.Load(m.cfg.Root(), "note-1")
+	if !found || entry.Interval != "45m" || entry.NotifiedAt.Before(first.NotifiedAt) {
+		t.Errorf("entry = %+v found %v", entry, found)
+	}
+	if entries, _ := notify.List(m.cfg.Root()); len(entries) != 1 {
+		t.Errorf("the reminder file should be rewritten in place, got %d entries", len(entries))
+	}
+	if line := noteLine(m, "Flaky deploys"); !strings.Contains(line, "@notify:45m") {
+		t.Errorf("row should show the new interval: %q", line)
 	}
 }
 
@@ -480,5 +527,39 @@ func TestActionMenuOpensAtTheRightEdgeLikeTheHintPill(t *testing.T) {
 	row := slicesIndex(lines, "Flaky deploys")
 	if row < 0 || !strings.HasSuffix(lines[row+1], "╮ │") || !strings.Contains(lines[row+2], "› @") || !strings.HasSuffix(lines[row+2], " │ │") {
 		t.Fatalf("action menu should sit at the right edge under the row:\n%s", strings.Join(lines[max(row, 0):min(row+5, len(lines))], "\n"))
+	}
+}
+
+func TestNotifyFromThePreviewReturnsToThePreview(t *testing.T) {
+	m, _ := actionsTestModel(t)
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.mode != ViewPreview {
+		t.Fatalf("mode %v", m.mode)
+	}
+	m, _ = pressKey(t, m, ".")
+	m, _ = pressKey(t, m, "enter")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewPreview {
+		t.Errorf("esc in the notify input: mode %v", m.mode)
+	}
+	m, _ = pressKey(t, m, ".")
+	m, _ = pressKey(t, m, "enter")
+	m = typeText(t, m, "2")
+	m, cmd := pressKey(t, m, "enter")
+	if m = applyMsgs(t, m, cmd); m.mode != ViewPreview {
+		t.Errorf("saving notify: mode %v", m.mode)
+	}
+	if _, found := notify.Load(m.cfg.Root(), "note-1"); !found {
+		t.Errorf("the reminder should be saved")
+	}
+	m, _ = pressKey(t, m, ".")
+	if names := actionNames(m); len(names) == 0 || names[0] != actionNameNotifyOff {
+		t.Fatalf("actions = %v", names)
+	}
+	m, cmd = pressKey(t, m, "enter")
+	if m = applyMsgs(t, m, cmd); m.mode != ViewPreview {
+		t.Errorf("notify:off: mode %v", m.mode)
+	}
+	if _, found := notify.Load(m.cfg.Root(), "note-1"); found {
+		t.Errorf("notify:off should remove the reminder")
 	}
 }

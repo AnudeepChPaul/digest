@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -58,19 +58,105 @@ func myPRsSeenPath(root string) string {
 	return filepath.Join(root, ".state", "my-prs-seen.json")
 }
 
-func loadMyPRsSeen(path string) (map[string]myPRSeen, error) {
+func loadMyPRsSeen(path string) (map[string]myPRSeen, bool, error) {
 	seen := map[string]myPRSeen{}
 	encoded, err := system.Read(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return seen, nil
+		return seen, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := json.Unmarshal(encoded, &seen); err != nil {
-		return map[string]myPRSeen{}, nil
+		return map[string]myPRSeen{}, true, nil
 	}
-	return seen, nil
+	return seen, false, nil
+}
+
+const myPRUpdateTimeFormat = "2006-01-02 15:04"
+
+type loggedMyPRUpdate struct {
+	at   time.Time
+	text string
+}
+
+func loggedMyPRUpdates(existingUpdates string) []loggedMyPRUpdate {
+	var logged []loggedMyPRUpdate
+	for _, line := range strings.Split(existingUpdates, "\n") {
+		entry, isEntry := strings.CutPrefix(strings.TrimSpace(line), "- ")
+		if !isEntry || len(entry) <= len(myPRUpdateTimeFormat) {
+			continue
+		}
+		at, err := time.ParseInLocation(myPRUpdateTimeFormat, entry[:len(myPRUpdateTimeFormat)], time.Local)
+		if err != nil {
+			continue
+		}
+		logged = append(logged, loggedMyPRUpdate{at: at.Add(time.Minute - time.Nanosecond), text: strings.TrimSpace(entry[len(myPRUpdateTimeFormat):])})
+	}
+	return logged
+}
+
+func seenFromNote(note *model.Note, pr review.QueuedPR) myPRSeen {
+	head, existingUpdates := splitMyPRBody(note.Body)
+	description, _ := strings.CutPrefix(head, pr.Ref.URL+"\n\n## Description\n\n")
+	if description == "_No description._" {
+		description = ""
+	}
+	title, _ := strings.CutPrefix(note.Summary, myPRNoteSummary(pr.Ref, ""))
+	seen := myPRSeen{Ref: pr.Ref, Title: title, Body: description, IsDraft: pr.IsDraft}
+	var newest time.Time
+	for _, update := range loggedMyPRUpdates(existingUpdates) {
+		newest = maxTime(newest, update.at)
+		for state, text := range ciUpdateText {
+			if update.text == text && seen.CIState == "" {
+				seen.CIState = state
+			}
+		}
+		if update.text == "New comment" {
+			seen.LastReplyAt = maxTime(seen.LastReplyAt, update.at)
+		}
+		for _, format := range reviewUpdateText {
+			if author, found := strings.CutPrefix(update.text, strings.TrimSuffix(format, "%s")); found {
+				if seen.Reviews == nil {
+					seen.Reviews = map[string]time.Time{}
+				}
+				seen.Reviews[author] = maxTime(seen.Reviews[author], update.at)
+			}
+		}
+	}
+	if seen.LastReplyAt.IsZero() {
+		seen.LastReplyAt = newest
+	}
+	return seen
+}
+
+func maxTime(first, second time.Time) time.Time {
+	if second.After(first) {
+		return second
+	}
+	return first
+}
+
+func rememberOpenMyPRNotes(seen map[string]myPRSeen, finder *prNoteFinder) error {
+	if !finder.diskIndexed {
+		if err := finder.indexDisk(); err != nil {
+			return err
+		}
+	}
+	for _, note := range finder.index.byRef {
+		if note.Source != model.SourceMyPR || note.Status != model.StatusActive {
+			continue
+		}
+		url, _, _ := strings.Cut(note.Body, "\n")
+		ref, err := review.ParsePRURL(strings.TrimSpace(url))
+		if err != nil {
+			continue
+		}
+		if _, known := seen[ref.URL]; !known {
+			seen[ref.URL] = myPRSeen{Ref: ref}
+		}
+	}
+	return nil
 }
 
 func saveMyPRsSeen(path string, seen map[string]myPRSeen) error {
@@ -186,14 +272,14 @@ func knownMyPRNotesCmd(noteStore *store.NoteStore, known prNoteIndex, seenPath s
 	return func() tea.Msg {
 		myPRNotesMu.Lock()
 		defer myPRNotesMu.Unlock()
-		seen, err := loadMyPRsSeen(seenPath)
+		seen, seenReset, err := loadMyPRsSeen(seenPath)
 		if err != nil {
 			return myPRNotesMsg{err: err}
 		}
 		finder := newPRNoteFinder(noteStore, model.SourceMyPR, known)
 		var changed []model.Note
 		var missing []error
-		seenChanged := false
+		seenChanged := seenReset
 		save := func(note *model.Note) error {
 			if err := noteStore.Save(note); errors.Is(err, store.ErrLockNote) {
 				missing = append(missing, fmt.Errorf("%s: %w", note.Ref, err))
@@ -214,6 +300,9 @@ func knownMyPRNotesCmd(noteStore *store.NoteStore, known prNoteIndex, seenPath s
 			if err != nil {
 				missing = append(missing, err)
 				continue
+			}
+			if seenReset && !wasSeen && exists {
+				previous, wasSeen = seenFromNote(note, pr), true
 			}
 			switch {
 			case !wasSeen && !exists:
@@ -245,6 +334,11 @@ func knownMyPRNotesCmd(noteStore *store.NoteStore, known prNoteIndex, seenPath s
 				return myPRNotesMsg{known: knownMyPRRefs(seen), changed: changed, saved: len(changed) > 0, missing: errors.Join(missing...), err: err}
 			}
 			finder.remember(note)
+		}
+		if seenReset {
+			if err := rememberOpenMyPRNotes(seen, finder); err != nil {
+				missing = append(missing, err)
+			}
 		}
 		for url, state := range closed {
 			entry, wasSeen := seen[url]

@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/paths"
 )
 
 func TestAutomatedKindRoundTrips(t *testing.T) {
 	noteStore := New(t.TempDir())
-	note := &model.Note{Summary: "Create a ticket for X", Status: model.StatusInbox, Source: model.SourceManual, Created: time.Now(), Automated: "ticket"}
+	note := &model.Note{Summary: "Create a ticket for X", Status: model.StatusActive, Source: model.SourceManual, Created: time.Now(), Automated: "ticket"}
 	if err := noteStore.Save(note); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestAutomatedKindRoundTrips(t *testing.T) {
 }
 
 func TestSavedNotesAreOwnerOnly(t *testing.T) {
-	note := &model.Note{Summary: "private", Status: model.StatusInbox, Source: model.SourceManual, Created: time.Now()}
+	note := &model.Note{Summary: "private", Status: model.StatusActive, Source: model.SourceManual, Created: time.Now()}
 	if err := New(t.TempDir()).Save(note); err != nil {
 		t.Fatal(err)
 	}

@@ -3,9 +3,9 @@ package tui
 import (
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/appstate"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -29,12 +29,35 @@ func (m *Model) loadAppState() {
 	m.appState, m.appStateKnown = state, found
 }
 
-func (m *Model) appStateFromAllNotes() tea.Cmd {
+type appStateRebuiltMsg struct {
+	state appstate.State
+	built bool
+	err   error
+}
+
+func (m Model) rebuildAppStateCmd() tea.Cmd {
 	if m.appStateKnown {
 		return nil
 	}
-	m.appState, m.appStateKnown = appstate.FromNotes(m.notes, time.Now(), m.cfg.IsWorkDay), true
-	return saveAppStateCmd(m.cfg.Root(), m.appState)
+	noteStore, root, isWorkDay := m.store, m.cfg.Root(), m.cfg.IsWorkDay
+	return func() tea.Msg {
+		notes, err := noteStore.List()
+		if !storeResultUsable(err) {
+			return appStateRebuiltMsg{err: err}
+		}
+		state := appstate.FromNotes(notes, time.Now(), isWorkDay)
+		return appStateRebuiltMsg{state: state, built: true, err: appstate.Save(root, state)}
+	}
+}
+
+func (m Model) applyRebuiltAppState(msg appStateRebuiltMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.showError("STATE ERROR", msg.err)
+	}
+	if msg.built && !m.appStateKnown {
+		m.appState, m.appStateKnown = msg.state, true
+	}
+	return m, nil
 }
 
 func (m *Model) appStateAfterSaves(saved []savedNoteResult) tea.Cmd {

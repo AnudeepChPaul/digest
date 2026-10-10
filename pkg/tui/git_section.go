@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -91,7 +91,7 @@ func (m *Model) loadGitOnStartup() {
 		}
 		m.applyGitCache(cache)
 	}
-	if seen, err := loadMyPRsSeen(myPRsSeenPath(m.cfg.Root())); err == nil {
+	if seen, _, err := loadMyPRsSeen(myPRsSeenPath(m.cfg.Root())); err == nil {
 		m.git.knownMyPRs = knownMyPRRefs(seen)
 	}
 	m.git.syncOnLoad = !cacheLoaded || !cache.hasDataFor(m.currentDate) || cache.PreviousDay != m.git.fetchedPreviousDay.Format("2006-01-02")
@@ -218,32 +218,6 @@ func (m Model) renderGitStrip(width int, active bool, groups noteGroups) (lines 
 		lines = append(lines, line.text)
 	}
 	return lines, selectedRow
-}
-
-func (m Model) gitStripColumnSwitch(towardsRight bool) (target int, ok bool) {
-	navStart := m.gitNavStart()
-	counts := [2]int{len(m.git.yesterdayGitRepo), len(m.git.todayGitRepos)}
-	starts := [2]int{navStart, navStart + counts[0]}
-	current := -1
-	for column := range counts {
-		if m.selected >= starts[column] && m.selected < starts[column]+counts[column] {
-			current = column
-		}
-	}
-	if current < 0 {
-		return 0, false
-	}
-	step := -1
-	if towardsRight {
-		step = 1
-	}
-	row := m.selected - starts[current]
-	for column := current + step; column >= 0 && column < len(counts); column += step {
-		if counts[column] > 0 {
-			return starts[column] + min(row, counts[column]-1), true
-		}
-	}
-	return 0, false
 }
 
 func waitForGitSection(sections <-chan sourcecontrol.Section, generation int) tea.Cmd {
@@ -559,14 +533,6 @@ func (m Model) togglePendingScope(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) switchGitColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if target, ok := m.gitStripColumnSwitch(msg.String() == "l" || msg.String() == "right"); ok {
-		m.selected = target
-		m.updateScrollOffset()
-	}
-	return m, nil
-}
-
 func (m Model) closeGitDetails(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = ViewDashboard
 	return m, nil
@@ -596,7 +562,7 @@ func (m Model) gitCursorUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) openGitItem(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	gitItems := m.filteredGitItems()
 	if len(gitItems) > 0 && m.git.gitPopupSelected < len(gitItems) {
-		_ = openURL(gitItems[m.git.gitPopupSelected].URL)
+		m.openLink(gitItems[m.git.gitPopupSelected].URL)
 	}
 	return m, nil
 }
@@ -677,8 +643,13 @@ func (m Model) submitRejectComment(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.rejectInput.Blur()
 	m.reviewNotice = ""
-	_, next, cmd := m.beginConfirm(item, review.EventRequestChanges, body)
-	return next, cmd
+	m.reviewEvent, m.reviewBody = review.EventRequestChanges, body
+	return m.confirmReview(tea.KeyMsg{})
+}
+
+func (m Model) copyRejectComment(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.copyText(strings.TrimSpace(m.rejectInput.Value()))
+	return m, nil
 }
 
 func (m Model) cancelRejectComment(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -912,7 +883,6 @@ func init() {
 		actionToggleSortField:     Model.toggleSortField,
 		actionToggleSortOrder:     Model.toggleSortOrder,
 		actionTogglePendingScope:  Model.togglePendingScope,
-		actionSwitchGitColumn:     Model.switchGitColumn,
 		actionRefreshCommits:      Model.refreshCommitsFromKey,
 		actionDashboardApprove:    Model.dashboardApprove,
 		actionDashboardReject:     Model.dashboardReject,
@@ -926,6 +896,7 @@ func init() {
 		actionConfirmReviewRun:    Model.confirmReviewRun,
 		actionCancelReviewRun:     Model.cancelReviewRun,
 		actionSubmitRejectComment: Model.submitRejectComment,
+		actionCopyRejectComment:   Model.copyRejectComment,
 		actionCancelRejectComment: Model.cancelRejectComment,
 		actionStartReview:         Model.startReviewFromKey,
 		actionToggleFinding:       Model.toggleFinding,

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -80,5 +80,44 @@ func TestCtrlCCountdownShowsOnModals(t *testing.T) {
 	m, _ = pressCtrlC(m)
 	if !strings.Contains(stripANSI(m.View()), "2 more") {
 		t.Errorf("the quit countdown should show over a modal:\n%s", stripANSI(m.View()))
+	}
+}
+
+func TestCtrlCStaleResetTickDoesNotClearLaterPresses(t *testing.T) {
+	m := syncTestModel(t)
+	m, _ = pressCtrlC(m)
+	firstPressReset := ctrlCResetMsg{pressSequence: m.ctrlCPressSequence}
+	m, _ = pressCtrlC(m)
+	next, _ := m.Update(firstPressReset)
+	m = next.(Model)
+	if m.ctrlCCount != 2 {
+		t.Fatalf("a stale reset tick cleared the count to %d", m.ctrlCCount)
+	}
+	if _, quits := pressCtrlC(m); !quits {
+		t.Errorf("third press should quit after a stale reset tick")
+	}
+}
+
+func TestCtrlCLatestResetTickClearsTheCount(t *testing.T) {
+	m := syncTestModel(t)
+	m, _ = pressCtrlC(m)
+	m, _ = pressCtrlC(m)
+	next, _ := m.Update(ctrlCResetMsg{pressSequence: m.ctrlCPressSequence})
+	m = next.(Model)
+	if m.ctrlCCount != 0 {
+		t.Errorf("the latest reset tick should clear the count, got %d", m.ctrlCCount)
+	}
+}
+
+func TestOtherKeyBetweenCtrlCPressesResetsTheCount(t *testing.T) {
+	m := syncTestModel(t)
+	m, _ = pressCtrlC(m)
+	m, _ = pressCtrlC(m)
+	m = press(t, m, runes("j"))
+	if m.ctrlCCount != 0 {
+		t.Fatalf("another key should reset the count, got %d", m.ctrlCCount)
+	}
+	if _, quits := pressCtrlC(m); quits {
+		t.Errorf("ctrl+c after another key should start counting again")
 	}
 }

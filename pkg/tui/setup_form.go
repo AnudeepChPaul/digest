@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -48,8 +48,43 @@ func cloneSetupAnswers(answers config.SetupAnswers) config.SetupAnswers {
 	return answers
 }
 
-func (state *setupState) dirty() bool {
-	return state.notificationsOn != state.notificationsWereOn || !reflect.DeepEqual(state.answers, state.initialAnswers)
+func (m Model) pendingSetupAnswers() config.SetupAnswers {
+	state := m.setup
+	answers := cloneSetupAnswers(state.answers)
+	value := strings.TrimSpace(m.setupInput.Value())
+	field := state.field
+	switch {
+	case state.form && !state.editing:
+		return answers
+	case !state.form && state.step == setupStepRoots:
+		field = setupFieldRoots
+	case !state.form && state.step == setupStepTimes && state.editingEvening:
+		field = setupFieldEvening
+	case !state.form && state.step == setupStepTimes:
+		field = setupFieldMorning
+	case !state.form:
+		return answers
+	}
+	switch field {
+	case setupFieldRoots:
+		answers.RepositoryRoots = parseSetupRoots(value)
+		if len(answers.RepositoryRoots) == 0 && !state.form {
+			answers.RepositoryRoots = []string{"~/Projects"}
+		}
+	case setupFieldMorning:
+		answers.Morning = value
+	case setupFieldEvening:
+		answers.Evening = value
+	}
+	return answers
+}
+
+func (m Model) setupDirty() bool {
+	return m.setup.notificationsOn != m.setup.notificationsWereOn || !reflect.DeepEqual(m.pendingSetupAnswers(), m.setup.initialAnswers)
+}
+
+func (m Model) setupSaving() bool {
+	return m.mode == ViewSetup && m.setup != nil && m.setup.saving
 }
 
 func (m *Model) storeSetupField() {
@@ -83,15 +118,21 @@ func (m Model) startEditingSetupField() Model {
 	m.setupInput.SetValue(value)
 	m.setupInput.CursorEnd()
 	m.setupInput.Focus()
-	m.setup.editing, m.setup.notice = true, ""
+	m.setup.editing, m.setup.notice, m.setup.editStartValue = true, "", value
 	return m
 }
 
 func (m Model) setupFieldNext(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.setup.form {
+		return m.moveSetupStep(true)
+	}
 	return m.focusSetupField(min(m.setup.field+1, setupFieldCount-1)), nil
 }
 
 func (m Model) setupFieldPrevious(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.setup.form {
+		return m.moveSetupStep(false)
+	}
 	return m.focusSetupField(max(m.setup.field-1, setupFieldGit)), nil
 }
 
@@ -122,10 +163,14 @@ func (m Model) setupFormToggle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) setupFormEscape(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.setup.editing && strings.TrimSpace(m.setupInput.Value()) != strings.TrimSpace(m.setup.editStartValue) {
+		m.setup.undoingEdit, m.mode = true, ViewSetupDiscard
+		return m, nil
+	}
 	if m.setup.editing {
 		return m.focusSetupField(m.setup.field), nil
 	}
-	if m.setup.dirty() {
+	if m.setupDirty() {
 		m.mode = ViewSetupDiscard
 		return m, nil
 	}
@@ -133,11 +178,14 @@ func (m Model) setupFormEscape(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) keepEditingSetup(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.mode = ViewSetup
+	m.setup.undoingEdit, m.mode = false, ViewSetup
 	return m, nil
 }
 
 func (m Model) setupFormSave(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.setupDirty() {
+		return m, nil
+	}
 	if m.setup.editing {
 		m.storeSetupField()
 		m = m.focusSetupField(m.setup.field)
@@ -162,17 +210,18 @@ func (m Model) setupFormSave(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setup.answers.RepositoryRoots = []string{"~/Projects"}
 	}
 	m.setup.saving, m.setup.notice = true, ""
-	return m, tea.Batch(saveSetupCmd(m.setup.configPath, m.setup.answers, m.setup.notificationsWereOn, m.setup.notificationsOn), m.setup.spinner.Tick)
+	return m, tea.Batch(saveSetupCmd(m.setup.configPath, m.setup.answers, m.setup.backedUp, m.setup.notificationsWereOn, m.setup.notificationsOn), m.setup.spinner.Tick)
 }
 
 type setupSavedMsg struct {
-	cfg *config.Config
-	err error
+	cfg      *config.Config
+	backedUp bool
+	err      error
 }
 
-func saveSetupCmd(configPath string, answers config.SetupAnswers, notificationsWereOn, notificationsOn bool) tea.Cmd {
+func saveSetupCmd(configPath string, answers config.SetupAnswers, alreadyBackedUp, notificationsWereOn, notificationsOn bool) tea.Cmd {
 	return func() tea.Msg {
-		cfg, err := writeSetupConfig(configPath, answers)
+		cfg, backedUp, err := writeSetupConfig(configPath, answers, alreadyBackedUp)
 		switch {
 		case err != nil || notificationsWereOn == notificationsOn:
 		case notificationsOn:
@@ -180,7 +229,7 @@ func saveSetupCmd(configPath string, answers config.SetupAnswers, notificationsW
 		default:
 			err = uninstallNotifications()
 		}
-		return setupSavedMsg{cfg: cfg, err: err}
+		return setupSavedMsg{cfg: cfg, backedUp: backedUp, err: err}
 	}
 }
 
@@ -188,6 +237,7 @@ func (m Model) applySetupSaved(msg setupSavedMsg) (tea.Model, tea.Cmd) {
 	if m.setup == nil {
 		return m, nil
 	}
+	m.setup.backedUp = m.setup.backedUp || msg.backedUp
 	if msg.err != nil {
 		m.setup.saving, m.setup.notice = false, msg.err.Error()
 		return m, nil
@@ -236,17 +286,18 @@ func (m Model) setupFormBindings() []keyBinding {
 }
 
 func setupDiscardBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionCloseSetup, []string{"y", "Y"}, "y", "discard"),
-		newKeyBinding(actionKeepEditingSetup, []string{"n", "N", "esc"}, "n|esc", "keep editing"),
-	}
+	return yesNoBindings(actionCloseSetup, "discard", actionKeepEditingSetup, "keep editing")
 }
 
 func (m Model) renderSetupDiscard(modalWidth int) string {
+	title, question := " DISCARD CHANGES ", "Close setup without saving your changes?"
+	if m.setup != nil && m.setup.undoingEdit {
+		title, question = " UNDO CHANGE ", "Undo the change you're typing?"
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		deleteTitleStyle.Render(" DISCARD CHANGES "),
+		deleteTitleStyle.Render(title),
 		"",
-		"Close setup without saving your changes?",
+		question,
 		"",
 		renderModalFooter(footerItemsFrom(setupDiscardBindings()), modalWidth-6),
 	)

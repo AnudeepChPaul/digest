@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -101,9 +101,10 @@ func TestRejectNeedsComment(t *testing.T) {
 		t.Errorf("empty comment should be blocked, mode=%d", m.mode)
 	}
 	m.rejectInput.SetValue("please add tests")
-	m = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
-	if m.mode != ViewReviewConfirm || m.reviewEvent != review.EventRequestChanges || m.reviewBody != "please add tests" {
-		t.Errorf("mode=%d event=%s body=%q", m.mode, m.reviewEvent, m.reviewBody)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(Model)
+	if m.mode != ViewPreview || m.reviewEvent != review.EventRequestChanges || m.reviewBody != "please add tests" || cmd == nil || m.reviewNotice != "Submitting to GitHub…" {
+		t.Errorf("ctrl+s with text should submit without a second confirm: mode=%d event=%s body=%q notice=%q", m.mode, m.reviewEvent, m.reviewBody, m.reviewNotice)
 	}
 }
 

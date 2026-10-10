@@ -44,7 +44,7 @@ func TestFeaturesMakeAMinorAndFixesAPatchRelease(t *testing.T) {
 }
 
 func TestChoresAndReleaseCommitsMakeNoRelease(t *testing.T) {
-	commits := commitsFrom("docs: readme", "ci: cache mise", "chore: tidy", "test: hermetic doctor", "chore: release v1.1.56", "Fetch PRs per repo")
+	commits := commitsFrom("docs: readme", "ci: cache mise", "chore: tidy", "test: hermetic doctor", "chore: release v1.1.56", "release:minor", "Fetch PRs per repo")
 	if got := NextLevel(commits); got != LevelNone {
 		t.Errorf("NextLevel = %q, want none", got)
 	}
@@ -53,42 +53,48 @@ func TestChoresAndReleaseCommitsMakeNoRelease(t *testing.T) {
 	}
 }
 
-func TestChangelogGroupsCommitsByKind(t *testing.T) {
+func TestChangelogListsEveryCommitWithItsLinkAndDescription(t *testing.T) {
 	commits := []Commit{
-		{Subject: "fix: crash on empty notes"},
-		{Subject: "feat(tui): show the streak beside the logo"},
-		{Subject: "docs: readme"},
-		{Subject: "perf: batch the PR search"},
-		{Subject: "feat!: drop the old config format"},
-		{Subject: "feat: publish a changelog"},
-		{Subject: "chore: release v1.1.56"},
+		{Hash: "072f17d8c1e2a3b4c5d6e7f8091a2b3c4d5e6f70", Subject: "fix: central file access", Body: "fix: locked digest files\n\nci: release only on a pushed version bump\n"},
+		{Hash: "b30d08f000000000000000000000000000000000", Subject: "docs: readme"},
+		{Hash: "613f87f000000000000000000000000000000000", Subject: "Initial import of digest"},
 	}
-	got := Changelog("1.2.0", time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC), commits)
-	want := `## v1.2.0 — 2026-10-08
+	got := Changelog("1.5.0", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), "https://github.com/achandrapaul/digest", commits)
+	want := `## v1.5.0 — 2026-10-09
 
-### Breaking changes
-- drop the old config format
-
-### Features
-- tui: show the streak beside the logo
-- publish a changelog
-
-### Fixes
-- crash on empty notes
-
-### Performance
-- batch the PR search
+### Changes
+- [072f17d](https://github.com/achandrapaul/digest/commit/072f17d8c1e2a3b4c5d6e7f8091a2b3c4d5e6f70) fix: central file access
+  fix: locked digest files
+  ci: release only on a pushed version bump
+- [b30d08f](https://github.com/achandrapaul/digest/commit/b30d08f000000000000000000000000000000000) docs: readme
+- [613f87f](https://github.com/achandrapaul/digest/commit/613f87f000000000000000000000000000000000) Initial import of digest
 `
 	if got != want {
 		t.Errorf("Changelog =\n%s\nwant\n%s", got, want)
 	}
 }
 
-func TestChangelogListsBreakingFooterCommitsUnderBreakingChanges(t *testing.T) {
-	commits := []Commit{{Subject: "feat: new flags", Body: "BREAKING CHANGE: --root is gone"}}
-	got := Changelog("2.0.0", time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC), commits)
-	if !strings.Contains(got, "### Breaking changes\n- new flags\n") || strings.Contains(got, "### Features") {
-		t.Errorf("breaking footer should list under breaking changes only:\n%s", got)
+func TestChangelogSkipsReleaseBookkeepingCommits(t *testing.T) {
+	commits := []Commit{
+		{Hash: "aaaaaaa1", Subject: "chore: release v1.4.0"},
+		{Hash: "aaaaaaa2", Subject: "chore: changelog v1.4.0"},
+		{Hash: "aaaaaaa3", Subject: "chore: benchmark v1.4.0"},
+		{Hash: "aaaaaaa4", Subject: "chore: bump deps"},
+		{Hash: "aaaaaaa5", Subject: "release:minor"},
+	}
+	got := Changelog("1.5.0", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), "https://example.com/repo", commits)
+	if strings.Contains(got, "release v1.4.0") || strings.Contains(got, "changelog v1.4.0") || strings.Contains(got, "benchmark v1.4.0") || strings.Contains(got, "release:minor") {
+		t.Errorf("bookkeeping commits should be skipped:\n%s", got)
+	}
+	if !strings.Contains(got, "- [aaaaaaa](https://example.com/repo/commit/aaaaaaa4) chore: bump deps\n") {
+		t.Errorf("other chores should be listed:\n%s", got)
+	}
+}
+
+func TestChangelogWithoutCommitsHasOnlyTheHeading(t *testing.T) {
+	got := Changelog("1.5.0", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), "https://example.com/repo", []Commit{{Hash: "aaaaaaa1", Subject: "chore: release v1.5.0"}})
+	if got != "## v1.5.0 — 2026-10-09\n" {
+		t.Errorf("Changelog = %q", got)
 	}
 }
 
@@ -97,6 +103,11 @@ func TestPrependPutsTheNewSectionOnTop(t *testing.T) {
 	fresh := Prepend("", section)
 	if fresh != "# Changelog\n\n"+section {
 		t.Errorf("fresh changelog = %q", fresh)
+	}
+	for _, titleOnly := range []string{"# Changelog\n", "# Changelog\n\n", "# Changelog"} {
+		if got := Prepend(titleOnly, section); got != "# Changelog\n\n"+section {
+			t.Errorf("Prepend(%q) = %q", titleOnly, got)
+		}
 	}
 	older := "## v1.1.0 — 2026-09-01\n\n### Fixes\n- crash\n"
 	updated := Prepend("# Changelog\n\n"+older, section)

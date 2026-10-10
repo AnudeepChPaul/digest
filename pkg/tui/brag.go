@@ -3,15 +3,16 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/system"
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -48,7 +49,7 @@ func (m Model) firstNoteTime() time.Time {
 		return m.appState.FirstNoteCreated
 	}
 	var first time.Time
-	for _, note := range m.notes {
+	for _, note := range m.notesForBrowsing() {
 		if !note.Created.IsZero() && (first.IsZero() || note.Created.Before(first)) {
 			first = note.Created
 		}
@@ -98,8 +99,9 @@ func (m Model) bragRows() []bragRow {
 }
 
 type bragRowState struct {
-	label  string
-	failed bool
+	label      string
+	failed     bool
+	unreadable bool
 }
 
 func (m Model) bragRowStateFor(period brag.Period) bragRowState {
@@ -126,6 +128,9 @@ func (m Model) readBragRowState(period brag.Period) bragRowState {
 	case brag.IsRunning(root, period.ID()):
 		return bragRowState{label: "Bragging..."}
 	case brag.Exists(root, period):
+		if _, err := brag.Load(root, period); err != nil {
+			return bragRowState{label: fmt.Sprintf("Brag about this %s again?", period.Kind()), unreadable: true}
+		}
 		return bragRowState{label: "View your brag"}
 	}
 	failed := brag.Braggable(period, bragClock()) && brag.Status(root, period.ID()) == brag.RunFailed
@@ -184,11 +189,33 @@ func (m Model) anyBragRunning() bool {
 func (m Model) openBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = ViewBragList
 	m.bragNotice = ""
-	m.refreshBragRuns()
+	if m.unbraggedWeekNotice() != "" {
+		m.selectBragWeek(brag.WeekOf(bragClock()).Previous())
+	}
 	if rows := m.bragRows(); m.bragSelected >= len(rows) {
 		m.bragSelected = max(len(rows)-1, 0)
 	}
-	return m, m.ensureAllNotes()
+	if m.appStateKnown && !m.appState.FirstNoteCreated.IsZero() {
+		return m, nil
+	}
+	return m, m.browseNotesCmd()
+}
+
+func (m *Model) selectBragWeek(week brag.Week) {
+	if year := brag.MonthOfWeek(week).Start.Year(); !m.bragYearExpanded(year) {
+		expanded := maps.Clone(m.bragExpanded)
+		if expanded == nil {
+			expanded = map[int]bool{}
+		}
+		expanded[year] = true
+		m.bragExpanded = expanded
+	}
+	for index, row := range m.bragRows() {
+		if row.period != nil && row.period.ID() == week.ID() {
+			m.bragSelected = index
+			return
+		}
+	}
 }
 
 func (m Model) closeBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -232,6 +259,12 @@ func (m Model) bragListEnter(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.bragNotice = fmt.Sprintf("Already bragging about %s — see Jobs", row.period.Label())
 		return m, nil
 	case brag.Exists(root, row.period):
+		if _, err := brag.Load(root, row.period); err != nil {
+			m.bragNotice = err.Error()
+			m.bragPeriod, m.bragRegenerate, m.bragConfirmReturn = row.period, false, ViewBragList
+			m.mode = ViewBragConfirm
+			return m, nil
+		}
 		return m.showBragView(row.period)
 	case !brag.Braggable(row.period, bragClock()):
 		_, end := row.period.Range()
@@ -332,6 +365,9 @@ func (m Model) saveBragEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) cancelBragEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editorChanged() {
+		return m.beginDiscardConfirm(), nil
+	}
 	m.editor.Blur()
 	m.bragNotice = ""
 	m.mode = ViewBragView
@@ -339,13 +375,13 @@ func (m Model) cancelBragEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) copyBragEditor(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	_ = copyToClipboard(strings.TrimSpace(m.editor.Value()))
+	m.copyText(strings.TrimSpace(m.editor.Value()))
 	return m, nil
 }
 
 func (m Model) copyBrag(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.bragEntry != nil {
-		_ = copyToClipboard(strings.TrimSpace(m.bragEntry.Body()))
+		m.copyText(strings.TrimSpace(m.bragEntry.Body()))
 	}
 	return m, nil
 }
@@ -430,8 +466,11 @@ func (m Model) bragStatusCell(row bragRow, label string) string {
 	if label == "Bragging..." {
 		return m.renderPulseIndicator(label)
 	}
-	failed := m.bragRowStateFor(row.period).failed
+	state := m.bragRowStateFor(row.period)
+	failed := state.failed
 	switch {
+	case state.unreadable:
+		return yellowBadgeStyle.Render(label) + stateStyle(review.StateFailed).Render(" · unreadable")
 	case label == "View your brag":
 		return bragDoneStyle.Render(label)
 	case !brag.Braggable(row.period, bragClock()):
@@ -534,6 +573,28 @@ func bragRunPreview(root string, run brag.Run) runPreview {
 }
 
 var stopBragRun = brag.Stop
+
+func (m Model) stopRunningBragRuns() (tea.Model, tea.Cmd) {
+	root := m.bragRoot()
+	var failures []error
+	for _, run := range brag.ListRuns(root) {
+		if run.Status != brag.RunRunning {
+			continue
+		}
+		if err := stopBragRun(root, run.Meta.ID); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	m.showError("BRAG ERROR", failures...)
+	selectedKey, selectedOccurrence := m.selectedNavKey()
+	m.refreshBragRuns()
+	m.restoreSelection(selectedKey, selectedOccurrence)
+	if m.mode == ViewPreview {
+		m.updatePreviewViewport()
+	}
+	m.clampScreenSelection()
+	return m, nil
+}
 
 func (m Model) stopOrDismissBragRun(run *brag.Run) (tea.Model, tea.Cmd) {
 	root := m.bragRoot()

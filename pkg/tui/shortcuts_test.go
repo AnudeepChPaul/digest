@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func helpText(entries []helpEntry, key string) (string, bool) {
@@ -30,7 +32,9 @@ func TestDashboardShortcutsListOneActionPerRow(t *testing.T) {
 }
 
 func TestDashboardShortcutsExplainRowKeysPerRowKind(t *testing.T) {
-	entries := syncTestModel(t).helpEntries()
+	m := syncTestModel(t)
+	m.cfg.ShowKeyHints = true
+	entries := m.helpEntries()
 	for key, wants := range map[string][]string{
 		"enter": {"note: edit", "PR: open in browser", "job: preview"},
 		"space": {"note: mark done", "done note: mark active"},
@@ -43,6 +47,23 @@ func TestDashboardShortcutsExplainRowKeysPerRowKind(t *testing.T) {
 				t.Errorf("%s = %q, want it to mention %q", key, text, want)
 			}
 		}
+	}
+}
+
+func TestShortcutsHidePRRowKeysWhenKeyHintsAreOff(t *testing.T) {
+	m := syncTestModel(t)
+	m.cfg.ShowKeyHints = false
+	entries := m.helpEntries()
+	for _, key := range []string{"y", "d", "r", "o"} {
+		if text, _ := helpText(entries, key); strings.Contains(text, "PR:") {
+			t.Errorf("%s = %q, PR meanings should follow show_key_hints", key, text)
+		}
+	}
+	if text, _ := helpText(entries, "enter"); !strings.Contains(text, "PR: open in browser") {
+		t.Errorf("enter = %q, opening a PR works without hints", text)
+	}
+	if text, _ := helpText(entries, "d"); !strings.Contains(text, "note: archive") {
+		t.Errorf("d = %q, note meanings stay", text)
 	}
 }
 
@@ -66,5 +87,23 @@ func TestQuestionMarkInAPreviewShowsThatPreviewsKeys(t *testing.T) {
 	}
 	if m = press(t, m, runes("?")); m.mode != ViewPreview {
 		t.Errorf("closing the shortcuts should return to the preview, mode = %v", m.mode)
+	}
+}
+
+func TestShortcutsCloseOnEscAndQuestionMarkOnly(t *testing.T) {
+	open := press(t, syncTestModel(t), runes("?"))
+	if open.mode != ViewHelp {
+		t.Fatalf("? should open the shortcuts, mode = %v", open.mode)
+	}
+	if m := press(t, open, runes("q")); m.mode != ViewHelp {
+		t.Errorf("q should not close the shortcuts, mode = %v", m.mode)
+	}
+	for name, keyMsg := range map[string]tea.KeyMsg{"esc": {Type: tea.KeyEsc}, "?": runes("?")} {
+		if m := press(t, open, keyMsg); m.mode != ViewDashboard {
+			t.Errorf("%s should close the shortcuts, mode = %v", name, m.mode)
+		}
+	}
+	if footer := footerText(footerItemsFrom(helpBindings())); strings.Contains(footer, "q") {
+		t.Errorf("shortcuts footer mentions q: %q", footer)
 	}
 }

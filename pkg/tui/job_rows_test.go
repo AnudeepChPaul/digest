@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 	"github.com/charmbracelet/lipgloss"
 )
 

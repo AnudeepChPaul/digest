@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -159,7 +160,7 @@ var startDryRunBackground = func(spec config.JobSpec) error {
 			Setsid: true,
 		}
 	}
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), spec.OptionsEnv()...)
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}
@@ -253,8 +254,8 @@ func digestExecutable() string {
 	return "digest"
 }
 
-func jobHasDryRun(name, dryRunCommand string) bool {
-	return dryRunCommand != "" || builtinJobNames[name]
+func jobHasDryRun(dryRunCommand string) bool {
+	return dryRunCommand != ""
 }
 
 func withRunningDigest(command string, dryRun bool) (string, error) {
@@ -318,7 +319,8 @@ func pruneJobLogArchives(logsDir, jobName string, retentionDays int, now time.Ti
 }
 
 var executeJobBackground = func(cfg *config.Config, jobName string) error {
-	commandStr, err := resolveJobCommand(findJobSpec(cfg, jobName), false)
+	spec := findJobSpec(cfg, jobName)
+	commandStr, err := resolveJobCommand(spec, false)
 	if err != nil {
 		return err
 	}
@@ -350,7 +352,7 @@ var executeJobBackground = func(cfg *config.Config, jobName string) error {
 		}
 	}
 
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), spec.OptionsEnv()...)
 
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
@@ -378,6 +380,24 @@ var executeJobBackground = func(cfg *config.Config, jobName string) error {
 
 	if pidWriteErr != nil {
 		return fmt.Errorf("job %q started but its pid file could not be written (abort unavailable): %w", jobName, pidWriteErr)
+	}
+	return nil
+}
+
+var stopJobDryRun = func(jobName string) error {
+	pidFile := dryRunFilePath(jobName, "pid")
+	data, err := system.Read(pidFile)
+	if err != nil {
+		return nil
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err == nil && isProcessAlive(pid) {
+		if err := signalJobGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("failed to stop the dry run of %q: %w", jobName, err)
+		}
+	}
+	if err := system.Remove(pidFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }
@@ -492,9 +512,9 @@ func (m Model) jobDryRunOutputFor(jobName string) string {
 	return m.jobDryRunOutputs[jobName]
 }
 
-func tickCtrlCResetCmd() tea.Cmd {
+func tickCtrlCResetCmd(pressSequence int) tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-		return ctrlCResetMsg{}
+		return ctrlCResetMsg{pressSequence: pressSequence}
 	})
 }
 

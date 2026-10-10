@@ -42,15 +42,19 @@ func RunRepoSync(roots []string, dryRun bool) (bool, error) {
 	return NeedsUserAction(res, dryRun), nil
 }
 
-func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, retentionDays int, dryRun bool) (bool, error) {
-	logger := log.New(os.Stderr)
-	job := &JanitorJob{
+func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, graceDays int, dryRun bool) (bool, error) {
+	return RunJanitorJob(&JanitorJob{
 		Roots:          roots,
 		Patterns:       patterns,
 		QuarantineRoot: quarantineRoot,
-		RetentionDays:  retentionDays,
+		GraceDays:      graceDays,
 		ReviewRoot:     reviewRoot,
-		Logger:         logger,
+	}, dryRun)
+}
+
+func RunJanitorJob(job *JanitorJob, dryRun bool) (bool, error) {
+	if job.Logger == nil {
+		job.Logger = log.New(os.Stderr)
 	}
 	res, err := job.Run(dryRun)
 	if err != nil {
@@ -60,11 +64,11 @@ func RunJanitor(roots, patterns []string, reviewRoot, quarantineRoot string, ret
 	return NeedsUserAction(res, dryRun), nil
 }
 
-func RunBranchReaper(roots []string, dryRun bool) (bool, error) {
+func RunBranchReaper(roots []string, graceDays int, dryRun bool) (bool, error) {
 	logger := log.New(os.Stderr)
 	job := &BranchReaperJob{
 		Roots:      roots,
-		MinAgeDays: 7,
+		MinAgeDays: graceDays,
 		Logger:     logger,
 	}
 	res, err := job.Run(dryRun)

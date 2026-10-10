@@ -153,8 +153,8 @@ func TestStopKillsProcessGroupAndClearsPID(t *testing.T) {
 		_ = leader.Process.Kill()
 		t.Fatal("process group still alive after Stop")
 	}
-	if Status(dir) != RunIdle {
-		t.Errorf("status = %v, want idle", Status(dir))
+	if Status(dir) != RunFailed {
+		t.Errorf("status = %v, want failed", Status(dir))
 	}
 	if _, ok := RunningPID(dir); ok {
 		t.Errorf("RunningPID still reports a pid")
@@ -271,5 +271,28 @@ func TestStopKillsAGroupThatIgnoresTerm(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		_ = syscall.Kill(-stubborn.Process.Pid, syscall.SIGKILL)
 		t.Fatal("stop should escalate to SIGKILL")
+	}
+}
+
+func TestStoppedReviewStaysListedAsFailed(t *testing.T) {
+	root := t.TempDir()
+	ref := PRRef{Repo: "console", Number: 12, URL: "https://github.com/o/console/pull/12"}
+	dir := StateDir(root, ref)
+	if err := WriteMeta(dir, Meta{Ref: ref, Title: "Fix"}); err != nil {
+		t.Fatal(err)
+	}
+	leader := exec.Command("sh", "-c", "sleep 30 & wait")
+	leader.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := leader.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-leader.Process.Pid, syscall.SIGKILL); _ = leader.Wait() })
+	writeFile(t, filepath.Join(dir, pidFile), strconv.Itoa(leader.Process.Pid))
+	if err := Stop(root, ref); err != nil {
+		t.Fatal(err)
+	}
+	runs := ListRuns(root)
+	if len(runs) != 1 || runs[0].Meta.Ref.URL != ref.URL || runs[0].Status != RunFailed {
+		t.Errorf("runs = %+v, want the stopped review listed as failed", runs)
 	}
 }

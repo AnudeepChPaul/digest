@@ -2,14 +2,15 @@ package tui
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/appstate"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -39,7 +40,7 @@ func appStateModel(t *testing.T, state *appstate.State, notes ...*model.Note) Mo
 func applyAllMessages(m Model, cmd tea.Cmd) Model {
 	for _, msg := range collectMsgs(cmd) {
 		switch msg.(type) {
-		case notesSavedMsg, appStateSavedMsg, loadNotesMsg:
+		case notesSavedMsg, appStateSavedMsg, loadNotesMsg, appStateRebuiltMsg:
 			next, followUp := m.Update(msg)
 			m = applyAllMessages(next.(Model), followUp)
 		}
@@ -93,22 +94,51 @@ func TestHeaderStreakComesFromTheStateFile(t *testing.T) {
 	}
 }
 
-func TestMissingStateIsWrittenOnceAllNotesLoad(t *testing.T) {
+func TestMissingStateIsRebuiltFromDiskAtStartup(t *testing.T) {
 	now := time.Now()
 	m := appStateModel(t, nil, dashboardNotes(now)...)
 	if _, found, _ := appstate.Load(m.cfg.Root()); found {
 		t.Fatal("no state file should exist yet")
 	}
-	m = applyAllMessages(m, loadAllNotesCmd(m.store))
+	m = applyAllMessages(m, m.rebuildAppStateCmd())
 	saved, found, err := appstate.Load(m.cfg.Root())
-	if err != nil || !found {
-		t.Fatalf("state should be written after the full load: %v, %v", found, err)
+	if err != nil || !found || !m.appStateKnown {
+		t.Fatalf("state should be rebuilt from every note on disk: %v, %v, known %v", found, err, m.appStateKnown)
+	}
+	if slices.Contains(loadedSummaries(m), "done long ago") {
+		t.Errorf("rebuilding the state should not keep every note: %q", loadedSummaries(m))
 	}
 	if want := noteBySummary(t, m, "active").Created; !saved.FirstNoteCreated.Equal(want) {
 		t.Errorf("first note created = %v, want %v", saved.FirstNoteCreated, want)
 	}
 	if saved.Streak != 1 {
 		t.Errorf("streak = %d, want 1 from yesterday's done note", saved.Streak)
+	}
+}
+
+func TestCorruptStateShowsInTheHeaderThenIsOverwritten(t *testing.T) {
+	now := time.Now()
+	showGit := false
+	cfg := &config.Config{DigestRoot: t.TempDir(), GreenOnly: true, ShowGit: &showGit, WorkDays: everyDay}
+	for _, note := range dashboardNotes(now) {
+		if err := store.New(cfg.NotesDir()).Save(note); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(cfg.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(appstate.Path(cfg.Root()), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(cfg, nil)
+	m.width, m.height = 120, 50
+	if header := stripANSI(headerSection{}.Render(m)); !strings.Contains(header, "state") {
+		t.Errorf("a corrupt state file should show in the header: %q", header)
+	}
+	m = applyAllMessages(m, m.rebuildAppStateCmd())
+	if saved, found, err := appstate.Load(m.cfg.Root()); err != nil || !found || saved.Streak != 1 {
+		t.Errorf("the corrupt state should be overwritten from the notes: %+v %v %v", saved, found, err)
 	}
 }
 

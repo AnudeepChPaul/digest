@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -43,7 +43,7 @@ func (m Model) openNoteLinks(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch len(links) {
 	case 0:
 	case 1:
-		_ = openURL(links[0])
+		m.openLink(links[0])
 	default:
 		m.linkMenuItems = links
 		m.linkMenuSelected = 0
@@ -74,7 +74,7 @@ func (m Model) closeLinkMenu(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) chooseLink(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.linkMenuSelected < len(m.linkMenuItems) {
-		_ = openURL(m.linkMenuItems[m.linkMenuSelected])
+		m.openLink(m.linkMenuItems[m.linkMenuSelected])
 	}
 	return m.closeLinkMenu(msg)
 }
@@ -100,7 +100,7 @@ func (m Model) renderLinkMenu() string {
 
 func linkMenuBindings() []keyBinding {
 	return []keyBinding{
-		newKeyBinding(actionChooseLink, []string{"enter", "y", "Y"}, "y|enter", "open"),
+		newKeyBinding(actionChooseLink, []string{"enter"}, "enter", "open"),
 		newKeyBinding(actionLinkMenuDown, []string{"j", "down"}, "j|k", "nav"),
 		hiddenKeyBinding(actionLinkMenuUp, "k", "up"),
 		newKeyBinding(actionCloseLinkMenu, []string{"esc", "n", "N"}, "esc", "cancel"),

@@ -48,6 +48,9 @@ type framedPopupMemo struct {
 }
 
 func (m Model) framedPopup(content string, modalWidth int) string {
+	if notice := m.screenErrorNotice(modalWidth - 6); notice != "" {
+		content += "\n\n" + notice
+	}
 	memo := m.popupMemo
 	if memo != nil && memo.content == content && memo.modalWidth == modalWidth && memo.width == m.width && memo.height == m.height {
 		return memo.framed

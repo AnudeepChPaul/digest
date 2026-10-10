@@ -3,7 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"github.com/AnudeepChPaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/appstate"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/automation"
 
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/running"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/running"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -46,7 +46,6 @@ const (
 	ViewReviewConfirm
 	ViewReviewRunConfirm
 	ViewRejectComment
-	ViewSearchPreview
 	ViewHelp
 	ViewBragList
 	ViewBragView
@@ -104,7 +103,7 @@ type NavItem struct {
 
 type bannerWaveTickMsg struct{}
 type syncPulseTickMsg struct{}
-type ctrlCResetMsg struct{}
+type ctrlCResetMsg struct{ pressSequence int }
 type localReviewState struct {
 	status         review.RunStatus
 	finishedAt     time.Time
@@ -140,6 +139,23 @@ var openURL = func(url string) error {
 	}
 	_, err := startReaped(exec.Command(cmd, args...))
 	return err
+}
+
+func (m *Model) openLink(url string) {
+	if err := openURL(url); err != nil {
+		m.showError("BROWSER", err)
+	}
+}
+
+func (m *Model) copyText(text string) {
+	if text == "" {
+		return
+	}
+	if err := copyToClipboard(text); err != nil {
+		m.postMessage(messageSourceClipboard, messageError, err.Error())
+		return
+	}
+	m.postMessage(messageSourceClipboard, messageSuccess, "copied")
 }
 
 func startReaped(cmd *exec.Cmd) (<-chan error, error) {
@@ -195,24 +211,25 @@ type Model struct {
 	store *store.NoteStore
 	notes []*model.Note
 
-	sessionCtx       context.Context
-	startupNotesErr  error
-	appState         appstate.State
-	appStateKnown    bool
-	cancelSession    context.CancelFunc
-	searchCache      *searchMemo
-	reviewReports    *reviewReportMemo
-	contentVersion   int
-	scrollPending    bool
-	frames           *dashboardFrameCache
-	bragSaved        *bragSavedMemo
-	dryRunLogStamps  map[string]string
-	selected         int
-	scrollOffset     int
-	archivedSelected int
-	ctrlCCount       int
-	currentNote      *model.Note
-	currentDate      time.Time
+	sessionCtx         context.Context
+	startupNotesErr    error
+	appState           appstate.State
+	appStateKnown      bool
+	cancelSession      context.CancelFunc
+	searchCache        *searchMemo
+	reviewReports      *reviewReportMemo
+	contentVersion     int
+	scrollPending      bool
+	frames             *dashboardFrameCache
+	bragSaved          *bragSavedMemo
+	dryRunLogStamps    map[string]string
+	selected           int
+	scrollOffset       int
+	archivedSelected   int
+	ctrlCCount         int
+	ctrlCPressSequence int
+	currentNote        *model.Note
+	currentDate        time.Time
 
 	jobDryRunOutputs   map[string]string
 	jobDryRunExitCodes map[string]int
@@ -225,6 +242,19 @@ type Model struct {
 	jobToAbort           string
 	bragRunToStop        *brag.Run
 	automationRunToStop  *automation.Run
+	jobRunStopsDryRun    bool
+	jobDryRunToStart     string
+	staleJobToClear      string
+	runToRetry           *NavItem
+	draftToDelete        string
+	discardingEdit       bool
+	jobConfirmError      string
+	previewNotice        string
+	editorStartText      string
+	editorNotice         string
+	confirmTitle         string
+	confirmPrompt        string
+	restoreOnConfirm     bool
 	actionMenuReturnMode ViewMode
 	linkMenuItems        []string
 	linkMenuSelected     int
@@ -250,8 +280,8 @@ type Model struct {
 	initialSelectionPending bool
 	selectAfterReload       string
 	awaitingNewNoteSave     bool
-	notesComplete           bool
-	loadingAllNotes         bool
+	browsedNotes            []*model.Note
+	closedThisWeekElsewhere int
 	missingSave             *failedNoteSave
 	missingSaveReturnMode   ViewMode
 	helpReturnMode          ViewMode
@@ -276,7 +306,6 @@ type Model struct {
 	actionMenuNoteID        string
 	actionMenuItems         []noteAction
 	actionMenuSelected      int
-	actionUsage             map[string]int
 	notifyInput             *textinput.Model
 	notifyNotice            string
 	notifyEntries           map[string]notify.Entry
@@ -293,17 +322,19 @@ type Model struct {
 	automationNotice        string
 
 	previewViewport  viewport.Model
+	previewPlainText string
 	archivedViewport viewport.Model
 
 	editor      *textarea.Model
 	searchInput *textinput.Model
 
-	searchSelected  int
-	searchScroll    int
-	searchPreviewID string
-	searchNotice    string
-	editReturnMode  ViewMode
-	inlineInput     *textinput.Model
+	searchSelected   int
+	searchScroll     int
+	searchPreviewID  string
+	searchPreviewing bool
+	searchNotice     string
+	editReturnMode   ViewMode
+	inlineInput      *textinput.Model
 
 	previewTab     int
 	reviewCursor   int
@@ -320,6 +351,10 @@ type Model struct {
 	messageExpiryPending bool
 	errorLines           []string
 	errorReturnMode      ViewMode
+	messageLogExpanded   bool
+	messageLogViewport   viewport.Model
+	screenError          string
+	screenErrorMode      ViewMode
 
 	width  int
 	height int
@@ -368,6 +403,7 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 	rejectArea := textarea.New()
 	rejectArea.Placeholder = "Explain what needs to change..."
 	rejectArea.ShowLineNumbers = false
+	rejectArea.MaxHeight = 0
 	rejectArea.FocusedStyle = ta.FocusedStyle
 	rejectArea.BlurredStyle = ta.FocusedStyle
 	disableTextareaDeleteShortcuts(&rejectArea)
@@ -399,10 +435,8 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 		bannerWaveActive:        true,
 	}
 	m.sessionCtx, m.cancelSession = context.WithCancel(context.Background())
-	m.notes, m.startupNotesErr = m.store.ListDashboard(m.currentDate)
+	m.notes, m.startupNotesErr = m.store.ListDashboard(m.currentDate, m.previousNoteDay())
 	m.loadAppState()
-	m.loadingAllNotes = true
-	m.actionUsage = loadActionUsage(cfg.CacheDir())
 	m.notifyEntries = listNotifyEntries(cfg.Root()).entries
 	m.git.fetchedPreviousDay = m.previousNoteDay()
 	m.git.loadingGit = false
@@ -424,7 +458,7 @@ func NewModel(cfg *config.Config, startupErr error) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.startupNotesCmd(), loadAllNotesCmd(m.store), tickBannerWaveCmd(), m.loadCommitsCmd(), m.startupHintCmd()}
+	cmds := []tea.Cmd{m.startupNotesCmd(), m.rebuildAppStateCmd(), tickBannerWaveCmd(), m.loadCommitsCmd(), m.startupHintCmd()}
 	if m.syncPulseRunning {
 		cmds = append(cmds, tickSyncPulseCmd())
 	}
@@ -547,14 +581,13 @@ func (m Model) allNavItems() []NavItem {
 }
 
 func (m *Model) updatePreviewViewport() {
-	navItems := m.allNavItems()
-	if len(navItems) == 0 || m.selected >= len(navItems) {
+	item, found := m.selectedNavItem()
+	if !found {
 		return
 	}
 
 	_, innerWidth, innerHeight := previewModalSize(m.width, m.height)
 
-	item := navItems[m.selected]
 	var mdContent string
 	if item.Kind == KindGitRepo {
 		commitsLine := ""
@@ -581,7 +614,11 @@ func (m *Model) updatePreviewViewport() {
 			}
 			mdContent = runPreview{heading: fmt.Sprintf("# Job: %s (%s)", item.Draft.Name, statusHeader), log: logText}.render(innerWidth)
 		} else {
-			mdContent = renderMarkdown(fmt.Sprintf("# Job: %s\n\nNo dry-run analysis or log output available.\nPress **[r]** on dashboard to run dry-run check, or press **[Enter]** to execute job.", item.Draft.Name), innerWidth)
+			keyGuide := "(r) run"
+			if jobHasDryRun(item.Draft.DryRunCommand) {
+				keyGuide = "(d) dry-run " + keyGuide
+			}
+			mdContent = renderMarkdown(fmt.Sprintf("# Job: %s\n\nNo dry-run analysis or log output available.\n%s", item.Draft.Name, keyGuide), innerWidth)
 		}
 	} else if item.Kind == KindReviewRun && item.ReviewRun != nil {
 		mdContent = reviewRunPreview(m.reviewRoot(), *item.ReviewRun).render(innerWidth)
@@ -603,6 +640,7 @@ func (m *Model) updatePreviewViewport() {
 
 	m.previewViewport = viewport.New(innerWidth, innerHeight)
 	m.previewViewport.SetContent(mdContent)
+	m.previewPlainText = plainText(mdContent)
 	if item.Kind == KindJobDraft || item.Kind == KindReviewRun || item.Kind == KindBragRun || item.Kind == KindAutomationRun {
 		m.previewViewport.GotoBottom()
 	}
@@ -627,8 +665,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !isModel {
 		return next, cmd
 	}
+	updated.clearScreenErrorOffScreen()
 	if updated.scrollPending {
 		updated.settleScroll()
+	}
+	if updated.browsedNotes != nil && !updated.browsing() {
+		updated.browsedNotes = nil
+		cmd = tea.Batch(cmd, updated.closedThisWeekCmd())
 	}
 	if updated.git.prAlertsDue {
 		updated.git.prAlertsDue = false
@@ -679,7 +722,9 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSearchExported(msg)
 
 	case ctrlCResetMsg:
-		m.ctrlCCount = 0
+		if msg.pressSequence == m.ctrlCPressSequence {
+			m.ctrlCCount = 0
+		}
 		return m, nil
 
 	case setupSavedMsg:
@@ -702,19 +747,14 @@ func (m Model) handleMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ViewPreview {
 			m.updatePreviewViewport()
 		}
-		if m.mode == ViewSearchPreview {
-			m.updateSearchPreviewViewport()
-		}
 
 	case loadNotesMsg:
 		notesSection{}.storeLoadedNotes(&m, msg)
-		var saveAppState tea.Cmd
-		if msg.complete && msg.err == nil {
-			saveAppState = m.appStateFromAllNotes()
-		}
 		refetchPreviousDay := gitSection{}.refreshPreviousDay(&m)
-		next, cmd := notesSection{}.finishLoadedNotes(m, msg, refetchPreviousDay)
-		return next, tea.Batch(cmd, saveAppState)
+		return notesSection{}.finishLoadedNotes(m, msg, refetchPreviousDay)
+
+	case appStateRebuiltMsg:
+		return m.applyRebuiltAppState(msg)
 
 	case tea.KeyMsg:
 		next, cmd := m.handleKey(msg)
@@ -751,6 +791,7 @@ func (m Model) renderSubSection(title string, count int, showCount bool, isActiv
 }
 
 func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
+	m.previewNotice = ""
 	if item.Kind == KindGitRepo && item.GitRepo != nil {
 		m.git.gitPopupRepo = item.GitRepo
 		m.git.gitPopupTab = 0
@@ -758,6 +799,7 @@ func (m Model) openPreview(item NavItem) (tea.Model, tea.Cmd) {
 		m.mode = ViewGitDetails
 		return m, nil
 	}
+	m.searchPreviewing = false
 	m.resetReviewView()
 	m.updatePreviewViewport()
 	m.mode = ViewPreview

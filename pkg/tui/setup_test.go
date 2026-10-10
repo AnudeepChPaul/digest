@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/doctor"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/doctor"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -85,7 +85,7 @@ func TestSetupWalksThroughEveryQuestionAndWritesTheConfig(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsABadTimeAndSkipsInstallOnN(t *testing.T) {
+func TestSetupRejectsABadTimeAndCannotSkipTheToolCheck(t *testing.T) {
 	m, path, installs := setupModel(t, "digest_root: /mine\njobs: []\n")
 	m, _ = pressKey(t, m, "n")
 	m, _ = pressKey(t, m, "enter")
@@ -97,9 +97,14 @@ func TestSetupRejectsABadTimeAndSkipsInstallOnN(t *testing.T) {
 	m.setupInput.SetValue("09:00")
 	m, _ = pressKey(t, m, "enter")
 	m, _ = pressKey(t, m, "n")
-	m, _ = pressKey(t, m, "n")
-	if *installs != 0 || m.mode != ViewDashboard {
-		t.Errorf("n should skip the install: installs %d mode %v", *installs, m.mode)
+	if m, _ = pressKey(t, m, "n"); *installs != 0 || m.mode != ViewSetup || m.setup.step != setupStepDoctor {
+		t.Fatalf("n should not skip the tool check: installs %d mode %v", *installs, m.mode)
+	}
+	if view := stripANSI(m.View()); strings.Contains(view, "skip") {
+		t.Errorf("the tool check should not offer a skip:\n%s", view)
+	}
+	if m, _ = pressKey(t, m, "enter"); *installs != 1 || m.mode != ViewDashboard {
+		t.Errorf("enter should finish the wizard: installs %d mode %v", *installs, m.mode)
 	}
 	written, _ := os.ReadFile(path)
 	backup, _ := os.ReadFile(path + ".bak")
@@ -193,7 +198,7 @@ func TestSetupWorkDaysRenderSideBySide(t *testing.T) {
 }
 
 func TestEscClosesSetupOnEveryStepWithoutSaving(t *testing.T) {
-	advance := [][]string{{}, {"y"}, {"y", "enter"}, {"y", "enter", "enter"}, {"y", "enter", "enter", "enter"}, {"y", "enter", "enter", "enter", "y"}}
+	advance := [][]string{{}, {"y"}, {"y", "enter"}, {"y", "enter", "enter"}, {"y", "enter", "enter", "enter"}, {"y", "enter", "enter", "enter", "n"}}
 	for step, keys := range advance {
 		m, path, installs := setupModel(t, "digest_root: /mine\n")
 		for _, key := range keys {
@@ -222,7 +227,7 @@ func TestEscClosesSetupOnEveryStepWithoutSaving(t *testing.T) {
 func TestCommaReopensSetupAfterFinishing(t *testing.T) {
 	m, path, _ := setupModel(t, "")
 	m.configPath = path
-	for _, key := range []string{"n", "enter", "enter", "n", "n"} {
+	for _, key := range []string{"n", "enter", "enter", "n", "enter"} {
 		m, _ = pressKey(t, m, key)
 	}
 	if m.mode != ViewDashboard {
@@ -326,8 +331,12 @@ func TestSetupFormTabEditsATextFieldAndEscReverts(t *testing.T) {
 	m, _ = pressKey(t, m, "tab")
 	m.setupInput.SetValue("~/oops")
 	m, _ = pressKey(t, m, "esc")
+	if m.mode != ViewSetupDiscard || !strings.Contains(stripANSI(m.View()), "Undo") {
+		t.Fatalf("esc on a changed field should ask before undoing, mode %v:\n%s", m.mode, stripANSI(m.View()))
+	}
+	m, _ = pressKey(t, m, "y")
 	if m.mode != ViewSetup || m.setup.editing || strings.Join(m.setup.answers.RepositoryRoots, ",") != "~/code" {
-		t.Errorf("esc while editing should revert and keep the form open: mode %v editing %v roots %v", m.mode, m.setup.editing, m.setup.answers.RepositoryRoots)
+		t.Errorf("y should revert the field and keep the form open: mode %v editing %v roots %v", m.mode, m.setup.editing, m.setup.answers.RepositoryRoots)
 	}
 	if !strings.Contains(stripANSI(m.View()), "~/code") {
 		t.Errorf("the reverted value should show:\n%s", stripANSI(m.View()))
@@ -395,8 +404,8 @@ func TestSetupFormSavesInTheBackgroundThenCloses(t *testing.T) {
 	if !m.setup.saving || !strings.Contains(stripANSI(m.View()), "Saving") {
 		t.Fatalf("enter should show the saving state:\n%s", stripANSI(m.View()))
 	}
-	for _, key := range []string{"esc", "j", "tab"} {
-		if m, _ = pressKey(t, m, key); m.mode != ViewSetup || !m.setup.saving || m.setup.field != setupFieldNotifications {
+	for _, key := range []string{"esc", "j", "tab", "ctrl+c", "ctrl+c", "ctrl+c"} {
+		if m, _ = pressKey(t, m, key); m.mode != ViewSetup || !m.setup.saving || m.setup.field != setupFieldNotifications || m.ctrlCCount != 0 {
 			t.Fatalf("%q should be ignored while saving: mode %v", key, m.mode)
 		}
 	}
@@ -476,5 +485,117 @@ func TestSetupFormScrollsToKeepTheFocusedFieldVisible(t *testing.T) {
 	}
 	if view := stripANSI(m.View()); !strings.Contains(view, "Notifications") {
 		t.Errorf("the focused field should stay on screen:\n%s", view)
+	}
+}
+
+func TestSetupFormEscWhileEditingAsksOnlyWhenTheValueChanged(t *testing.T) {
+	m, _, _ := setupFormModel(t, "")
+	m, _ = pressKey(t, m, "j")
+	m, _ = pressKey(t, m, "tab")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewSetup || m.setup.editing {
+		t.Fatalf("esc on an untouched field should just stop editing, mode %v editing %v", m.mode, m.setup.editing)
+	}
+	m, _ = pressKey(t, m, "tab")
+	m.setupInput.SetValue("~/elsewhere")
+	m, _ = pressKey(t, m, "esc")
+	if m, _ = pressKey(t, m, "n"); m.mode != ViewSetup || !m.setup.editing || m.setupInput.Value() != "~/elsewhere" {
+		t.Errorf("n should keep editing the changed value: mode %v editing %v value %q", m.mode, m.setup.editing, m.setupInput.Value())
+	}
+}
+
+func TestSetupFormEnterWithNothingChangedDoesNothing(t *testing.T) {
+	m, path, installs := setupFormModel(t, "")
+	if next, cmd := pressKey(t, m, "enter"); cmd != nil || next.setup.saving || next.mode != ViewSetup {
+		t.Errorf("enter on an unchanged form should do nothing: saving %v mode %v", next.setup.saving, next.mode)
+	}
+	m, _ = pressKey(t, m, "j")
+	m, _ = pressKey(t, m, "tab")
+	if next, cmd := pressKey(t, m, "enter"); cmd != nil || next.setup.saving {
+		t.Errorf("enter while editing an unchanged value should not save")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) || *installs != 0 {
+		t.Errorf("nothing should be written: stat err %v installs %d", err, *installs)
+	}
+}
+
+func TestWizardEscAsksBeforeDiscardingChangedAnswers(t *testing.T) {
+	m, path, _ := setupModel(t, "")
+	m, _ = pressKey(t, m, "n")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewSetupDiscard || !strings.Contains(stripANSI(m.View()), "Discard") {
+		t.Fatalf("esc after changing an answer should ask first, mode %v:\n%s", m.mode, stripANSI(m.View()))
+	}
+	if m, _ = pressKey(t, m, "n"); m.mode != ViewSetup || m.setup.step != setupStepWorkDays || m.setup.answers.ShowGit {
+		t.Fatalf("n should go back to the wizard with the answers, mode %v step %v", m.mode, m.setup.step)
+	}
+	m, _ = pressKey(t, m, "esc")
+	if m, _ = pressKey(t, m, "y"); m.mode != ViewDashboard || m.setup != nil {
+		t.Errorf("y should discard and close, mode %v", m.mode)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("discarding the first-run wizard should leave no config, stat err %v", err)
+	}
+
+	m, _, _ = setupModel(t, "")
+	m, _ = pressKey(t, m, "y")
+	m.setupInput.SetValue("~/typed")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewSetupDiscard {
+		t.Errorf("esc with a typed but unconfirmed answer should ask first, mode %v", m.mode)
+	}
+}
+
+func TestFirstRunWizardEscWithoutChangesLeavesNoConfig(t *testing.T) {
+	m, path, _ := setupModel(t, "")
+	if m, _ = pressKey(t, m, "esc"); m.mode != ViewDashboard {
+		t.Fatalf("esc on an untouched wizard should close at once, mode %v", m.mode)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("esc should leave no config so the wizard returns, stat err %v", err)
+	}
+}
+
+func TestWizardArrowsMoveBetweenTheStepsAlreadyReached(t *testing.T) {
+	m, _, _ := setupModel(t, "")
+	if m, _ = pressKey(t, m, "right"); m.setup.step != setupStepGit {
+		t.Fatalf("→ should not go past the furthest step, step %v", m.setup.step)
+	}
+	for _, key := range []string{"y", "enter", "enter", "enter", "n"} {
+		m, _ = pressKey(t, m, key)
+	}
+	if m.setup.step != setupStepDoctor {
+		t.Fatalf("walk: step %v", m.setup.step)
+	}
+	moves := []struct {
+		key  string
+		want setupStep
+	}{{"right", setupStepDoctor}, {"left", setupStepHints}, {"right", setupStepDoctor}, {"left", setupStepHints}, {"left", setupStepTimes}}
+	for _, move := range moves {
+		if m, _ = pressKey(t, m, move.key); m.setup.step != move.want {
+			t.Fatalf("after %q step = %v, want %v", move.key, m.setup.step, move.want)
+		}
+	}
+	for _, arrow := range []tea.KeyType{tea.KeyLeft, tea.KeyRight} {
+		next, _ := m.Update(tea.KeyMsg{Type: arrow})
+		if m = next.(Model); m.setup.step != setupStepTimes {
+			t.Errorf("arrows should stay in the time field while typing, step %v", m.setup.step)
+		}
+	}
+	if m, _ = pressKey(t, m, "enter"); m.setup.step != setupStepHints {
+		t.Fatalf("enter should leave the time step, step %v", m.setup.step)
+	}
+	if m, _ = pressKey(t, m, "y"); m.setup.step != setupStepDoctor || !m.setup.answers.ShowKeyHints {
+		t.Errorf("y should stay the answer on a y/n step, step %v hints %v", m.setup.step, m.setup.answers.ShowKeyHints)
+	}
+
+	m, _, _ = setupModel(t, "")
+	for _, key := range []string{"n", "enter", "enter"} {
+		m, _ = pressKey(t, m, key)
+	}
+	m, _ = pressKey(t, m, "y")
+	if m, _ = pressKey(t, m, "left"); m.setup.step != setupStepHints {
+		t.Fatalf("← from the tool check: step %v", m.setup.step)
+	}
+	m.setup.step = setupStepGit
+	if m, _ = pressKey(t, m, "right"); m.setup.step != setupStepWorkDays {
+		t.Errorf("→ from git without git should skip the repos step, step %v", m.setup.step)
 	}
 }

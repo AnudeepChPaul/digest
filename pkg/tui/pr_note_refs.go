@@ -5,9 +5,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/store"
 )
 
 const orphanPROwner = "owner"
@@ -81,39 +81,70 @@ var writtenPRNotes = struct {
 }{ids: map[string]string{}}
 
 type prNoteFinder struct {
-	noteStore *store.NoteStore
-	index     prNoteIndex
+	noteStore   *store.NoteStore
+	source      model.Source
+	index       prNoteIndex
+	diskIndexed bool
 }
 
 func newPRNoteFinder(noteStore *store.NoteStore, source model.Source, known prNoteIndex) *prNoteFinder {
 	if known.byRef == nil {
 		known = indexPRNotes(nil, source)
 	}
-	return &prNoteFinder{noteStore: noteStore, index: known}
+	return &prNoteFinder{noteStore: noteStore, source: source, index: known}
+}
+
+func (finder *prNoteFinder) indexDisk() error {
+	finder.diskIndexed = true
+	notes, err := finder.noteStore.List()
+	if !storeResultUsable(err) {
+		return err
+	}
+	onDisk := indexPRNotes(notes, finder.source)
+	for ref, note := range onDisk.byRef {
+		if _, known := finder.index.byRef[ref]; !known {
+			finder.index.byRef[ref] = note
+		}
+	}
+	for id, note := range onDisk.byLegacyID {
+		if _, known := finder.index.byLegacyID[id]; !known {
+			finder.index.byLegacyID[id] = note
+		}
+	}
+	return nil
 }
 
 func (finder *prNoteFinder) writtenKey(ref string) string {
 	return finder.noteStore.Root + "\x00" + ref
 }
 
-func (finder *prNoteFinder) find(ref, repo string, number int, legacyID string) (*model.Note, bool, error) {
-	noteID := ""
+func (finder *prNoteFinder) knownID(ref, repo string, number int, legacyID string) string {
 	if note, found := finder.index.find(ref, repo, number, legacyID); found {
-		noteID = note.ID
-	} else {
-		writtenPRNotes.Lock()
-		for _, candidate := range []string{ref, prNoteRef("", repo, number)} {
-			if id, written := writtenPRNotes.ids[finder.writtenKey(candidate)]; written && noteID == "" {
-				noteID = id
-			}
+		return note.ID
+	}
+	writtenPRNotes.Lock()
+	defer writtenPRNotes.Unlock()
+	for _, candidate := range []string{ref, prNoteRef("", repo, number)} {
+		if id, written := writtenPRNotes.ids[finder.writtenKey(candidate)]; written {
+			return id
 		}
-		writtenPRNotes.Unlock()
+	}
+	return ""
+}
+
+func (finder *prNoteFinder) find(ref, repo string, number int, legacyID string) (*model.Note, bool, error) {
+	noteID := finder.knownID(ref, repo, number, legacyID)
+	if noteID == "" && !finder.diskIndexed {
+		if err := finder.indexDisk(); err != nil {
+			return nil, false, fmt.Errorf("%s: %w", ref, err)
+		}
+		noteID = finder.knownID(ref, repo, number, legacyID)
 	}
 	if noteID == "" {
 		return nil, false, nil
 	}
 	note, err := finder.noteStore.LoadByID(noteID)
-	if err != nil {
+	if note == nil {
 		return nil, false, fmt.Errorf("%s: %w", ref, err)
 	}
 	return note, true, nil

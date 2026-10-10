@@ -20,6 +20,8 @@ func init() {
 		actionQuit:         Model.countCtrlCToQuit,
 		actionHalfPageDown: Model.dashboardHalfPageDown,
 		actionHalfPageUp:   Model.dashboardHalfPageUp,
+		actionPageDown:     Model.dashboardPageDown,
+		actionPageUp:       Model.dashboardPageUp,
 		actionToday:        Model.jumpToToday,
 		actionOpenPreview:  Model.openSelectedPreview,
 		actionOpenItem:     Model.openSelectedItem,
@@ -34,7 +36,6 @@ func init() {
 
 		actionCloseHelp: Model.closeHelp,
 
-		actionAutomate:              Model.automateFromPreview,
 		actionRunAutomationDraft:    Model.runAutomationDraft,
 		actionConfirmAutomation:     Model.confirmAutomation,
 		actionCancelAutomation:      Model.cancelAutomation,
@@ -42,6 +43,7 @@ func init() {
 		actionDeleteAutomationDraft: Model.deleteAutomationDraft,
 		actionSaveAutomationEdit:    Model.saveAutomationEdit,
 		actionCancelAutomationEdit:  Model.cancelAutomationEdit,
+		actionCopyAutomationEditor:  Model.copyAutomationEditor,
 
 		actionOpenActions:        Model.openActionMenu,
 		actionChooseAction:       Model.chooseAction,
@@ -51,7 +53,6 @@ func init() {
 		actionSetupYes:           Model.setupAnswerYes,
 		actionSetupNo:            Model.setupAnswerNo,
 		actionSetupConfirm:       Model.setupConfirm,
-		actionSetupSkip:          Model.setupSkip,
 		actionSetupSwitchTime:    Model.setupSwitchTime,
 		actionSetupDayLeft:       Model.setupDayLeft,
 		actionSetupDayRight:      Model.setupDayRight,
@@ -67,6 +68,8 @@ func init() {
 		actionOpenSetup:          Model.openSetup,
 		actionEditorHalfPageUp:   Model.editorHalfPageUp,
 		actionEditorHalfPageDown: Model.editorHalfPageDown,
+		actionEditorPageUp:       Model.editorPageUp,
+		actionEditorPageDown:     Model.editorPageDown,
 
 		actionCloseBrag:      Model.closeBrag,
 		actionBragCursorDown: Model.bragCursorDown,
@@ -97,7 +100,6 @@ func init() {
 		actionChooseLink:       Model.chooseLink,
 		actionCloseLinkMenu:    Model.closeLinkMenu,
 		actionSwitchPreviewTab: Model.switchPreviewTab,
-		actionIgnoreKey:        Model.ignoreKey,
 
 		actionCloseSearch:        Model.closeSearch,
 		actionSearchCursorUp:     Model.searchCursorUp,
@@ -107,14 +109,8 @@ func init() {
 		actionSearchHalfPageUp:   Model.searchHalfPageUp,
 		actionSearchHalfPageDown: Model.searchHalfPageDown,
 		actionOpenSearchPreview:  Model.openSearchPreview,
+		actionOpenSearchResult:   Model.openSearchResult,
 		actionExportSearch:       Model.exportSearch,
-
-		actionCloseSearchPreview:    Model.closeSearchPreview,
-		actionSearchPreviewNext:     Model.searchPreviewNext,
-		actionSearchPreviewPrevious: Model.searchPreviewPrevious,
-		actionEditSearchResult:      Model.editSearchResult,
-		actionCopySearchResult:      Model.copySearchResult,
-		actionDeleteSearchResult:    Model.deleteSearchResult,
 
 		actionDismissError: Model.dismissError,
 	}
@@ -147,9 +143,14 @@ func (m Model) resolveKey(msg tea.KeyMsg) (keyBinding, bool) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.clampScreenSelection()
+	if m.setupSaving() {
+		return m, nil
+	}
+	m.screenError = ""
 	if msg.String() == "ctrl+c" {
 		return m.countCtrlCToQuit(msg)
 	}
+	m.ctrlCCount = 0
 	if binding, found := m.resolveKey(msg); found {
 		for _, applyKeystroke := range keystrokeAppliers {
 			if next, cmd, handled := applyKeystroke(m, binding, msg); handled {

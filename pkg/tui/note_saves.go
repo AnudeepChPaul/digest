@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -44,8 +44,9 @@ type notesSavedMsg struct {
 }
 
 type notesDeletedMsg struct {
-	deleted []model.Note
-	errs    []error
+	deleted     []model.Note
+	errs        []error
+	draftErrors []error
 }
 
 func (m Model) saveNotesCmd(notes ...*model.Note) tea.Cmd {
@@ -116,7 +117,7 @@ func (m Model) deleteNotesCmd(notes ...*model.Note) tea.Cmd {
 			forgetWrittenPRNote(noteStore, copies[index])
 			msg.deleted = append(msg.deleted, copies[index])
 			if err := automation.Dismiss(automationRoot, copies[index].ID); err != nil && !errors.Is(err, automation.ErrInvalidNoteID) {
-				msg.errs = append(msg.errs, fmt.Errorf("remove automation for %q: %w", copies[index].Summary, err))
+				msg.draftErrors = append(msg.draftErrors, fmt.Errorf("%q: %w", copies[index].Summary, err))
 			}
 		}
 		return msg
@@ -134,12 +135,24 @@ func copyNotes(notes []*model.Note) []model.Note {
 }
 
 func (m Model) noteIndex(target *model.Note, snapshot model.Note) int {
-	if index := slices.Index(m.notes, target); index >= 0 {
-		return index
+	return indexOfNote(m.notes, target, snapshot)
+}
+
+func (m *Model) forgetNote(target *model.Note, snapshot model.Note) {
+	if index := indexOfNote(m.notes, target, snapshot); index >= 0 {
+		m.notes = slices.Delete(m.notes, index, index+1)
 	}
-	return slices.IndexFunc(m.notes, func(note *model.Note) bool {
-		return (snapshot.ID != "" && note.ID == snapshot.ID) || (snapshot.FilePath != "" && note.FilePath == snapshot.FilePath)
-	})
+	if index := indexOfNote(m.browsedNotes, target, snapshot); index >= 0 {
+		m.browsedNotes = slices.Delete(m.browsedNotes, index, index+1)
+	}
+}
+
+func applySavedNote(note *model.Note, saved savedNoteResult) {
+	if reflect.DeepEqual(*note, saved.before) {
+		*note = saved.after
+	} else {
+		mergeSavedFields(note, saved.before, saved.after)
+	}
 }
 
 func mergeSavedFields(note *model.Note, before, after model.Note) {
@@ -159,15 +172,21 @@ func mergeSavedFields(note *model.Note, before, after model.Note) {
 
 func (m Model) applySavedNotes(msg notesSavedMsg) (tea.Model, tea.Cmd) {
 	for _, saved := range msg.saved {
-		index := m.noteIndex(saved.target, saved.before)
-		if index < 0 {
-			m.notes = append(m.notes, saved.target)
-			index = len(m.notes) - 1
+		browsedIndex := indexOfNote(m.browsedNotes, saved.target, saved.before)
+		if browsedIndex >= 0 {
+			applySavedNote(m.browsedNotes[browsedIndex], saved)
 		}
-		if reflect.DeepEqual(*m.notes[index], saved.before) {
-			*m.notes[index] = saved.after
-		} else {
-			mergeSavedFields(m.notes[index], saved.before, saved.after)
+		index := m.noteIndex(saved.target, saved.before)
+		switch {
+		case index >= 0 && (browsedIndex < 0 || m.notes[index] != m.browsedNotes[browsedIndex]):
+			applySavedNote(m.notes[index], saved)
+		case index < 0 && browsedIndex >= 0 && m.belongsOnDashboard(m.browsedNotes[browsedIndex]):
+			m.notes = append(m.notes, m.browsedNotes[browsedIndex])
+		case index < 0 && browsedIndex < 0:
+			applySavedNote(saved.target, saved)
+			if m.belongsOnDashboard(saved.target) {
+				m.notes = append(m.notes, saved.target)
+			}
 		}
 		if m.awaitingNewNoteSave && saved.before.FilePath == "" {
 			m.awaitingNewNoteSave = false
@@ -178,10 +197,16 @@ func (m Model) applySavedNotes(msg notesSavedMsg) (tea.Model, tea.Cmd) {
 	for _, failed := range msg.failed {
 		errorTexts = append(errorTexts, fmt.Sprintf("%q: %v", failed.attempted.Summary, failed.err))
 		index := m.noteIndex(failed.target, failed.attempted)
+		browsedIndex := indexOfNote(m.browsedNotes, failed.target, failed.attempted)
 		switch {
-		case failed.onDisk != nil && index >= 0 && keepsTypedText(failed):
-		case failed.onDisk != nil && index >= 0:
-			*m.notes[index] = *failed.onDisk
+		case failed.onDisk != nil && (index >= 0 || browsedIndex >= 0) && keepsTypedText(failed):
+		case failed.onDisk != nil && (index >= 0 || browsedIndex >= 0):
+			if index >= 0 {
+				*m.notes[index] = *failed.onDisk
+			}
+			if browsedIndex >= 0 {
+				*m.browsedNotes[browsedIndex] = *failed.onDisk
+			}
 		case errors.Is(failed.err, store.ErrNoteFileMissing) && m.missingSave == nil:
 			missing := failed
 			m.missingSave, m.missingSaveReturnMode = &missing, m.mode
@@ -208,9 +233,7 @@ func keepsTypedText(failed failedNoteSave) bool {
 
 func (m Model) applyDeletedNotes(msg notesDeletedMsg) (tea.Model, tea.Cmd) {
 	for _, deleted := range msg.deleted {
-		if index := m.noteIndex(nil, deleted); index >= 0 {
-			m.notes = slices.Delete(m.notes, index, index+1)
-		}
+		m.forgetNote(nil, deleted)
 	}
 	if len(msg.errs) > 0 {
 		texts := make([]string, len(msg.errs))
@@ -218,6 +241,13 @@ func (m Model) applyDeletedNotes(msg notesDeletedMsg) (tea.Model, tea.Cmd) {
 			texts[index] = err.Error()
 		}
 		m.postMessage(messageSourceNotes, messageError, "delete failed · "+strings.Join(texts, " · "))
+	}
+	if len(msg.draftErrors) > 0 {
+		texts := make([]string, len(msg.draftErrors))
+		for index, err := range msg.draftErrors {
+			texts[index] = err.Error()
+		}
+		m.postMessage(messageSourceNotes, messageError, "deleted, but couldn't remove draft · "+strings.Join(texts, " · "))
 	}
 	if m.mode == ViewArchived {
 		m.refreshArchivedViewport()
@@ -236,21 +266,17 @@ func (m Model) confirmRecreateNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) discardMissingNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	missing := m.missingSave
-	m.missingSave, m.mode = nil, ViewDashboard
+	m.missingSave, m.mode = nil, m.missingSaveReturnMode
 	if missing == nil {
 		return m, nil
 	}
-	if index := m.noteIndex(missing.target, missing.attempted); index >= 0 {
-		m.notes = slices.Delete(m.notes, index, index+1)
-	}
+	m.forgetNote(missing.target, missing.attempted)
+	m.afterPreviewArchive(m.mode)
 	return m, refreshNotifyCmd(m.cfg.Root(), m.notes)
 }
 
 func recreateNoteBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionRecreateNote, []string{"y", "Y", "enter"}, "y", "create"),
-		newKeyBinding(actionDiscardMissingNote, []string{"n", "N", "esc"}, "n", "discard"),
-	}
+	return yesNoBindings(actionRecreateNote, "create", actionDiscardMissingNote, "discard")
 }
 
 func (m Model) missingNoteSummary() string {
@@ -267,5 +293,5 @@ func (m Model) renderRecreateConfirm(modalWidth int) string {
 }
 
 func (m Model) recreateRowPill() string {
-	return renderHintPill([]keyHint{{icon: "!", label: "file is gone, create it again?"}, {key: "y", label: "create"}, {key: "n", label: "discard"}})
+	return renderHintPill([]keyHint{{icon: "!", label: "file is gone, create it again?"}, {key: "y|enter", label: "create"}, {key: "n|esc", label: "discard"}})
 }

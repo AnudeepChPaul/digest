@@ -6,7 +6,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 func Mark(marker string) (func(), error) {

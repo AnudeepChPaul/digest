@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 type DigestNotifications struct {
@@ -43,11 +43,15 @@ func (c *Config) IsWorkDay(day time.Weekday) bool {
 }
 
 func Exists(path string) bool {
-	return system.Exists(resolveConfigPath(path))
+	resolved, err := resolveConfigPath(path)
+	return err == nil && system.Exists(resolved)
 }
 
 func Path(path string) string {
-	return resolveConfigPath(path)
+	if resolved, err := resolveConfigPath(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 type SetupAnswers struct {

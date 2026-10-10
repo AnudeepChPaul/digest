@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 const (
@@ -265,7 +265,7 @@ func Stop(root string, ref PRRef) error {
 	if err := system.Remove(filepath.Join(dir, pidFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return nil
+	return system.Write(filepath.Join(dir, exitFile), []byte("143"))
 }
 
 func AdoptLegacyDirs(root string, ref PRRef) {

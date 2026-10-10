@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func TestSaveRereadsOnlyTheSavedNote(t *testing.T) {
@@ -52,7 +52,7 @@ func TestBackgroundWriterOpensTheMatchedNoteByID(t *testing.T) {
 	m := syncTestModel(t)
 	onDisk := approvedReviewNote(t, m)
 	inMemory := *onDisk
-	m.notes, m.notesComplete = []*model.Note{&inMemory, {ID: "manual", Summary: "untouched"}}, true
+	m.notes = []*model.Note{&inMemory, {ID: "manual", Summary: "untouched"}}
 	onDisk.Body = "edited on disk"
 	if err := m.store.Save(onDisk); err != nil {
 		t.Fatal(err)

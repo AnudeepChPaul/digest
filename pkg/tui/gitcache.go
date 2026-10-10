@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

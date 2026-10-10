@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -20,12 +20,14 @@ func (m Model) renderErrorModal(modalWidth int) string {
 		title = "ERROR"
 	}
 	titleText := deleteTitleStyle.Render(" " + title + " ")
+	footerText := renderModalFooter(footerItemsFrom(m.errorBindings()), modalWidth-6)
 	errorText := lipgloss.NewStyle().
 		Foreground(colourRed).
 		Width(modalWidth - 6).
 		Render(strings.Join(m.errorLines, "\n"))
-
-	footerText := renderModalFooter(footerItemsFrom(errorBindings()), modalWidth-6)
+	if m.errorTitle == messageLogTitle {
+		errorText = m.renderMessageLog(modalWidth - 6)
+	}
 
 	popupContent := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -45,7 +47,7 @@ var composeDashboard = func(m Model) string {
 }
 
 func (m Model) View() string {
-	if m.width < 40 {
+	if m.width < max(40, lipgloss.Width(headerMiddleLine(m))+4) {
 		return "Terminal window is too small."
 	}
 	screen := m.renderScreen()
@@ -100,9 +102,6 @@ func (m Model) renderScreen() string {
 
 	case ViewSearch:
 		return m.renderSearchModal(modalWidth)
-
-	case ViewSearchPreview:
-		return m.renderSearchPreview(modalWidth)
 
 	case ViewHelp:
 		return m.renderHelp(modalWidth)
@@ -167,15 +166,11 @@ func (m Model) renderDeleteConfirmModal(modalWidth int) string {
 	var titleText string
 	var prompt string
 
-	if m.jobToAbort != "" {
-		titleText = deleteTitleStyle.Render(" ABORT JOB ")
-		prompt = fmt.Sprintf("Are you sure you want to abort running job '%s'?", m.jobToAbort)
-	} else if m.jobToExecute != "" {
-		titleText = modalTitleStyle.Render(" EXECUTE JOB ")
-		prompt = fmt.Sprintf("Are you sure you want to run '%s'?", m.jobToExecute)
-	} else if target := m.stopTargetName(); target != "" {
-		titleText = deleteTitleStyle.Render(" STOP JOB ")
-		prompt = fmt.Sprintf("Are you sure you want to stop '%s'?", target)
+	if jobTitle, jobPrompt, found := m.jobConfirmPrompt(); found {
+		titleText, prompt = jobTitle, jobPrompt
+	} else if m.confirmPrompt != "" {
+		titleText = deleteTitleStyle.Render(m.confirmTitle)
+		prompt = m.confirmPrompt
 	} else {
 		titleText = deleteTitleStyle.Render(" DELETE CONFIRMATION ")
 		if len(m.deleteTargetNotes) > 1 {
@@ -206,13 +201,11 @@ func (m Model) renderDeleteConfirmModal(modalWidth int) string {
 }
 
 func (m Model) renderPreviewModal(modalWidth, innerWidth int) string {
-	navItems := m.allNavItems()
 	headerTitle := " PREVIEW "
 	statusBadge := badgeActive.Render("IDLE")
 	tagBadge := tagStyle.Render("#general")
 
-	if len(navItems) > 0 && m.selected < len(navItems) {
-		item := navItems[m.selected]
+	if item, found := m.selectedNavItem(); found {
 		switch item.Kind {
 		case KindGitRepo:
 			headerTitle = fmt.Sprintf(" GIT REPO: %s ", item.GitRepo.Name)
@@ -306,6 +299,9 @@ func (m Model) renderPreviewModal(modalWidth, innerWidth int) string {
 	partsBelow := []string{""}
 	if prItem != nil && m.reviewNotice != "" {
 		partsBelow = append(partsBelow, yellowBadgeStyle.Render(m.reviewNotice), "")
+	}
+	if m.previewNotice != "" {
+		partsBelow = append(partsBelow, stateStyle(review.StateFailed).Render(m.previewNotice), "")
 	}
 	partsBelow = append(partsBelow, footerText)
 	fixedHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, partsAbove...)) + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, partsBelow...))

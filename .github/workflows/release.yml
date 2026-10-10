@@ -1,9 +1,11 @@
 name: release
 
 on:
-  push:
-    branches: [main]
-    paths: [.version]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release, defaults to the latest tag
+        required: false
 
 concurrency:
   group: release
@@ -15,33 +17,36 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ssh-key: ${{ secrets.DIGEST_DEPLOY_KEY }}
-      - uses: jdx/mise-action@v5
-      - run: |
-          mise run vet
-          mise run test
-      - run: mise run changelog
+          fetch-tags: true
       - id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          release_tag="v$(cat .version)"
+          release_tag="${INPUT_TAG:-$(git tag --list 'v*' --sort=-v:refname | head -n 1)}"
+          if [ -z "$release_tag" ]; then
+            echo "no tag to release" >&2
+            exit 1
+          fi
+          git checkout "refs/tags/$release_tag"
           echo "name=$release_tag" >> "$GITHUB_OUTPUT"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -m "digest $release_tag" "$release_tag"
-          git push origin "$release_tag"
+      - uses: jdx/mise-action@v5
       - run: mise run dist
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mise run release:notes > dist/release-notes.md
           gh release create "${{ steps.tag.outputs.name }}" dist/*.tar.gz dist/checksums.txt --title "digest ${{ steps.tag.outputs.name }}" --notes-file dist/release-notes.md
+      - run: |
+          curl -fsSL "https://proxy.golang.org/github.com/achandrapaul/digest/@v/${{ steps.tag.outputs.name }}.info"
       - uses: actions/checkout@v7
         with:
-          repository: AnudeepChPaul/homebrew-tap
+          repository: achandrapaul/homebrew-tap
           path: homebrew-tap
           ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
       - env:
@@ -57,41 +62,24 @@ jobs:
           fi
           git commit -am "digest ${{ steps.tag.outputs.name }}"
           git push origin HEAD:main
-      - run: |
-          git add CHANGELOG.md
-          git commit -m "chore: changelog ${{ steps.tag.outputs.name }}"
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            git pull --rebase --no-tags origin main
-          done
-          exit 1
 
   benchmark:
+    needs: release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: main
           fetch-depth: 0
           ssh-key: ${{ secrets.DIGEST_DEPLOY_KEY }}
-      - id: touched
-        run: |
-          if git diff-tree --no-commit-id --name-only -r HEAD | grep -qx 'docs/benchmark/benchmark.md'; then
-            echo "benchmark=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "benchmark=false" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.touched.outputs.benchmark == 'false'
-        uses: jdx/mise-action@v5
-      - if: steps.touched.outputs.benchmark == 'false'
-        run: |
-          release_version="v$(cat .version)"
-          mise run bench:record -- --version "$release_version" --commit "$(git rev-parse --short HEAD)"
+      - uses: jdx/mise-action@v5
+      - run: |
+          release_tag="${{ needs.release.outputs.tag }}"
+          mise run bench:record -- --version "$release_tag" --commit "$(git rev-list -n 1 "$release_tag" | cut -c1-7)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/benchmark/benchmark.md
-          git commit -m "chore: benchmark $release_version"
+          git commit -m "chore: benchmark $release_tag"
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then
               exit 0

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,7 +20,7 @@ func TestCtrlRReloadsTheViewedDayAndKeepsTheSelection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m.notes, m.notesComplete = []*model.Note{kept, gone, oldDone}, true
+	m.notes = []*model.Note{kept, gone, oldDone}
 	if err := m.store.Delete(gone); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestCtrlRReloadsTheViewedDayAndKeepsTheSelection(t *testing.T) {
 		summaries = append(summaries, note.Summary)
 	}
 	joined := strings.Join(summaries, ",")
-	if !strings.Contains(joined, "kept") || !strings.Contains(joined, "added elsewhere") || strings.Contains(joined, "deleted elsewhere") || !strings.Contains(joined, "done long ago") {
+	if !strings.Contains(joined, "kept") || !strings.Contains(joined, "added elsewhere") || strings.Contains(joined, "deleted elsewhere") || strings.Contains(joined, "done long ago") {
 		t.Errorf("notes after ctrl+r = %v", summaries)
 	}
 	if item, ok := m.selectedNavItem(); !ok || item.Note == nil || item.Note.Summary != "kept" {

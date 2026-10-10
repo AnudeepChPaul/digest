@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"github.com/charmbracelet/log"
 )
@@ -19,8 +19,9 @@ type JanitorJob struct {
 	Roots          []string
 	Patterns       []string
 	QuarantineRoot string
-	RetentionDays  int
+	GraceDays      int
 	ReviewRoot     string
+	NoQuarantine   bool
 	Logger         *log.Logger
 }
 
@@ -123,15 +124,16 @@ func reapReviewClones(root string, dryRun bool) ([]string, []string) {
 		if reviewRunning(folders.stateDir) {
 			continue
 		}
+		idle := folders.lastTouched().Before(idleCutoff)
+		if idle {
+			record(folders.remove("idle 7d", dryRun))
+			continue
+		}
 		meta, err := review.ReadMeta(folders.stateDir)
 		if err != nil || meta.Ref.URL == "" {
 			continue
 		}
 		folders.ref = meta.Ref
-		if folders.lastTouched().Before(idleCutoff) {
-			record(folders.remove("idle 7d", dryRun))
-			continue
-		}
 		candidates = append(candidates, folders)
 	}
 	if len(candidates) == 0 {
@@ -170,21 +172,36 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 	logger.Info("Scanning for cleanup targets", "roots", strings.Join(j.Roots, ", "))
 
 	now := time.Now()
-	quarantineRoot := paths.Expand(j.QuarantineRoot)
+	quarantineRoot, err := paths.Expand(j.QuarantineRoot)
+	if err != nil {
+		return nil, err
+	}
 	dateDir := filepath.Join(quarantineRoot, now.Format("2006-01-02"))
+
+	type scannedRoot struct {
+		dir     string
+		entries []os.DirEntry
+	}
+	var scanned []scannedRoot
+	for _, root := range j.Roots {
+		expanded, err := paths.Expand(root)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := system.List(expanded)
+		if err != nil {
+			return nil, fmt.Errorf("janitor root %s: %w", root, err)
+		}
+		scanned = append(scanned, scannedRoot{dir: expanded, entries: entries})
+	}
 
 	var matched []string
 	var failures []string
 	var reclaimed int64
 
-	for _, root := range j.Roots {
-		expanded := paths.Expand(root)
-		entries, err := system.List(expanded)
-		if err != nil {
-			continue
-		}
-
-		for _, entry := range entries {
+	for _, root := range scanned {
+		expanded := root.dir
+		for _, entry := range root.entries {
 			if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
@@ -204,6 +221,24 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 				}
 
 				dest := filepath.Join(dateDir, entry.Name())
+				if j.NoQuarantine {
+					if dryRun {
+						logger.Warn("Would delete", "file", entry.Name(), "size_bytes", info.Size())
+					} else if err := system.Remove(src); err != nil {
+						logger.Error("Failed to delete file", "file", src, "err", err)
+						failures = append(failures, fmt.Sprintf("delete %s: %v", src, err))
+						break
+					} else {
+						logger.Info("Deleted file", "file", entry.Name())
+					}
+					verb := "deleted"
+					if dryRun {
+						verb = "would delete"
+					}
+					reclaimed += info.Size()
+					matched = append(matched, fmt.Sprintf("%s %s (%d bytes)", verb, src, info.Size()))
+					break
+				}
 				if dryRun {
 					logger.Warn("Would quarantine", "file", entry.Name(), "size_bytes", info.Size())
 				} else {
@@ -227,7 +262,7 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 	}
 
 	var purged []string
-	cutoff := now.AddDate(0, 0, -j.RetentionDays)
+	cutoff := now.AddDate(0, 0, -j.GraceDays)
 
 	qEntries, _ := system.List(quarantineRoot)
 	for _, qe := range qEntries {
@@ -237,21 +272,29 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 		t, err := time.Parse("2006-01-02", qe.Name())
 		if err == nil && t.Before(cutoff) {
 			targetDir := filepath.Join(quarantineRoot, qe.Name())
-			purged = append(purged, fmt.Sprintf("purged quarantine from %s", qe.Name()))
 			if dryRun {
 				logger.Warn("Would purge expired quarantine", "batch", qe.Name())
 			} else {
-				_ = system.RemoveAll(targetDir)
+				if err := system.RemoveAll(targetDir); err != nil {
+					logger.Error("Failed to purge expired quarantine", "batch", qe.Name(), "err", err)
+					failures = append(failures, fmt.Sprintf("purge %s: %v", targetDir, err))
+					continue
+				}
 				logger.Info("Purged expired quarantine", "batch", qe.Name())
 			}
+			purged = append(purged, fmt.Sprintf("purged quarantine from %s", qe.Name()))
 		}
 	}
 
 	var reviewActions []string
 	if j.ReviewRoot != "" {
-		var reviewFailures []string
-		reviewActions, reviewFailures = reapReviewClones(paths.Expand(j.ReviewRoot), dryRun)
-		failures = append(failures, reviewFailures...)
+		if reviewRoot, err := paths.Expand(j.ReviewRoot); err != nil {
+			failures = append(failures, err.Error())
+		} else {
+			var reviewFailures []string
+			reviewActions, reviewFailures = reapReviewClones(reviewRoot, dryRun)
+			failures = append(failures, reviewFailures...)
+		}
 		for _, action := range reviewActions {
 			if dryRun {
 				logger.Warn("Review clone", "action", action)
@@ -264,6 +307,10 @@ func (j *JanitorJob) Run(dryRun bool) (*JobResult, error) {
 	summaryFormat := "%d quarantined · %d KiB reclaimed · %d expired batches purged · %d review clones removed"
 	if dryRun {
 		summaryFormat = "%d to quarantine · %d KiB to reclaim · %d expired batches to purge · %d review clones to remove"
+	}
+	if j.NoQuarantine {
+		summaryFormat = strings.Replace(summaryFormat, "quarantined", "deleted", 1)
+		summaryFormat = strings.Replace(summaryFormat, "to quarantine", "to delete", 1)
 	}
 	summary := fmt.Sprintf(summaryFormat, len(matched), reclaimed/1024, len(purged), len(reviewActions))
 	if len(failures) > 0 {

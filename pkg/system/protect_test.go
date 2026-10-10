@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -218,5 +219,132 @@ func TestLogsStayUnlocked(t *testing.T) {
 	}
 	if _, err := OpenLog(filepath.Join(root, "notes", "note.md")); err == nil {
 		t.Error("OpenLog should refuse a locked path, since a detached process couldn't write it")
+	}
+}
+
+func failFlagChangesFor(t *testing.T, failWhen func(path string, flags int) bool) {
+	t.Helper()
+	original := ChangeFileFlags
+	ChangeFileFlags = func(path string, flags int) error {
+		if failWhen(path, flags) {
+			return unix.EPERM
+		}
+		return original(path, flags)
+	}
+	t.Cleanup(func() { ChangeFileFlags = original })
+}
+
+func writeAll(t *testing.T, root string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if err := Write(filepath.Join(root, name), []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRemoveAllRemovesWhatItCanAndListsEveryUnlockFailure(t *testing.T) {
+	root := protectedRoot(t)
+	writeAll(t, root, "brag/a.md", "brag/b.md", "brag/sub/c.md")
+	stuck := map[string]bool{filepath.Join(root, "brag", "a.md"): true, filepath.Join(root, "brag", "sub", "c.md"): true}
+	failFlagChangesFor(t, func(path string, flags int) bool { return stuck[path] && unlocking(flags) })
+	err := RemoveAll(filepath.Join(root, "brag"))
+	if !errors.Is(err, ErrUnlock) {
+		t.Fatalf("err = %v, want ErrUnlock", err)
+	}
+	for path := range stuck {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("error should name %s: %v", path, err)
+		}
+		if !Exists(path) {
+			t.Errorf("%s could not be unlocked, so it should still be there", path)
+		}
+	}
+	if Exists(filepath.Join(root, "brag", "b.md")) {
+		t.Error("b.md could be unlocked, so it should be removed")
+	}
+}
+
+func TestLockTreeLocksWhatItCanAndCountsFailures(t *testing.T) {
+	root := protectedRoot(t)
+	writeAll(t, root, "notes/a.md", "notes/b.md", "notes/c.md")
+	if err := UnlockTree(root); err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(root, "notes", "sealed")
+	if err := os.Mkdir(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(unreadable, 0o700) })
+	stuck := filepath.Join(root, "notes", "b.md")
+	failFlagChangesFor(t, func(path string, flags int) bool { return path == stuck && locking(flags) })
+	locked, err := LockTree(root)
+	if locked != 2 {
+		t.Errorf("locked = %d, want 2", locked)
+	}
+	if err == nil || !strings.Contains(err.Error(), "2 locked, 2 failed") || !strings.Contains(err.Error(), stuck) || !strings.Contains(err.Error(), unreadable) {
+		t.Errorf("err = %v, want 2 locked, 2 failed naming %s and %s", err, stuck, unreadable)
+	}
+	if !isLocked(t, filepath.Join(root, "notes", "a.md")) || isLocked(t, stuck) {
+		t.Error("a.md should be locked and b.md not")
+	}
+}
+
+func TestUnlockTreeListsEveryFailure(t *testing.T) {
+	root := protectedRoot(t)
+	writeAll(t, root, "notes/a.md", "notes/b.md")
+	failFlagChanges(t, unlocking)
+	err := UnlockTree(root)
+	for _, name := range []string{"a.md", "b.md"} {
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("err = %v, want %s named", err, name)
+		}
+	}
+}
+
+func TestLockTreeOnASingleFile(t *testing.T) {
+	root := protectedRoot(t)
+	writeAll(t, root, "notes/a.md")
+	path := filepath.Join(root, "notes", "a.md")
+	if err := UnlockTree(path); err != nil {
+		t.Fatal(err)
+	}
+	if locked, err := LockTree(path); locked != 1 || err != nil || !isLocked(t, path) {
+		t.Errorf("LockTree = %d, %v", locked, err)
+	}
+	failFlagChanges(t, unlocking)
+	if err := UnlockTree(path); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("err = %v, want the file named", err)
+	}
+}
+
+func TestUnlockFailureStopsAppendRenameAndChmod(t *testing.T) {
+	root := protectedRoot(t)
+	path := filepath.Join(root, "notes", "note.md")
+	writeAll(t, root, "notes/note.md")
+	failFlagChanges(t, unlocking)
+	if err := Append(path, []byte("more")); !errors.Is(err, ErrUnlock) {
+		t.Errorf("Append err = %v, want ErrUnlock", err)
+	}
+	if err := Rename(path, path+".moved"); !errors.Is(err, ErrUnlock) {
+		t.Errorf("Rename err = %v, want ErrUnlock", err)
+	}
+	if err := Chmod(path, 0o640); !errors.Is(err, ErrUnlock) {
+		t.Errorf("Chmod err = %v, want ErrUnlock", err)
+	}
+	if content, _ := Read(path); string(content) != "x" || !isLocked(t, path) {
+		t.Errorf("file should be untouched and locked: %q", content)
+	}
+}
+
+func TestChmodKeepsAProtectedFileLocked(t *testing.T) {
+	root := protectedRoot(t)
+	path := filepath.Join(root, "notes", "note.md")
+	writeAll(t, root, "notes/note.md")
+	if err := Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := Stat(path); info.Mode().Perm() != 0o640 || !isLocked(t, path) {
+		t.Errorf("mode = %v, locked = %v", info.Mode().Perm(), isLocked(t, path))
 	}
 }

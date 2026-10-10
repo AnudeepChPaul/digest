@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	"github.com/charmbracelet/log"
 )
@@ -365,5 +365,44 @@ func TestJanitorDryRunSummarySaysWhatWouldHappen(t *testing.T) {
 	}
 	if strings.Contains(result.Summary, "removed") || strings.Contains(result.Summary, "reclaimed") || !strings.Contains(result.Summary, "to remove") {
 		t.Errorf("dry-run summary = %q", result.Summary)
+	}
+}
+
+func TestJanitorRealRunQuarantinesOnlyMatchingFiles(t *testing.T) {
+	scanRoot := t.TempDir()
+	quarantineRoot := filepath.Join(t.TempDir(), "quarantine")
+	for _, name := range []string{"build.log", "notes.tmp", "keep.txt", ".hidden.tmp"} {
+		if err := os.WriteFile(filepath.Join(scanRoot, name), []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(scanRoot, "folder.tmp"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	job := &JanitorJob{Roots: []string{scanRoot}, Patterns: []string{"*.tmp", "*.log"}, QuarantineRoot: quarantineRoot, GraceDays: 7, Logger: log.New(io.Discard)}
+	result, err := job.Run(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dateDir := filepath.Join(quarantineRoot, time.Now().Format("2006-01-02"))
+	for _, name := range []string{"build.log", "notes.tmp"} {
+		if _, err := os.Stat(filepath.Join(scanRoot, name)); err == nil {
+			t.Errorf("%s left in the scanned root", name)
+		}
+		if content, err := os.ReadFile(filepath.Join(dateDir, name)); err != nil || string(content) != name {
+			t.Errorf("%s not quarantined into %s: %q %v", name, dateDir, content, err)
+		}
+	}
+	for _, name := range []string{"keep.txt", ".hidden.tmp", "folder.tmp"} {
+		if _, err := os.Stat(filepath.Join(scanRoot, name)); err != nil {
+			t.Errorf("%s should stay in place: %v", name, err)
+		}
+	}
+	if len(result.ActionsTaken) != 2 || !strings.HasPrefix(result.Summary, "2 quarantined") {
+		t.Errorf("result = %+v, want two quarantined files", result)
+	}
+	if NeedsUserAction(result, false) {
+		t.Errorf("a clean quarantine needs no user action: %+v", result)
 	}
 }

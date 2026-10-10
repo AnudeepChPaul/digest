@@ -3,7 +3,6 @@ package jobs
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -94,23 +93,31 @@ func matchMergedPR(repo, branch string, prs []MergedPR, dryRun bool) (*MergedPR,
 	return nil, strings.Join(outputs, " | ")
 }
 
+func mergedWithoutForce(repo, branch string) bool {
+	branchRef := "refs/heads/" + branch
+	if gitCmd(repo, "merge-base", "--is-ancestor", branchRef, "HEAD").Ok {
+		return true
+	}
+	upstream := gitCmd(repo, "rev-parse", "--verify", "--quiet", branch+"@{upstream}")
+	return upstream.Ok && gitCmd(repo, "merge-base", "--is-ancestor", branchRef, upstream.Stdout).Ok
+}
+
+func hasTrackedChanges(repo string) bool {
+	return gitCmd(repo, "status", "--porcelain", "--untracked-files=no").Stdout != ""
+}
+
 func (j *BranchReaperJob) reapRepo(repo string, dryRun bool, cutoff time.Time, logger *log.Logger) repoReapResult {
 	var result repoReapResult
 	name := filepath.Base(repo)
 
-	if gitCmd(repo, "status", "--porcelain").Stdout != "" {
+	if hasTrackedChanges(repo) {
 		logger.Warn("Skipped repository (dirty working tree)", "repo", name)
 		return result
 	}
 
 	prs, err := fetchMergedPRs(repo, 30*time.Second)
 	if err != nil {
-		var syntaxErr *json.SyntaxError
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
-			return result
-		}
-		logger.Warn("Skipped repository (failed gh query)", "repo", name)
+		logger.Warn("Skipped repository (failed gh query)", "repo", name, "err", err)
 		result.drafts = append(result.drafts, fmt.Sprintf("%s: skipped, failed gh query", name))
 		return result
 	}
@@ -138,12 +145,12 @@ func (j *BranchReaperJob) reapRepo(repo string, dryRun bool, cutoff time.Time, l
 		}
 
 		if dryRun {
-			refused := notInHead(repo, b)
-			if refused == "" {
+			if mergedWithoutForce(repo, b) {
 				logger.Warn("Would delete branch", "repo", name, "branch", b, "via", "-d")
 				result.actions = append(result.actions, fmt.Sprintf("%s: would delete %s", name, b))
 				continue
 			}
+			refused := notInHead(repo, b)
 			matched, gitOutput := matchMergedPR(repo, b, branchPRs, dryRun)
 			if matched != nil {
 				logger.Warn("Would delete branch", "repo", name, "branch", b, "via", "-D", "pr", fmt.Sprintf("#%d", matched.Number), "refused", refused)

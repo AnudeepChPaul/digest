@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"golang.org/x/sys/unix"
 )

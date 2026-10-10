@@ -4,16 +4,15 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/notify"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -36,27 +35,6 @@ type notifyEntriesMsg struct {
 	err     error
 }
 
-type actionUsageSavedMsg struct {
-	err error
-}
-
-func actionUsagePath(cacheDir string) string {
-	return filepath.Join(cacheDir, "action-usage.json")
-}
-
-func loadActionUsage(cacheDir string) map[string]int {
-	usage := map[string]int{}
-	_, _ = system.ReadJSON(actionUsagePath(cacheDir), &usage)
-	return usage
-}
-
-func saveActionUsageCmd(cacheDir string, usage map[string]int) tea.Cmd {
-	snapshot := maps.Clone(usage)
-	return func() tea.Msg {
-		return actionUsageSavedMsg{err: system.WriteJSON(actionUsagePath(cacheDir), snapshot)}
-	}
-}
-
 func noteIsActive(n *model.Note) bool {
 	return n != nil && n.ID != "" && n.Status != model.StatusDone && n.Status != model.StatusArchived
 }
@@ -70,17 +48,26 @@ func (m Model) noteActions(n *model.Note) []noteAction {
 	if !noteIsActive(n) {
 		return nil
 	}
-	actions := []noteAction{{name: actionNameNotify}}
-	if m.noteCanStartAutomation(n) {
+	_, reminding := m.notifyEntries[n.ID]
+	var actions []noteAction
+	if !reminding {
+		actions = append(actions, noteAction{name: actionNameNotify})
+	}
+	if !m.automatedKindKnown(n.Automated) {
 		for _, spec := range automation.MatchAll(m.cfg.AutomationList(), n) {
 			actions = append(actions, noteAction{name: spec.Name, automation: true})
 		}
 	}
-	slices.SortStableFunc(actions, func(left, right noteAction) int {
-		return m.actionUsage[right.name] - m.actionUsage[left.name]
-	})
-	if _, reminding := m.notifyEntries[n.ID]; reminding {
-		actions = slices.Insert(actions, 0, noteAction{name: actionNameNotifyOff})
+	savedOrder := m.appState.ActionMenuOrder
+	rank := func(name string) int {
+		if position := slices.Index(savedOrder, name); position >= 0 {
+			return position
+		}
+		return len(savedOrder)
+	}
+	slices.SortStableFunc(actions, func(left, right noteAction) int { return rank(left.name) - rank(right.name) })
+	if reminding {
+		actions = slices.Insert(actions, 0, noteAction{name: actionNameNotifyOff}, noteAction{name: actionNameNotify})
 	}
 	return actions
 }
@@ -124,12 +111,6 @@ func (m Model) chooseAction(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if chosen.name == actionNameNotifyOff {
 		return m.removeReminder()
 	}
-	m.actionUsage = maps.Clone(m.actionUsage)
-	if m.actionUsage == nil {
-		m.actionUsage = map[string]int{}
-	}
-	m.actionUsage[chosen.name]++
-	saveUsage := saveActionUsageCmd(m.cfg.CacheDir(), m.actionUsage)
 	switch {
 	case !chosen.automation:
 		m.notifyNotice = ""
@@ -141,8 +122,18 @@ func (m Model) chooseAction(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.askAutomationConfirm(m.actionMenuNoteID, chosen.name, automation.PhaseDraft)
 		m.automationReturnMode = m.actionMenuReturnMode
 	}
-	return m, saveUsage
+	return m, nil
 }
+
+func (m *Model) leaveNotifyInput() {
+	m.notifyInput.Blur()
+	m.mode = m.actionMenuReturnMode
+	if m.mode == ViewPreview {
+		m.updatePreviewViewport()
+	}
+}
+
+const messageSourceNotify = "notify"
 
 func (m Model) confirmNotify(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	interval, err := notify.ParseInterval(m.notifyInput.Value())
@@ -152,36 +143,61 @@ func (m Model) confirmNotify(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	note := m.noteByID(m.actionMenuNoteID)
 	if note == nil {
+		m.notifyInput.Blur()
 		m.mode = ViewDashboard
+		m.postMessage(messageSourceNotify, messageError, "note no longer exists")
 		return m, nil
 	}
 	entry := notify.Entry{NoteID: note.ID, Summary: note.Summary, Interval: notify.IntervalLabel(interval), NotifiedAt: time.Now(), OpenURL: notePullRequestURL(note)}
 	if entry.OpenURL == "" {
 		entry.Terminal = os.Getenv("__CFBundleIdentifier")
 	}
-	m.notifyInput.Blur()
-	m.mode = ViewDashboard
-	entries := maps.Clone(m.notifyEntries)
-	if entries == nil {
-		entries = map[string]notify.Entry{}
-	}
-	entries[note.ID] = entry
-	m.notifyEntries = entries
+	m.notifyNotice = ""
 	root := m.cfg.Root()
 	return m, func() tea.Msg {
 		if err := notify.Save(root, entry); err != nil {
-			return notifyEntriesMsg{err: err}
+			return reminderSavedMsg{noteID: entry.NoteID, err: err}
 		}
-		return listNotifyEntries(root)
+		return reminderSavedMsg{noteID: entry.NoteID, listed: listNotifyEntries(root)}
 	}
 }
 
+type reminderSavedMsg struct {
+	noteID string
+	listed notifyEntriesMsg
+	err    error
+}
+
+func (m Model) applyReminderSaved(msg reminderSavedMsg) (tea.Model, tea.Cmd) {
+	inputOpen := m.mode == ViewNotifyInput && m.actionMenuNoteID == msg.noteID
+	if msg.err != nil {
+		if inputOpen {
+			m.notifyNotice = msg.err.Error()
+		} else {
+			m.showError("NOTIFY ERROR", msg.err)
+		}
+		return m, nil
+	}
+	if msg.listed.err != nil {
+		if inputOpen {
+			m.leaveNotifyInput()
+		}
+		m.showError("NOTIFY ERROR", msg.listed.err)
+		return m, nil
+	}
+	m.notifyEntries = msg.listed.entries
+	if inputOpen {
+		m.leaveNotifyInput()
+	}
+	return m, nil
+}
+
 func (m Model) removeReminder() (tea.Model, tea.Cmd) {
-	m.mode = ViewDashboard
 	noteID, root := m.actionMenuNoteID, m.cfg.Root()
 	entries := maps.Clone(m.notifyEntries)
 	delete(entries, noteID)
 	m.notifyEntries = entries
+	m.leaveNotifyInput()
 	return m, func() tea.Msg {
 		if err := notify.Remove(root, noteID); err != nil {
 			return notifyEntriesMsg{err: err}
@@ -195,7 +211,18 @@ func notifyInputAccepts(current string, msg tea.KeyMsg) bool {
 		return true
 	}
 	candidate := current + strings.ToLower(string(msg.Runes))
-	return typedIntervalPattern.MatchString(candidate) && !strings.ContainsAny(candidate[:1], "mhd")
+	if !typedIntervalPattern.MatchString(candidate) || strings.ContainsAny(candidate[:1], "mhd") {
+		return false
+	}
+	amount, err := strconv.Atoi(strings.TrimRight(candidate, "mhd"))
+	if err != nil || amount <= 0 {
+		return false
+	}
+	if strings.ContainsAny(candidate, "mhd") {
+		_, err := notify.ParseInterval(candidate)
+		return err == nil
+	}
+	return time.Duration(amount)*time.Minute <= notify.MaxInterval
 }
 
 func (m Model) notifyInfoPill() string {
@@ -203,8 +230,7 @@ func (m Model) notifyInfoPill() string {
 }
 
 func (m Model) cancelNotify(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	m.notifyInput.Blur()
-	m.mode = ViewDashboard
+	m.leaveNotifyInput()
 	return m, nil
 }
 

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func TestParseRemoteURL(t *testing.T) {

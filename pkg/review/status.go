@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 type PRState string

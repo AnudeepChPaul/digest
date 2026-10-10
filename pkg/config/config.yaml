@@ -1,0 +1,112 @@
+digest_root: ~/digest
+# claude is the only supported tool; digest builds every claude -p command from it
+ai_tool_type: claude
+# notes_today | notes_yesterday; unset or empty section selects the first item
+selection_default: notes_today
+# false hides every git section and stops all git and GitHub fetching
+show_git: true
+git_repository_roots: []
+# days that count for your streak and get summaries; weeks always run Monday to Sunday
+work_days: [mon, tue, wed, thu, fri]
+# morning and evening summary notifications (24h HH:MM); empty turns one off
+digest_notifications:
+  morning: "09:30"
+  evening: "18:00"
+# a small key hint under the selected row after a moment of idle
+show_key_hints: false
+# terminal app opened when you click a notification
+terminal_app: ""
+# selected | always; @ action tags and PR tags always show, other tags only on the selected row unless always
+show_tags: selected
+pr_quantity_per_repo: 15
+show_daily_commits: true
+git_auto_sync_interval: 600
+green_only: true
+jira_base_url: ""
+
+# branch-reaper, janitor and repo-sync are built into digest; to change one, add it under jobs:
+# with its name and options only (roots, grace_days, patterns, no_quarantine). Options reach
+# each job as DIGEST_OPTION_<NAME> environment variables (lists comma-joined).
+
+# empty prompts use digest's built-in defaults
+brag_prompts: ""
+month_brag_prompts: ""
+performance_review_prompts: ""
+
+# every automation except pr review drafts first; create runs on the confirmed draft
+# automation_type is the kind create returns and the note's automated tag
+automations:
+  # Jira ticket; only jira-inator is allowed, its token is checked when installed
+  - name: jira
+    automation_type: ticket
+    plugins:
+      - jira-inator
+    match:
+      - ticket
+      - jira
+      - jira ticket
+    draft_prompt:
+      - 'Draft one Jira ticket from the note below using the jira-inator plugin''s jira-ticket-creator skill. The note is the only source of truth; never invent people, dates or numbers.'
+      - 'Use the Jira project key the note names (for example PROJ or PROJ-123). If the note names no project key, do not output any JSON; print exactly one line starting with "NO PROJECT:" asking the user to add a project key to the note, then stop.'
+      - 'Read the project''s create metadata with jira-inator (create_meta -p <PROJECT>) so issue type, priority and components use allowed values.'
+      - 'Do NOT create, update, transition or comment on any ticket.'
+      - 'Output only one JSON object with the keys project, issue_type, summary, priority, components (list), labels (list) and description (markdown).'
+    create_prompt:
+      - 'Do not change its content and do not create anything else. Please feel free to expan the content by ~3 lines if you can.'
+      - 'Output only one JSON object: {"kind": "ticket", "key": "<ticket key>", "url": "<ticket url>"}.'
+  # Confluence page; only confluence-inator is allowed, its token is checked when installed
+  - name: confluence
+    automation_type: confluence
+    plugins:
+      - confluence-inator
+    match:
+      - confluence
+      - confluence page
+      - confluence doc
+    draft_prompt:
+      - 'Draft one Confluence page from the note below using the confluence-inator plugin. The note is the only source of truth; never invent people, dates or numbers.'
+      - 'Use the Confluence space key the note names. If the note names no space key, do not output any JSON; print exactly one line starting with "NO SPACE:" asking the user to add a space key to the note, then stop.'
+      - 'Do NOT create or update any page.'
+      - 'Output only one JSON object with the keys space, parent (a parent page title or id, only if the note names one), summary (the page title) and description (the page body as markdown).'
+    create_prompt:
+      - 'Create the Confluence page from the draft below with the confluence-inator plugin, using its space, parent, summary as the title and description as the body. Do not change its content and do not create anything else.'
+      - 'Output only one JSON object: {"kind": "confluence", "key": "<page id>", "url": "<page url>"}.'
+  # Google Doc; only the claude.ai Google Drive connector is allowed
+  - name: google doc
+    automation_type: doc
+    plugins:
+      - claude_ai_Google_Drive
+    match:
+      - google doc
+    draft_prompt:
+      - 'Draft one Google Doc from the note below. The note is the only source of truth; never invent people, dates or numbers.'
+      - 'Do NOT create any file.'
+      - 'Output only one JSON object with the keys summary (the document title) and description (the document body as markdown).'
+    create_prompt:
+      - 'Create one Google Doc from the draft below with the Google Drive connector''s create_file tool, titled with summary and containing description. Do not change its content and do not create anything else.'
+      - 'Output only one JSON object: {"kind": "doc", "key": "<file id>", "url": "<document url>"}.'
+  # Google Calendar event; only the claude.ai Google Calendar connector is allowed
+  - name: google calendar
+    automation_type: event
+    plugins:
+      - claude_ai_Google_Calendar
+    match:
+      - calendar event
+      - event
+      - schedule a meeting
+      - add to calendar
+    draft_prompt:
+      - 'Draft one Google Calendar event from the note below. The note is the only source of truth; never invent people, dates or numbers.'
+      - 'Use the date, start time and end time the note names; with a start but no end, the event lasts 30 minutes. If the note names no date or start time, do not output any JSON; print exactly one line starting with "NO TIME:" asking the user to add a date and time to the note, then stop.'
+      - 'Use the time zone the note names, otherwise the calendar''s default time zone.'
+      - 'Do NOT create or update any event.'
+      - 'Output only one JSON object with the keys summary (the event title), description (markdown), start and end (ISO 8601), time_zone, attendees (list of emails the note names) and location.'
+    create_prompt:
+      - 'Create one event from the draft below with the Google Calendar connector''s event creation tool, using its summary, description, start, end, time_zone, attendees and location. Do not change its content and do not create anything else.'
+      - 'Output only one JSON object: {"kind": "event", "key": "<event id>", "url": "<event link>"}.'
+  # PR review; never offered on @, run by digest for pending PRs
+  - name: pr review
+    automation_type: reviewed
+    plugins:
+      - review-toolkit
+    prompt: "/review-toolkit:review {url} --emit findings-json"

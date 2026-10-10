@@ -10,7 +10,7 @@ import (
 
 const goBenchOutput = `goos: darwin
 goarch: arm64
-pkg: github.com/AnudeepChPaul/digest/pkg/tui
+pkg: github.com/achandrapaul/digest/pkg/tui
 cpu: Apple M1 Pro
 BenchmarkScenarioStartup/notes=100-8      	      20	  10174767 ns/op	         0.5312 heap-MB	 2042562 B/op	   15548 allocs/op
 BenchmarkScenarioStartup/notes=10000-8    	       2	 812000000 ns/op	        41.20 heap-MB	92042562 B/op	 1554800 allocs/op
@@ -18,7 +18,7 @@ BenchmarkScenarioTyping/lines=10000/cursor=bottom-8 	      20	  84907256 ns/op	3
 BenchmarkScenarioNavigate/notes=10000-8   	     900	   1300000 ns/op	  309799 B/op	    3954 allocs/op
 --- SKIP: BenchmarkScenarioOverlayLinkMenu/notes=1
 PASS
-ok  	github.com/AnudeepChPaul/digest/pkg/tui	27.221s
+ok  	github.com/achandrapaul/digest/pkg/tui	27.221s
 `
 
 func TestParseGoBenchReadsEveryMetricAndTheCPU(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -14,6 +14,7 @@ import (
 func gitStripTestModel(t *testing.T) Model {
 	t.Helper()
 	m := syncTestModel(t)
+	m.cfg.WorkDays = everyDay
 	m.git.yesterdayGitRepo = []*GitRepoStat{{Name: "alpha"}, {Name: "beta"}}
 	m.git.todayGitRepos = []*GitRepoStat{{Name: "gamma"}}
 	m.notes = []*model.Note{{Summary: "carried", Created: m.currentDate.AddDate(0, 0, -1), Source: model.SourceManual}}
@@ -30,6 +31,7 @@ func selectedRepoName(m Model) string {
 
 func TestBoardShowsYesterdayThenTodayThenGit(t *testing.T) {
 	m := gitStripTestModel(t)
+	m.cfg.WorkDays = everyDay
 	lines := plainLines(m.renderDashboardBody())
 	yesterdayLine, stripLine, captionLine, sharedLine, todayLine := -1, -1, -1, -1, -1
 	for index, line := range lines {
@@ -62,13 +64,6 @@ func TestNavOrderFollowsBoard(t *testing.T) {
 	if items[0].Kind != KindYesterdayDone || items[1].Kind != KindCarriedNote || items[2].GitRepo == nil || items[2].GitRepo.Name != "alpha" {
 		t.Fatalf("first items = %+v, %+v, %+v", items[0], items[1], items[2])
 	}
-	m.selected = 3
-	if m = press(t, m, runes("l")); selectedRepoName(m) != "gamma" {
-		t.Errorf("l from beta should land on gamma, got %q", selectedRepoName(m))
-	}
-	if m = press(t, m, runes("h")); selectedRepoName(m) != "alpha" {
-		t.Errorf("h from gamma should land on alpha, got %q", selectedRepoName(m))
-	}
 }
 
 func TestGitStripNavigation(t *testing.T) {
@@ -82,34 +77,26 @@ func TestGitStripNavigation(t *testing.T) {
 	if strings.Join(order, ",") != "alpha,beta,gamma" {
 		t.Fatalf("j order = %v", order)
 	}
-	m.selected = 2
-	if m = press(t, m, runes("l")); selectedRepoName(m) != "gamma" {
-		t.Errorf("l from beta should clamp to gamma, got %q", selectedRepoName(m))
-	}
-	if m = press(t, m, runes("h")); selectedRepoName(m) != "alpha" {
-		t.Errorf("h from gamma should land on alpha, got %q", selectedRepoName(m))
-	}
-	if m = press(t, m, runes("h")); selectedRepoName(m) != "alpha" {
-		t.Errorf("h in the yesterday column should do nothing, got %q", selectedRepoName(m))
-	}
-	m.selected = 0
-	if m = press(t, m, runes("l")); m.selected != 0 {
-		t.Errorf("l outside the strip should do nothing, selected %d", m.selected)
-	}
 }
 
-func TestGitStripArrowKeysSwitchColumnsWithoutChangingDay(t *testing.T) {
+func TestColumnKeysDoNothingInTheGitStrip(t *testing.T) {
 	m := gitStripTestModel(t)
 	startDate := m.currentDate
 	m.selected = 2
-	if m = press(t, m, tea.KeyMsg{Type: tea.KeyRight}); selectedRepoName(m) != "gamma" {
-		t.Errorf("right from beta should clamp to gamma, got %q", selectedRepoName(m))
-	}
-	if m = press(t, m, tea.KeyMsg{Type: tea.KeyLeft}); selectedRepoName(m) != "alpha" {
-		t.Errorf("left from gamma should land on alpha, got %q", selectedRepoName(m))
+	for _, key := range []tea.KeyMsg{runes("l"), runes("h"), {Type: tea.KeyRight}, {Type: tea.KeyLeft}} {
+		if m = press(t, m, key); selectedRepoName(m) != "beta" {
+			t.Errorf("%s should do nothing in the strip, got %q", key, selectedRepoName(m))
+		}
 	}
 	if !m.currentDate.Equal(startDate) {
-		t.Errorf("arrow keys changed the day from %v to %v", startDate, m.currentDate)
+		t.Errorf("column keys changed the day from %v to %v", startDate, m.currentDate)
+	}
+	for _, binding := range m.dashboardBindings() {
+		for _, name := range binding.binding.Keys() {
+			if name == "h" || name == "l" || name == "left" || name == "right" {
+				t.Errorf("%q still bound to %v", name, binding.action)
+			}
+		}
 	}
 }
 

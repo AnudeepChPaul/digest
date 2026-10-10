@@ -4,12 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 func sectionOrderModel(t *testing.T) Model {
 	m := syncTestModel(t)
+	m.cfg.WorkDays = everyDay
 	m.git.loadingGit, m.git.loadingCommits = false, false
 	m.notes = []*model.Note{
 		{ID: "y1", Summary: "yesterday-done", Created: m.currentDate.AddDate(0, 0, -1), Updated: m.currentDate.AddDate(0, 0, -1), Status: model.StatusDone},

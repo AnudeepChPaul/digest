@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+import (
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 var renderEditorView = func(editor *textarea.Model) string {
 	return editor.View()
@@ -39,5 +43,30 @@ func (m Model) editorView() string {
 
 func (m *Model) replaceEditorText(text string) {
 	m.editor.SetValue(text)
+	m.editorStartText = m.editor.Value()
 	m.editorRevision++
+}
+
+func (m Model) editorChanged() bool {
+	return m.editor.Value() != m.editorStartText
+}
+
+func (m Model) beginDiscardConfirm() Model {
+	m.discardingEdit = true
+	return m.beginStopConfirm()
+}
+
+func (m Model) confirmDiscardEdit() (tea.Model, tea.Cmd) {
+	m.discardingEdit = false
+	m.mode = m.deleteReturnMode
+	m.editorStartText = m.editor.Value()
+	switch m.mode {
+	case ViewBragEdit:
+		return m.cancelBragEdit(tea.KeyMsg{})
+	case ViewAutomationEdit:
+		return m.cancelAutomationEdit(tea.KeyMsg{})
+	case ViewEdit:
+		return m.cancelEdit(tea.KeyMsg{})
+	}
+	return m, nil
 }

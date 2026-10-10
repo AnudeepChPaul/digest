@@ -3,7 +3,7 @@ package sourcecontrol
 import (
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 )
 
 var ReviewNoteStates = map[string]bool{"APPROVED": true, "CHANGES_REQUESTED": true, "COMMENTED": true}

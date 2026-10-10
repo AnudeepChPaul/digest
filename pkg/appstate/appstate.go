@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/habit"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/habit"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 const (
@@ -19,6 +19,7 @@ type State struct {
 	FirstNoteCreated time.Time `json:"first_note_created"`
 	Streak           int       `json:"streak"`
 	LastDoneDay      string    `json:"last_done_day,omitempty"`
+	ActionMenuOrder  []string  `json:"action_menu_order,omitempty"`
 }
 
 func Path(root string) string {

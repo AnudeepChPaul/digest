@@ -13,19 +13,79 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
 
 type NoteStore struct {
-	Root string
+	Root    string
+	rootErr error
 }
 
 func New(root string) *NoteStore {
-	return &NoteStore{Root: paths.Expand(root)}
+	expanded, err := paths.Expand(root)
+	if err != nil {
+		return &NoteStore{Root: root, rootErr: fmt.Errorf("notes root: %w", err)}
+	}
+	return &NoteStore{Root: expanded}
+}
+
+type SkippedNote struct {
+	File   string
+	Reason error
+}
+
+type SkippedNotesError struct {
+	Notes []SkippedNote
+}
+
+func (skipped *SkippedNotesError) Error() string {
+	lines := make([]string, len(skipped.Notes))
+	for index, note := range skipped.Notes {
+		lines[index] = note.File + ": " + note.Reason.Error()
+	}
+	return strings.Join(lines, "; ")
+}
+
+type noteCollector struct {
+	root    string
+	notes   []*model.Note
+	skipped []SkippedNote
+}
+
+func (collector *noteCollector) skip(path string, reason error) {
+	file := strings.TrimPrefix(path, collector.root+string(filepath.Separator))
+	collector.skipped = append(collector.skipped, SkippedNote{File: file, Reason: reason})
+}
+
+func (collector *noteCollector) read(path string) *model.Note {
+	data, err := system.Read(path)
+	if err == nil {
+		var note *model.Note
+		if note, err = parseNote(data, path); err == nil {
+			return note
+		}
+	}
+	collector.skip(path, err)
+	return nil
+}
+
+func (collector *noteCollector) load(path string) *model.Note {
+	note := collector.read(path)
+	if note != nil {
+		collector.notes = append(collector.notes, note)
+	}
+	return note
+}
+
+func (collector *noteCollector) skippedErr() error {
+	if len(collector.skipped) == 0 {
+		return nil
+	}
+	return &SkippedNotesError{Notes: collector.skipped}
 }
 
 const (
@@ -93,15 +153,7 @@ func (s *NoteStore) newNoteID(created time.Time) (string, string) {
 }
 
 func (s *NoteStore) withinRoot(path string) error {
-	absRoot, err := filepath.Abs(s.Root)
-	if err != nil {
-		return fmt.Errorf("failed to resolve notes root: %w", err)
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve note path: %w", err)
-	}
-	rel, err := filepath.Rel(absRoot, absPath)
+	rel, err := filepath.Rel(s.Root, path)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("note path %s is outside notes directory %s", path, s.Root)
 	}
@@ -123,6 +175,9 @@ func (s *NoteStore) save(n *model.Note, createMissing bool) error {
 }
 
 func (s *NoteStore) write(n *model.Note, createMissing bool) error {
+	if s.rootErr != nil {
+		return s.rootErr
+	}
 	now := time.Now()
 	if n.Created.IsZero() {
 		n.Created = now
@@ -197,17 +252,22 @@ func (s *NoteStore) Delete(n *model.Note) error {
 	if n.FilePath == "" {
 		return fmt.Errorf("note %q has no file to delete", n.Summary)
 	}
+	if s.rootErr != nil {
+		return s.rootErr
+	}
 	if err := s.withinRoot(n.FilePath); err != nil {
 		return err
 	}
 	saveLock.Lock()
 	defer saveLock.Unlock()
-	if err := system.Remove(n.FilePath); err != nil && !errors.Is(err, ErrUnlockNote) {
-		return fmt.Errorf("failed to delete note file: %w", err)
-	} else if err != nil {
+	err := system.Remove(n.FilePath)
+	switch {
+	case err == nil, errors.Is(err, os.ErrNotExist):
+		return nil
+	case errors.Is(err, ErrUnlockNote):
 		return err
 	}
-	return nil
+	return fmt.Errorf("failed to delete note file: %w", err)
 }
 
 func IsDonePath(path string) bool {
@@ -215,13 +275,17 @@ func IsDonePath(path string) bool {
 }
 
 func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
+	if s.rootErr != nil {
+		return nil, s.rootErr
+	}
+	collector := &noteCollector{root: s.Root}
 	monthDir := ""
 	if IsStemID(id) {
 		createdMillis, _ := strconv.ParseInt(id[11:], 10, 64)
 		created := time.UnixMilli(createdMillis).Local()
 		monthDir = filepath.Join(s.Root, created.Format("2006"), created.Format("01"))
-		if note := loadNamedNote(monthDir, id); note != nil {
-			return note, nil
+		if note := collector.loadNamed(monthDir, id); note != nil {
+			return note, collector.skippedErr()
 		}
 	}
 	monthDirs, _ := system.Glob(filepath.Join(s.Root, "*", "*"))
@@ -229,32 +293,48 @@ func (s *NoteStore) LoadByID(id string) (*model.Note, error) {
 		if dir == monthDir {
 			continue
 		}
-		if note := loadNamedNote(dir, id); note != nil {
-			return note, nil
+		if note := collector.loadNamed(dir, id); note != nil {
+			return note, collector.skippedErr()
 		}
 	}
-	return nil, fmt.Errorf("note %s: %w", id, os.ErrNotExist)
+	missing := fmt.Errorf("note %s: %w", id, os.ErrNotExist)
+	if skipped := collector.skippedErr(); skipped != nil {
+		return nil, errors.Join(missing, skipped)
+	}
+	return nil, missing
 }
 
-func loadNamedNote(dir, id string) *model.Note {
+func copyFinishTime(name string) time.Time {
+	for _, extension := range []string{doneExtension, archivedExtension} {
+		if !strings.HasSuffix(name, extension) {
+			continue
+		}
+		if finished, named := finishTime(name, extension); named {
+			return finished
+		}
+	}
+	return time.Time{}
+}
+
+func (collector *noteCollector) loadNamed(dir, id string) *model.Note {
 	matches, _ := system.Glob(filepath.Join(dir, id+"*"))
-	activeName := id + noteExtension
-	slices.SortFunc(matches, func(first, second string) int {
-		firstActive, secondActive := filepath.Base(first) == activeName, filepath.Base(second) == activeName
-		if firstActive != secondActive {
-			if firstActive {
-				return -1
-			}
-			return 1
+	var activeCopies, finishedCopies []string
+	for _, path := range matches {
+		switch name := filepath.Base(path); {
+		case name == id+noteExtension:
+			activeCopies = append(activeCopies, path)
+		case strings.HasPrefix(name, id+"-"):
+			finishedCopies = append(finishedCopies, path)
+		}
+	}
+	slices.SortFunc(finishedCopies, func(first, second string) int {
+		if order := copyFinishTime(filepath.Base(second)).Compare(copyFinishTime(filepath.Base(first))); order != 0 {
+			return order
 		}
 		return strings.Compare(first, second)
 	})
-	for _, path := range matches {
-		name := filepath.Base(path)
-		if name != activeName && !strings.HasPrefix(name, id+"-") {
-			continue
-		}
-		if note, err := Load(path); err == nil {
+	for _, path := range append(activeCopies, finishedCopies...) {
+		if note := collector.load(path); note != nil {
 			return note
 		}
 	}
@@ -267,20 +347,31 @@ func Load(path string) (*model.Note, error) {
 		return nil, err
 	}
 
+	note, err := parseNote(data, path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return note, nil
+}
+
+func parseNote(data []byte, path string) (*model.Note, error) {
 	content := string(data)
 	if !strings.HasPrefix(content, "---\n") {
-		return nil, fmt.Errorf("invalid format in %s", path)
+		return nil, errors.New("no front matter: the file must start with ---")
 	}
 
 	parts := strings.SplitN(content[4:], "\n---\n", 2)
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid frontmatter in %s", path)
+		return nil, errors.New("front matter is not closed with ---")
 	}
 
 	var note model.Note
 	frontmatter := spacedDatePattern.ReplaceAllString(parts[0], "${1}T${2}")
 	if err := yaml.Unmarshal([]byte(frontmatter), &note); err != nil {
-		return nil, fmt.Errorf("yaml parse error in %s: %w", path, err)
+		return nil, fmt.Errorf("yaml parse error: %w", err)
+	}
+	if !note.Status.Known() {
+		note.Status = model.StatusActive
 	}
 
 	note.Body = strings.TrimSpace(parts[1])
@@ -289,14 +380,17 @@ func Load(path string) (*model.Note, error) {
 }
 
 func (s *NoteStore) List() ([]*model.Note, error) {
-	var notes []*model.Note
-
+	if s.rootErr != nil {
+		return nil, s.rootErr
+	}
+	collector := &noteCollector{root: s.Root}
 	if !system.Exists(s.Root) {
-		return notes, nil
+		return collector.notes, nil
 	}
 
 	err := system.Walk(s.Root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			collector.skip(path, err)
 			return nil
 		}
 		if d.IsDir() {
@@ -305,22 +399,18 @@ func (s *NoteStore) List() ([]*model.Note, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
-		}
-		note, err := Load(path)
-		if err == nil {
-			notes = append(notes, note)
+		if strings.HasSuffix(d.Name(), noteExtension) {
+			collector.load(path)
 		}
 		return nil
 	})
-
-	return notes, err
+	return collector.notes, errors.Join(err, collector.skippedErr())
 }
 
 func (s *NoteStore) FindByID(idPrefix string) (*model.Note, error) {
 	notes, err := s.List()
-	if err != nil {
+	var skipped *SkippedNotesError
+	if err != nil && !errors.As(err, &skipped) {
 		return nil, err
 	}
 
@@ -332,7 +422,7 @@ func (s *NoteStore) FindByID(idPrefix string) (*model.Note, error) {
 	}
 
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("note not found: %s", idPrefix)
+		return nil, errors.Join(fmt.Errorf("note not found: %s", idPrefix), err)
 	}
 	if len(matches) > 1 {
 		return nil, fmt.Errorf("ambiguous ID: %s", idPrefix)

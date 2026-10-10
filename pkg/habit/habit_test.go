@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 )
 
 var weekdaysOnly = func(day time.Weekday) bool { return day != time.Saturday && day != time.Sunday }

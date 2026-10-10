@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/habit"
+	"github.com/achandrapaul/digest/pkg/habit"
 )
 
 func summaryAt(day, hour, minute int) time.Time {

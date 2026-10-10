@@ -1,16 +1,17 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -22,9 +23,18 @@ import (
 type notesSection struct{}
 
 type loadNotesMsg struct {
-	notes    []*model.Note
-	err      error
-	complete bool
+	notes []*model.Note
+	err   error
+}
+
+type browsedNotesMsg struct {
+	notes []*model.Note
+	err   error
+}
+
+type closedThisWeekMsg struct {
+	count int
+	err   error
 }
 
 func (m Model) startupNotesCmd() tea.Cmd {
@@ -35,11 +45,7 @@ func (m Model) startupNotesCmd() tea.Cmd {
 }
 
 func (m Model) loadNotesCmd() tea.Msg {
-	if m.notesComplete {
-		notes, err := m.store.List()
-		return loadNotesMsg{notes: notes, err: err, complete: true}
-	}
-	notes, err := m.store.ListDashboard(m.currentDate)
+	notes, err := m.store.ListDashboard(m.currentDate, m.previousNoteDay())
 	return loadNotesMsg{notes: notes, err: err}
 }
 
@@ -55,23 +61,18 @@ func (m *Model) refreshArchivedViewport() {
 	m.archivedViewport.SetContent(m.renderArchivedContent(modalWidth-6, m.archivedSelected))
 }
 
+func startOfDay(moment time.Time) time.Time {
+	return time.Date(moment.Year(), moment.Month(), moment.Day(), 0, 0, 0, 0, moment.Location())
+}
+
 func (m Model) previousNoteDay() time.Time {
-	viewedDayStart := time.Date(m.currentDate.Year(), m.currentDate.Month(), m.currentDate.Day(), 0, 0, 0, 0, m.currentDate.Location())
-	var latest time.Time
-	for _, note := range m.notes {
-		if note.Status == model.StatusArchived || (note.Source != model.SourceManual && note.Source != "") {
-			continue
-		}
-		for _, stamp := range []time.Time{note.Created, note.Updated} {
-			if stamp.Before(viewedDayStart) && stamp.After(latest) {
-				latest = stamp
-			}
+	viewedDayStart := startOfDay(m.currentDate)
+	for daysBack := 1; daysBack <= 7; daysBack++ {
+		if candidate := viewedDayStart.AddDate(0, 0, -daysBack); m.cfg.IsWorkDay(candidate.Weekday()) {
+			return candidate
 		}
 	}
-	if latest.IsZero() {
-		return m.currentDate.AddDate(0, 0, -1)
-	}
-	return latest
+	return viewedDayStart.AddDate(0, 0, -1)
 }
 
 type noteGroups struct {
@@ -88,7 +89,7 @@ func (m Model) groupNotes() noteGroups {
 		switch n.Status {
 		case model.StatusArchived:
 		case model.StatusDone:
-			if isSameDay(n.Updated, groups.previousDay) {
+			if !n.Updated.Before(groups.previousDay) && n.Updated.Before(groups.previousDay.AddDate(0, 0, 1)) {
 				groups.previousDone = append(groups.previousDone, n)
 			}
 			if isSameDay(n.Updated, m.currentDate) {
@@ -112,7 +113,7 @@ func (m Model) groupNotes() noteGroups {
 }
 
 func (m Model) previousDayTitleFor(previousDay time.Time) string {
-	if isSameDay(previousDay, m.currentDate.AddDate(0, 0, -1)) {
+	if isSameDay(previousDay, time.Now().AddDate(0, 0, -1)) {
 		return m.dayTitleText(previousDay, "Y E S T E R D A Y")
 	}
 	return m.dayTitleText(previousDay, letterSpaced(strings.ToUpper(previousDay.Format("Monday"))))
@@ -124,7 +125,7 @@ func letterSpaced(word string) string {
 
 func (m Model) getArchivedNotes() []*model.Note {
 	var list []*model.Note
-	for _, n := range m.notes {
+	for _, n := range m.notesForBrowsing() {
 		if n.Status == model.StatusArchived {
 			list = append(list, n)
 		}
@@ -136,10 +137,10 @@ func (m Model) getArchivedNotes() []*model.Note {
 }
 
 func (m Model) dayTitleText(date time.Time, spacedLabel string) string {
-	if isSameDay(m.currentDate, time.Now()) {
-		return fmt.Sprintf("%s  ·  %s", spacedLabel, strings.ToUpper(date.Format("02 Jan")))
+	if isSameDay(date, m.currentDate) && !isSameDay(m.currentDate, time.Now()) {
+		spacedLabel = letterSpaced(strings.ToUpper(date.Format("Monday")))
 	}
-	return fmt.Sprintf("%s . %s", strings.ToUpper(date.Format("Monday")), strings.ToUpper(date.Format("02 Jan")))
+	return fmt.Sprintf("%s  ·  %s", spacedLabel, strings.ToUpper(date.Format("02 Jan")))
 }
 
 func (m Model) renderArchivedContent(width int, selectedIndex int) string {
@@ -190,38 +191,117 @@ func (m Model) renderArchivedContent(width int, selectedIndex int) string {
 	return listing.String()
 }
 
-func loadAllNotesCmd(noteStore *store.NoteStore) tea.Cmd {
+const messageSourceStore = "store"
+
+func storeResultUsable(err error) bool {
+	var skipped *store.SkippedNotesError
+	return err == nil || errors.As(err, &skipped)
+}
+
+func (m *Model) reportStoreError(err error) {
+	switch {
+	case err == nil:
+	case storeResultUsable(err):
+		m.postMessage(messageSourceStore, messageError, err.Error())
+	default:
+		m.showError("STORE ERROR", err)
+	}
+}
+
+func (m Model) browseNotesCmd() tea.Cmd {
+	noteStore := m.store
 	return func() tea.Msg {
 		notes, err := noteStore.List()
-		return loadNotesMsg{notes: notes, err: err, complete: true}
+		return browsedNotesMsg{notes: notes, err: err}
 	}
 }
 
-func (m *Model) ensureAllNotes() tea.Cmd {
-	if m.notesComplete || m.loadingAllNotes {
-		return nil
+func (m Model) notesForBrowsing() []*model.Note {
+	if m.browsedNotes != nil {
+		return m.browsedNotes
 	}
-	m.loadingAllNotes = true
-	return loadAllNotesCmd(m.store)
+	return m.notes
 }
 
-func (m Model) reloadNotesForDay() tea.Cmd {
-	if m.notesComplete {
-		return nil
+func (m *Model) refreshBrowsedView() {
+	switch m.mode {
+	case ViewArchived:
+		m.refreshArchivedViewport()
+	case ViewSearch:
+		m.keepSearchSelectionVisible()
+	case ViewPreview:
+		if m.previewingSearch() {
+			m.updatePreviewViewport()
+		}
+	case ViewBragList:
+		if rows := m.bragRows(); m.bragSelected >= len(rows) {
+			m.bragSelected = max(len(rows)-1, 0)
+		}
 	}
-	return m.loadNotesCmd
+}
+
+func (m Model) browsing() bool {
+	return m.mode != ViewDashboard && (m.mode != ViewPreview || m.searchPreviewing)
+}
+
+func (m *Model) shareDashboardNotes() {
+	if m.browsedNotes == nil {
+		return
+	}
+	byPath := make(map[string]*model.Note, len(m.notes))
+	for _, note := range m.notes {
+		byPath[note.FilePath] = note
+	}
+	for index, note := range m.browsedNotes {
+		if shared, onDashboard := byPath[note.FilePath]; onDashboard {
+			m.browsedNotes[index] = shared
+		}
+	}
+}
+
+func (m Model) belongsOnDashboard(note *model.Note) bool {
+	switch note.Status {
+	case model.StatusArchived:
+		return false
+	case model.StatusDone:
+		return isSameDay(note.Updated, m.currentDate) || isSameDay(note.Updated, m.previousNoteDay())
+	}
+	return true
+}
+
+func startOfISOWeek(moment time.Time) time.Time {
+	return startOfDay(moment).AddDate(0, 0, -((int(moment.Weekday()) + 6) % 7))
+}
+
+func (m Model) closedThisWeekCmd() tea.Cmd {
+	noteStore := m.store
+	dashboardPaths := make(map[string]bool, len(m.notes))
+	for _, note := range m.notes {
+		dashboardPaths[note.FilePath] = true
+	}
+	weekStart := startOfISOWeek(time.Now())
+	return func() tea.Msg {
+		closed, err := noteStore.ListDoneSince(weekStart)
+		count := 0
+		for _, note := range closed {
+			if !dashboardPaths[note.FilePath] {
+				count++
+			}
+		}
+		return closedThisWeekMsg{count: count, err: err}
+	}
 }
 
 func (m Model) renderArchivedModal(modalWidth int) string {
 	titleText := modalTitleStyle.Render(" ARCHIVED NOTES ")
 
-	innerHeight := m.height - 10 - footerLineCount(archiveFooterItems)
+	innerHeight := m.height - 10 - footerLineCount(m.archiveFooterItems())
 	if innerHeight < 4 {
 		innerHeight = 4
 	}
 	m.archivedViewport.Height = innerHeight
 
-	footerText := renderModalFooter(archiveFooterItems, modalWidth-6)
+	footerText := renderModalFooter(m.archiveFooterItems(), modalWidth-6)
 
 	popupContent := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -245,11 +325,18 @@ func (m Model) renderEditModal(modalWidth int) string {
 		titleText,
 		"",
 		m.editorView(),
-		"",
+		m.editorNoticeLine(),
 		footerText,
 	)
 
 	return m.framedPopup(popupContent, modalWidth)
+}
+
+func (m Model) editorNoticeLine() string {
+	if m.editorNotice == "" {
+		return ""
+	}
+	return staleStyle.Render(m.editorNotice) + "\n"
 }
 
 func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -257,7 +344,7 @@ func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.archivedSelectedMap = make(map[int]bool)
 	modalWidth := modalWidthFor(m.width)
 	innerWidth := modalWidth - 6
-	innerHeight := m.height - 10 - footerLineCount(archiveFooterItems)
+	innerHeight := m.height - 10 - footerLineCount(m.archiveFooterItems())
 	if innerHeight < 4 {
 		innerHeight = 4
 	}
@@ -265,7 +352,7 @@ func (m Model) openArchive(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.archivedViewport = viewport.New(innerWidth, innerHeight)
 	m.archivedViewport.SetContent(m.renderArchivedContent(innerWidth, m.archivedSelected))
 	m.mode = ViewArchived
-	return m, m.ensureAllNotes()
+	return m, m.browseNotesCmd()
 }
 
 func (m Model) newNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -276,6 +363,7 @@ func (m Model) newNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		Created: m.currentDate,
 	}
 	m.editor.Reset()
+	m.editorNotice = ""
 	m.editorRevision++
 	m.editor.Focus()
 	return m, textarea.Blink
@@ -294,18 +382,39 @@ func (m Model) inlineEditSelected(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) beginNoteDelete(note *model.Note, returnMode ViewMode) {
-	if note == nil || note.FilePath == "" {
+	if note == nil {
 		return
 	}
 	m.deleteTargetNotes = []*model.Note{note}
 	m.deleteReturnMode = returnMode
 	m.clearPendingConfirms()
+	if note.FilePath == "" {
+		m.confirmTitle, m.confirmPrompt = " DELETE CONFIRMATION ", "This note doesn't exist. Delete?"
+	}
 	m.mode = ViewDeleteConfirm
+}
+
+func (m *Model) dropUnsavedNotes(targets []*model.Note) []*model.Note {
+	var saved []*model.Note
+	for _, target := range targets {
+		if target.FilePath != "" {
+			saved = append(saved, target)
+			continue
+		}
+		m.notes = slices.DeleteFunc(m.notes, func(note *model.Note) bool { return note == target })
+		m.browsedNotes = slices.DeleteFunc(m.browsedNotes, func(note *model.Note) bool { return note == target })
+	}
+	m.contentVersion++
+	return saved
 }
 
 func (m *Model) afterPreviewArchive(returnMode ViewMode) {
 	switch returnMode {
 	case ViewPreview:
+		if m.previewingSearch() {
+			m.afterSearchPreviewArchive()
+			return
+		}
 		navItems := m.allNavItems()
 		if m.selected >= len(navItems) {
 			m.selected = max(len(navItems)-1, 0)
@@ -315,16 +424,6 @@ func (m *Model) afterPreviewArchive(returnMode ViewMode) {
 			m.updatePreviewViewport()
 		}
 		m.updateScrollOffset()
-	case ViewSearchPreview:
-		results := m.searchResults()
-		if m.searchSelected >= len(results) {
-			m.searchSelected = max(len(results)-1, 0)
-			m.mode = ViewSearch
-			m.keepSearchSelectionVisible()
-			m.searchInput.Focus()
-		} else {
-			m.showSearchPreviewAt(m.searchSelected)
-		}
 	}
 }
 
@@ -382,21 +481,59 @@ func (m Model) toggleArchiveSelection(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) archiveCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	archivedNotes := m.getArchivedNotes()
-	if len(archivedNotes) > 0 && m.archivedSelected < len(archivedNotes)-1 {
-		m.archivedSelected++
-		m.archivedViewport.SetContent(m.renderArchivedContent(m.archivedInnerWidth(), m.archivedSelected))
+func (m Model) archivedRowLine(selectedIndex int) int {
+	line, currentGroupDate := 0, ""
+	for index, note := range m.getArchivedNotes() {
+		if dateLabel := note.Updated.Local().Format("Monday 02 Jan 2006"); dateLabel != currentGroupDate {
+			if currentGroupDate != "" {
+				line++
+			}
+			line++
+			currentGroupDate = dateLabel
+		}
+		if index == selectedIndex {
+			return line
+		}
+		line++
+	}
+	return line
+}
+
+func (m Model) moveArchiveSelection(delta int) (tea.Model, tea.Cmd) {
+	m.archivedSelected = max(min(m.archivedSelected+delta, len(m.getArchivedNotes())-1), 0)
+	m.archivedViewport.SetContent(m.renderArchivedContent(m.archivedInnerWidth(), m.archivedSelected))
+	selectedLine, viewHeight := m.archivedRowLine(m.archivedSelected), max(m.archivedViewport.Height, 1)
+	switch {
+	case selectedLine < m.archivedViewport.YOffset:
+		m.archivedViewport.SetYOffset(selectedLine)
+	case selectedLine >= m.archivedViewport.YOffset+viewHeight:
+		m.archivedViewport.SetYOffset(selectedLine - viewHeight + 1)
 	}
 	return m, nil
 }
 
-func (m Model) archiveCursorUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.archivedSelected > 0 {
-		m.archivedSelected--
-		m.archivedViewport.SetContent(m.renderArchivedContent(m.archivedInnerWidth(), m.archivedSelected))
-	}
-	return m, nil
+func (m Model) archivePageSize() int {
+	return max(m.archivedViewport.Height, 1)
+}
+
+func (m Model) archiveCursorDown(tea.KeyMsg) (tea.Model, tea.Cmd) { return m.moveArchiveSelection(1) }
+
+func (m Model) archiveCursorUp(tea.KeyMsg) (tea.Model, tea.Cmd) { return m.moveArchiveSelection(-1) }
+
+func (m Model) archiveHalfPageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveArchiveSelection(max(m.archivePageSize()/2, 1))
+}
+
+func (m Model) archiveHalfPageUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveArchiveSelection(-max(m.archivePageSize()/2, 1))
+}
+
+func (m Model) archivePageDown(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveArchiveSelection(m.archivePageSize())
+}
+
+func (m Model) archivePageUp(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.moveArchiveSelection(-m.archivePageSize())
 }
 
 func (m Model) deleteArchived(tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -411,6 +548,24 @@ func (m Model) deleteArchived(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) restoreArchived(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	targets := m.archivedTargets()
+	if len(targets) == 0 {
+		return m, nil
+	}
+	m.deleteTargetNotes = targets
+	m.deleteReturnMode = ViewArchived
+	m.clearPendingConfirms()
+	m.restoreOnConfirm = true
+	m.confirmTitle = " RESTORE CONFIRMATION "
+	m.confirmPrompt = fmt.Sprintf("Restore %d note(s) to %s?", len(targets), m.currentDate.Format("Mon 02 Jan"))
+	if len(targets) == 1 {
+		m.confirmPrompt = fmt.Sprintf("Restore this note to %s?\n\n\"%s\"", m.currentDate.Format("Mon 02 Jan"), targets[0].Summary)
+	}
+	m.mode = ViewDeleteConfirm
+	return m, nil
+}
+
+func (m Model) restoreArchivedNotes(targets []*model.Note) (tea.Model, tea.Cmd) {
+	m.mode = ViewArchived
 	for _, noteToRestore := range targets {
 		noteToRestore.Status = model.StatusActive
 		noteToRestore.Created = m.currentDate
@@ -426,6 +581,11 @@ func (m Model) cancelInlineEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) saveInlineEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.currentNote != nil && strings.TrimSpace(m.inlineInput.Value()) == "" {
+		m.beginNoteDelete(m.currentNote, ViewDashboard)
+		m.confirmTitle, m.confirmPrompt = " DELETE CONFIRMATION ", "Delete this note?"
+		return m, nil
+	}
 	if m.currentNote != nil {
 		m.currentNote.Summary = strings.TrimSpace(m.inlineInput.Value())
 		m.mode = ViewDashboard
@@ -437,13 +597,13 @@ func (m Model) saveInlineEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) saveNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	text := m.editor.Value()
-	lines := strings.SplitN(strings.TrimSpace(text), "\n", 2)
-
-	summary := "Untitled Note"
-	body := ""
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
-		summary = strings.TrimSpace(lines[0])
+	if strings.TrimSpace(text) == "" {
+		m.editorNotice = "note is empty"
+		return m, nil
 	}
+	lines := strings.SplitN(strings.TrimSpace(text), "\n", 2)
+	summary := strings.TrimSpace(lines[0])
+	body := ""
 	if len(lines) > 1 {
 		body = strings.TrimSpace(lines[1])
 	}
@@ -459,11 +619,14 @@ func (m Model) saveNote(tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) copyEditor(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	_ = copyToClipboard(m.editor.Value())
+	m.copyText(strings.TrimSpace(m.editor.Value()))
 	return m, nil
 }
 
 func (m Model) cancelEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editorChanged() {
+		return m.beginDiscardConfirm(), nil
+	}
 	m.mode = m.returnFromEdit()
 	return m, nil
 }
@@ -472,8 +635,6 @@ func (m *Model) returnFromEdit() ViewMode {
 	returnMode := m.editReturnMode
 	m.editReturnMode = ViewDashboard
 	switch returnMode {
-	case ViewSearchPreview:
-		m.updateSearchPreviewViewport()
 	case ViewPreview:
 		m.updatePreviewViewport()
 	}
@@ -485,6 +646,7 @@ func (m Model) beginNoteEdit(note *model.Note, returnMode ViewMode) (tea.Model, 
 	m.editReturnMode = returnMode
 	m.mode = ViewEdit
 	m.replaceEditorText(fmt.Sprintf("%s\n\n%s", note.Summary, note.Body))
+	m.editorNotice = ""
 	m.editor.Focus()
 	startEditorAtTop(m.editor)
 	return m, textarea.Blink
@@ -678,25 +840,45 @@ func (m Model) renderNoteRowWithTags(n *model.Note, selected bool, width int, ta
 func (notesSection) ApplyMessage(m Model, msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notesReloadedMsg:
-		if msg.err != nil {
-			m.showError("STORE ERROR", msg.err)
+		if !storeResultUsable(msg.err) {
+			m.reportStoreError(msg.err)
 			return messageHandled(m, nil)
 		}
 		selectedKey, selectedOccurrence := m.selectedNavKey()
 		notesSection{}.replaceViewedDay(&m, msg.notes)
 		m.restoreSelection(selectedKey, selectedOccurrence)
 		m.postMessage(messageSourceNotes, messageSuccess, "reloaded")
+		m.reportStoreError(msg.err)
 		m.updateScrollOffset()
-		return messageHandled(m, refreshNotifyCmd(m.cfg.Root(), m.notes))
+		return messageHandled(m, tea.Batch(refreshNotifyCmd(m.cfg.Root(), m.notes), m.closedThisWeekCmd()))
+
+	case browsedNotesMsg:
+		m.reportStoreError(msg.err)
+		if !m.browsing() || !storeResultUsable(msg.err) {
+			return messageHandled(m, nil)
+		}
+		m.browsedNotes = msg.notes
+		if m.browsedNotes == nil {
+			m.browsedNotes = []*model.Note{}
+		}
+		m.shareDashboardNotes()
+		m.refreshBrowsedView()
+		return messageHandled(m, nil)
+
+	case closedThisWeekMsg:
+		if !storeResultUsable(msg.err) {
+			m.reportStoreError(msg.err)
+			return messageHandled(m, nil)
+		}
+		m.closedThisWeekElsewhere = msg.count
+		return messageHandled(m, nil)
 
 	case notesChangedMsg:
-		if msg.err != nil {
-			m.showError("STORE ERROR", msg.err)
-		}
+		m.reportStoreError(msg.err)
 		notesSection{}.mergeNotes(&m, msg.notes)
 		m.updateScrollOffset()
-		if m.mode == ViewSearchPreview {
-			m.updateSearchPreviewViewport()
+		if m.mode == ViewPreview && m.previewingSearch() {
+			m.updatePreviewViewport()
 		}
 		if m.mode == ViewArchived {
 			m.refreshArchivedViewport()
@@ -709,18 +891,16 @@ func (notesSection) ApplyMessage(m Model, msg tea.Msg) (tea.Model, tea.Cmd, bool
 	case notesDeletedMsg:
 		return messageHandled(m.applyDeletedNotes(msg))
 
+	case reminderSavedMsg:
+		next, cmd := m.applyReminderSaved(msg)
+		return messageHandled(next, cmd)
+
 	case notifyEntriesMsg:
 		if msg.err != nil {
 			m.showError("NOTIFY ERROR", msg.err)
 			return messageHandled(m, nil)
 		}
 		m.notifyEntries = msg.entries
-		return messageHandled(m, nil)
-
-	case actionUsageSavedMsg:
-		if msg.err != nil {
-			m.showError("ACTION USAGE ERROR", msg.err)
-		}
 		return messageHandled(m, nil)
 
 	case appStateSavedMsg:
@@ -733,12 +913,9 @@ func (notesSection) ApplyMessage(m Model, msg tea.Msg) (tea.Model, tea.Cmd, bool
 }
 
 func (notesSection) storeLoadedNotes(m *Model, msg loadNotesMsg) {
-	if msg.complete {
-		m.loadingAllNotes = false
-	}
-	if msg.err == nil && (msg.complete || !m.notesComplete) {
+	if storeResultUsable(msg.err) {
 		m.notes = msg.notes
-		m.notesComplete = m.notesComplete || msg.complete
+		m.shareDashboardNotes()
 	}
 	if m.initialSelectionPending {
 		m.initialSelectionPending = false
@@ -752,17 +929,17 @@ func (notesSection) storeLoadedNotes(m *Model, msg loadNotesMsg) {
 
 func (notesSection) finishLoadedNotes(m Model, msg loadNotesMsg, refetchPreviousDay tea.Cmd) (tea.Model, tea.Cmd) {
 	m.updateScrollOffset()
-	if m.mode == ViewSearchPreview {
-		m.updateSearchPreviewViewport()
+	if m.mode == ViewPreview && m.previewingSearch() {
+		m.updatePreviewViewport()
 	}
 	if m.mode == ViewArchived {
 		m.refreshArchivedViewport()
 	}
-	if msg.err != nil {
-		m.showError("STORE ERROR", msg.err)
+	m.reportStoreError(msg.err)
+	if !storeResultUsable(msg.err) {
 		return m, refetchPreviousDay
 	}
-	return m, tea.Batch(refetchPreviousDay, refreshNotifyCmd(m.cfg.Root(), m.notes))
+	return m, tea.Batch(refetchPreviousDay, refreshNotifyCmd(m.cfg.Root(), m.notes), m.closedThisWeekCmd())
 }
 
 var notesKeystrokes sectionKeystrokes
@@ -776,6 +953,10 @@ func init() {
 		actionCloseArchive:           Model.closeArchive,
 		actionArchiveCursorDown:      Model.archiveCursorDown,
 		actionArchiveCursorUp:        Model.archiveCursorUp,
+		actionArchiveHalfPageDown:    Model.archiveHalfPageDown,
+		actionArchiveHalfPageUp:      Model.archiveHalfPageUp,
+		actionArchivePageDown:        Model.archivePageDown,
+		actionArchivePageUp:          Model.archivePageUp,
 		actionToggleArchiveSelection: Model.toggleArchiveSelection,
 		actionRestoreArchived:        Model.restoreArchived,
 		actionDeleteArchived:         Model.deleteArchived,
@@ -849,17 +1030,39 @@ type notesChangedMsg struct {
 	err   error
 }
 
+func indexOfNote(notes []*model.Note, target *model.Note, snapshot model.Note) int {
+	if index := slices.Index(notes, target); target != nil && index >= 0 {
+		return index
+	}
+	return slices.IndexFunc(notes, func(note *model.Note) bool {
+		return (snapshot.ID != "" && note.ID == snapshot.ID) || (snapshot.FilePath != "" && note.FilePath == snapshot.FilePath)
+	})
+}
+
 func (notesSection) mergeNotes(m *Model, notes []model.Note) {
 	for _, changed := range notes {
-		index := slices.IndexFunc(m.notes, func(note *model.Note) bool {
-			return (changed.ID != "" && note.ID == changed.ID) || (changed.FilePath != "" && note.FilePath == changed.FilePath)
-		})
-		if index < 0 {
-			changedCopy := changed
-			m.notes = append(m.notes, &changedCopy)
-			continue
+		var merged *model.Note
+		if index := indexOfNote(m.notes, nil, changed); index >= 0 {
+			merged = m.notes[index]
+			*merged = changed
 		}
-		*m.notes[index] = changed
+		if index := indexOfNote(m.browsedNotes, nil, changed); index >= 0 {
+			if merged == nil {
+				merged = m.browsedNotes[index]
+			}
+			*m.browsedNotes[index] = changed
+			m.browsedNotes[index] = merged
+		}
+		if merged == nil {
+			changedCopy := changed
+			merged = &changedCopy
+			if m.browsedNotes != nil {
+				m.browsedNotes = append(m.browsedNotes, merged)
+			}
+		}
+		if !slices.Contains(m.notes, merged) && m.belongsOnDashboard(merged) {
+			m.notes = append(m.notes, merged)
+		}
 	}
 }
 
@@ -869,29 +1072,14 @@ type notesReloadedMsg struct {
 }
 
 func (m Model) reloadViewedDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	noteStore, viewedDay := m.store, m.currentDate
+	noteStore, viewedDay, previousDay := m.store, m.currentDate, m.previousNoteDay()
 	return m, func() tea.Msg {
-		notes, err := noteStore.ListDashboard(viewedDay)
+		notes, err := noteStore.ListDashboard(viewedDay, previousDay)
 		return notesReloadedMsg{notes: notes, err: err}
 	}
 }
 
-func (section notesSection) replaceViewedDay(m *Model, reloaded []*model.Note) {
-	if !m.notesComplete {
-		m.notes = reloaded
-		return
-	}
-	reloadedPaths := make(map[string]bool, len(reloaded))
-	for _, note := range reloaded {
-		reloadedPaths[note.FilePath] = true
-	}
-	m.notes = slices.DeleteFunc(m.notes, func(note *model.Note) bool {
-		active := note.Status != model.StatusDone && note.Status != model.StatusArchived
-		return active && !reloadedPaths[note.FilePath]
-	})
-	copies := make([]model.Note, len(reloaded))
-	for index, note := range reloaded {
-		copies[index] = *note
-	}
-	section.mergeNotes(m, copies)
+func (notesSection) replaceViewedDay(m *Model, reloaded []*model.Note) {
+	m.notes = reloaded
+	m.shareDashboardNotes()
 }

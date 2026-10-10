@@ -29,29 +29,29 @@ description = "Print the release level the commits since the last release call f
 quiet = true
 run = "go run ./cmd/release level"
 
-[tasks.changelog]
-description = "Add the current .version section to CHANGELOG.md from the commits since the last release (run by the release workflow)"
-quiet = true
-run = "go run ./cmd/release changelog \"$(cat .version)\""
-
 [tasks."release:notes"]
-description = "Print the latest CHANGELOG.md section"
+description = "Add the current .version section to CHANGELOG.md from the commits since the last release, then print it"
 quiet = true
-run = "go run ./cmd/release notes"
+run = "go run ./cmd/release notes \"$(cat .version)\""
 
 [tasks."release:commit"]
-description = "Bump .version and commit it as a release; pushing it releases"
+description = "Bump .version, add its CHANGELOG.md section, commit as release:<level> and push; off main it also opens a PR"
 quiet = true
-usage = 'arg "[level]" help="patch, minor or major; defaults to what release:level prints" { choices "patch" "minor" "major" }'
+usage = 'arg "[level]" default="patch" help="patch, minor or major" { choices "patch" "minor" "major" }'
 run = '''
-release_level="${usage_level:-$(mise run release:level)}"
-if [ "$release_level" = "none" ]; then
-  echo "no feat, fix or perf commits since the last release" >&2
-  exit 1
-fi
+set -eu
+release_level="$usage_level"
+git fetch --tags -q
 mise run bump "$release_level"
-git commit -q -m "chore: release v$(cat .version)" -- .version
-printf '\033[32m✓\033[0m committed \033[1mv%s\033[0m; git push to release\n' "$(cat .version)"
+mise run release:notes > /dev/null
+git add .version CHANGELOG.md
+git commit -q -m "release:$release_level" -- .version CHANGELOG.md
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+git push -u origin "$current_branch"
+if [ "$current_branch" != "main" ]; then
+  gh pr view > /dev/null 2>&1 || gh pr create --fill --base main
+fi
+printf '\033[32m✓\033[0m released \033[1mv%s\033[0m on %s\n' "$(cat .version)" "$current_branch"
 '''
 
 [tasks.test]
@@ -72,7 +72,7 @@ run = '''
 binary_path=~/.config/bin/digest
 build_version="$(cat .version)+$(git rev-parse --short HEAD)"
 printf '\033[36m▸\033[0m building {{vars.project}} \033[1mv%s\033[0m\n' "$build_version"
-go build -trimpath -ldflags "-s -w -X github.com/AnudeepChPaul/digest/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/digest
+go build -trimpath -ldflags "-s -w -X github.com/achandrapaul/digest/pkg/tui.appVersion=$build_version" -o "$binary_path" ./cmd/digest
 binary_size=$(stat -f %z "$binary_path" | awk '{ printf "%.1f MB", $1 / 1048576 }')
 printf '\033[32m✓\033[0m built %s \033[2m(%s)\033[0m\n' "$binary_path" "$binary_size"
 '''
@@ -88,7 +88,7 @@ mkdir -p dist
 for arch in arm64 amd64; do
   staging_dir="dist/digest-$release_version-darwin-$arch"
   mkdir -p "$staging_dir"
-  GOOS=darwin GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/AnudeepChPaul/digest/pkg/tui.appVersion=$release_version" -o "$staging_dir/digest" ./cmd/digest
+  GOOS=darwin GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/achandrapaul/digest/pkg/tui.appVersion=$release_version" -o "$staging_dir/digest" ./cmd/digest
   cp LICENSE README.md "$staging_dir/"
   tar -czf "$staging_dir.tar.gz" -C dist "$(basename "$staging_dir")"
   rm -rf "$staging_dir"
@@ -104,7 +104,7 @@ run = '''
 set -eu
 formula_path="${TAP_DIR:?set TAP_DIR to the homebrew-tap checkout}/Formula/digest.rb"
 release_tag="v$(cat .version)"
-tarball_url="https://github.com/AnudeepChPaul/digest/archive/refs/tags/$release_tag.tar.gz"
+tarball_url="https://github.com/achandrapaul/digest/archive/refs/tags/$release_tag.tar.gz"
 tarball_sha=$(curl -fsSL "$tarball_url" | shasum -a 256 | cut -d' ' -f1)
 sed -i '' -E "s#archive/refs/tags/v[^/]+\.tar\.gz#archive/refs/tags/$release_tag.tar.gz#; s/sha256 \"[0-9a-f]+\"/sha256 \"$tarball_sha\"/" "$formula_path"
 printf '\033[32m✓\033[0m formula points at %s (%s)\n' "$release_tag" "$tarball_sha"

@@ -9,15 +9,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/aitool"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/aitool"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
 )
+
+func fakeTypedSpec(automationType, command string) config.AutomationSpec {
+	spec := fakeSpec(command)
+	spec.Type = automationType
+	return spec
+}
 
 func fakeSpec(command string) config.AutomationSpec {
 	return config.AutomationSpec{
 		Name:         "PROJ",
+		Type:         KindTicket,
 		Match:        []string{"create a ticket", "create jira"},
 		Command:      command,
 		DraftPrompt:  "DRAFT PROMPT",
@@ -129,11 +136,11 @@ func TestCreatePhaseReturnsTheResult(t *testing.T) {
 	if !strings.Contains(string(input), "CREATE PROMPT") || !strings.Contains(string(input), "summary: Flaky deploys") {
 		t.Errorf("create input:\n%s", input)
 	}
-	doc, err := Execute(context.Background(), fakeSpec(`echo '{"kind":"doc","url":"https://docs/page"}'`), root, testNote(), PhaseCreate)
-	if err != nil || doc != (Result{Kind: KindDoc, URL: "https://docs/page"}) {
+	doc, err := Execute(context.Background(), fakeTypedSpec("doc", `echo '{"kind":"doc","url":"https://docs/page"}'`), root, testNote(), PhaseCreate)
+	if err != nil || doc != (Result{Kind: "doc", URL: "https://docs/page"}) {
 		t.Errorf("doc = %+v %v", doc, err)
 	}
-	for _, output := range []string{`{"key":"PROJ-78"}`, `{"kind":"page","key":"PROJ-78"}`, `{"kind":"ticket"}`, "Created PROJ-78 for you"} {
+	for _, output := range []string{`{"key":"PROJ-78"}`, `{"kind":"page","key":"PROJ-78"}`, `{"kind":"doc","key":"PROJ-78"}`, `{"kind":"ticket"}`, "Created PROJ-78 for you"} {
 		if result, err := Execute(context.Background(), fakeSpec("echo '"+output+"'"), root, testNote(), PhaseCreate); err == nil {
 			t.Errorf("%s accepted as %+v", output, result)
 		}
@@ -275,7 +282,7 @@ func TestRunJobRecordsTheResultOnTheNote(t *testing.T) {
 	spec := fakeSpec(`echo '{"kind":"ticket","key":"PROJ-9"}'`)
 	cfg := &config.Config{DigestRoot: root, JiraBaseURL: "https://jira.example/browse/", Automations: []config.AutomationSpec{spec}}
 	noteStore := store.New(cfg.NotesDir())
-	note := &model.Note{Summary: "Create a ticket for logs", Body: "Logs vanish at midnight", Status: model.StatusInbox, Source: model.SourceManual, Created: time.Now()}
+	note := &model.Note{Summary: "Create a ticket for logs", Body: "Logs vanish at midnight", Status: model.StatusActive, Source: model.SourceManual, Created: time.Now()}
 	if err := noteStore.Save(note); err != nil {
 		t.Fatal(err)
 	}
@@ -308,11 +315,46 @@ func TestRunJobRecordsTheResultOnTheNote(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsAKindThatIsNotTheAutomationType(t *testing.T) {
+	root := t.TempDir()
+	if err := SaveDraft(root, "note-1", "summary: Standup\n"); err != nil {
+		t.Fatal(err)
+	}
+	spec := fakeTypedSpec("event", `echo '{"kind":"doc","url":"https://calendar/e1"}'`)
+	if _, err := Execute(context.Background(), spec, root, testNote(), PhaseCreate); err == nil || !strings.Contains(err.Error(), `kind must be "event", got "doc"`) {
+		t.Errorf("err = %v", err)
+	}
+	untyped := fakeTypedSpec("", `echo '{"kind":"","url":"https://calendar/e1"}'`)
+	if _, err := Execute(context.Background(), untyped, root, testNote(), PhaseCreate); err == nil {
+		t.Error("an empty kind should never be accepted")
+	}
+}
+
+func TestRunJobAppendsAnEventSection(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Config{DigestRoot: root, Automations: []config.AutomationSpec{fakeTypedSpec("event", `echo '{"kind":"Event","key":"e1","url":"https://calendar/e1"}'`)}}
+	noteStore := store.New(cfg.NotesDir())
+	note := &model.Note{Summary: "Schedule a meeting with platform", Status: model.StatusActive, Source: model.SourceManual, Created: time.Now()}
+	if err := noteStore.Save(note); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDraft(cfg.AutomationDir(), note.ID, "summary: Platform sync\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunJob(context.Background(), cfg, note.ID, "PROJ", PhaseCreate); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := store.Load(note.FilePath)
+	if saved.Automated != "event" || !strings.Contains(saved.Body, "## Event\n\n[e1](https://calendar/e1)") || !strings.Contains(saved.Body, "### Platform sync") {
+		t.Errorf("note = %+v", saved)
+	}
+}
+
 func TestRunJobAppendsADocSection(t *testing.T) {
 	root := t.TempDir()
-	cfg := &config.Config{DigestRoot: root, Automations: []config.AutomationSpec{fakeSpec(`echo '{"kind":"doc","url":"https://docs/page"}'`)}}
+	cfg := &config.Config{DigestRoot: root, Automations: []config.AutomationSpec{fakeTypedSpec("doc", `echo '{"kind":"doc","url":"https://docs/page"}'`)}}
 	noteStore := store.New(cfg.NotesDir())
-	note := &model.Note{Summary: "Create a ticket for docs", Status: model.StatusInbox, Source: model.SourceManual, Created: time.Now()}
+	note := &model.Note{Summary: "Create a ticket for docs", Status: model.StatusActive, Source: model.SourceManual, Created: time.Now()}
 	if err := noteStore.Save(note); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +365,7 @@ func TestRunJobAppendsADocSection(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved, _ := store.Load(note.FilePath)
-	if saved.Automated != KindDoc || !strings.Contains(saved.Body, "## Doc") || !strings.Contains(saved.Body, "[Runbook](https://docs/page)") {
+	if saved.Automated != "doc" || !strings.Contains(saved.Body, "## Doc") || !strings.Contains(saved.Body, "[Runbook](https://docs/page)") {
 		t.Errorf("note = %+v", saved)
 	}
 }

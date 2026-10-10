@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
 )
 
 func launchNotes(m Model, includeToday, includeCarried bool) []*model.Note {
@@ -34,6 +34,7 @@ func launchedWith(t *testing.T, includeToday, includeCarried bool) Model {
 func launchedWithDefault(t *testing.T, selectionDefault string, notes []*model.Note) Model {
 	t.Helper()
 	m := syncTestModel(t)
+	m.cfg.WorkDays = everyDay
 	m.cfg.SelectionDefault = selectionDefault
 	next, _ := m.Update(loadNotesMsg{notes: notes})
 	return next.(Model)

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/habit"
+	"github.com/achandrapaul/digest/pkg/habit"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,6 +21,7 @@ func (m Model) progressText() string {
 	if m.appStateKnown {
 		facts.Streak = m.appState.CurrentStreak(time.Now(), m.cfg.IsWorkDay)
 	}
+	facts.ClosedThisWeek += m.closedThisWeekElsewhere
 	var parts []string
 	if facts.Streak > 0 {
 		parts = append(parts, yellowBadgeStyle.Render(fmt.Sprintf("🔥 %d-day streak", facts.Streak)))
@@ -31,13 +32,16 @@ func (m Model) progressText() string {
 	return strings.Join(parts, mutedStyle.Render(" · "))
 }
 
-func (headerSection) Render(m Model) string {
-	renderedDate := mutedStyle.Bold(true).Render("— " + time.Now().Format("Monday 02 Jan"))
+func headerMiddleLine(m Model) string {
 	middleLine := m.renderBannerLine(bannerMiddleRow) + "  "
 	if version := displayVersion(); version != "" {
 		middleLine += versionStyle.Render(version) + "  "
 	}
-	middleLine += renderedDate
+	return middleLine + mutedStyle.Bold(true).Render("— "+time.Now().Format("Monday 02 Jan"))
+}
+
+func (headerSection) Render(m Model) string {
+	middleLine := headerMiddleLine(m)
 	if notice := m.unbraggedWeekNotice(); notice != "" {
 		noticeRoom := m.width - lipgloss.Width(middleLine) - 7
 		if noticeRoom > 0 {
@@ -99,8 +103,10 @@ var headerKeystrokes sectionKeystrokes
 
 func init() {
 	headerKeystrokes = sectionKeystrokes{
-		actionOpenMessages:  Model.openMessageLog,
-		actionDismissErrors: Model.dismissHeaderErrors,
+		actionOpenMessages:     Model.openMessageLog,
+		actionExpandMessageLog: Model.expandMessageLog,
+		actionScrollMessageLog: Model.scrollMessageLog,
+		actionDismissErrors:    Model.dismissHeaderErrors,
 	}
 }
 

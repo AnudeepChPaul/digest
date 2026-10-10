@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/paths"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 )
 
 func alertPR(url, title, decision string) review.QueuedPR {
@@ -33,14 +33,22 @@ func captureAlerts(t *testing.T) *[]notify.Notification {
 	return &sent
 }
 
-func TestPRAlertsStaySilentOnTheFirstSyncThenFireOncePerChange(t *testing.T) {
+func TestPRAlertsFireOnTheFirstSyncThenOncePerChange(t *testing.T) {
 	sent := captureAlerts(t)
 	path := filepath.Join(t.TempDir(), "pr-status.json")
 	requested := time.Now().Add(-time.Hour)
 	baseline := prSnapshot([]review.QueuedPR{alertPR("u/1", "Add trial", "REVIEW_REQUIRED"), alertPR("u/2", "Fix login", "")}, nil, []GitPRItem{requestItem("u/9", "Old ask", sourcecontrol.PendingReviewKind, requested)})
-	if err := sendPRAlerts(path, baseline); err != nil || len(*sent) != 0 {
-		t.Fatalf("first sync should only save a baseline: err %v sent %v", err, *sent)
+	if err := sendPRAlerts(path, baseline); err != nil || len(*sent) != 3 {
+		t.Fatalf("first sync should alert on every PR, mine included: err %v sent %v", err, *sent)
 	}
+	var firstTitles []string
+	for _, alert := range *sent {
+		firstTitles = append(firstTitles, alert.Title)
+	}
+	if joined := strings.Join(firstTitles, " | "); strings.Count(joined, "PR opened") != 2 || !strings.Contains(joined, "Review requested") {
+		t.Errorf("first sync alerts = %q", joined)
+	}
+	*sent = nil
 	next := prSnapshot(
 		[]review.QueuedPR{alertPR("u/1", "Add trial", "APPROVED")},
 		map[string]string{"u/2": "MERGED"},

@@ -7,11 +7,16 @@ import (
 type Status string
 
 const (
-	StatusInbox    Status = "inbox"
 	StatusActive   Status = "active"
 	StatusDone     Status = "done"
 	StatusArchived Status = "archived"
 )
+
+func (status Status) Known() bool {
+	return status == StatusActive || status == StatusDone || status == StatusArchived
+}
+
+const AutomationTicket = "ticket"
 
 type Source string
 
@@ -41,8 +46,4 @@ type Note struct {
 
 	Body     string `yaml:"-"`
 	FilePath string `yaml:"-"`
-}
-
-func (n *Note) MarksPreviousDay() bool {
-	return n.Status != StatusArchived && (n.Source == SourceManual || n.Source == "")
 }

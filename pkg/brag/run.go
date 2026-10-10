@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
 const (
@@ -281,7 +281,7 @@ func Execute(ctx context.Context, cfg *config.Config, period Period, regenerate 
 		_, err := Regenerate(ctx, root, command, prompt, period)
 		return err
 	}
-	if Exists(root, period) {
+	if _, loadErr := Load(root, period); loadErr == nil {
 		return fmt.Errorf("%s already has a brag; use --regenerate to rewrite its summary", period.Label())
 	}
 	if !Braggable(period, now) {

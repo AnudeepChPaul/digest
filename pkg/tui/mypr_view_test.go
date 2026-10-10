@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/review"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -78,7 +78,7 @@ func TestColumnKeysStayWithinDaysAndJKFlowIntoMyPRs(t *testing.T) {
 	m := myPRStripModel(t)
 	m.selected = 3
 	if m = press(t, m, tea.KeyMsg{Type: tea.KeyRight}); selectedRepoName(m) != "gamma" {
-		t.Fatalf("right in today should do nothing, got %q", selectedRepoName(m))
+		t.Fatalf("right should do nothing, got %q", selectedRepoName(m))
 	}
 	if m = press(t, m, runes("j")); selectedMyPRNumber(m) != 4 {
 		t.Fatalf("j from today should land on the first my PR, got %d", selectedMyPRNumber(m))

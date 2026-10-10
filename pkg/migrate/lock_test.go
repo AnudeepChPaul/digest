@@ -5,14 +5,15 @@ package migrate
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/appstate"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"golang.org/x/sys/unix"
 )
@@ -85,7 +86,7 @@ func TestMigrateLocksNotesAndWritesTheAppState(t *testing.T) {
 	if again, err := Run(options); err != nil || again != 0 {
 		t.Errorf("second run changed %d notes, err %v\n%s", again, err, f.output.String())
 	}
-	if again, _, _ := appstate.Load(f.root); again != state {
+	if again, _, _ := appstate.Load(f.root); !reflect.DeepEqual(again, state) {
 		t.Errorf("second run should keep the same state: %+v vs %+v", again, state)
 	}
 	edited := appstate.State{FirstNoteCreated: firstCreated.AddDate(-1, 0, 0), Streak: 9, LastDoneDay: "2026-10-09"}
@@ -95,7 +96,9 @@ func TestMigrateLocksNotesAndWritesTheAppState(t *testing.T) {
 	if _, err := Run(options); err != nil {
 		t.Fatal(err)
 	}
-	if kept, _, _ := appstate.Load(f.root); kept != edited {
-		t.Errorf("an existing state file should be left untouched: %+v", kept)
+	recomputed := edited
+	recomputed.FirstNoteCreated = firstCreated
+	if kept, _, _ := appstate.Load(f.root); !kept.FirstNoteCreated.Equal(firstCreated) || kept.Streak != recomputed.Streak || kept.LastDoneDay != recomputed.LastDoneDay {
+		t.Errorf("an existing state file should keep its fields and get first_note_created from the notes: %+v", kept)
 	}
 }

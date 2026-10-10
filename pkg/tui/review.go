@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,14 +13,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/brag"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/brag"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -104,11 +105,10 @@ func queuedFor(item *GitPRItem) (review.QueuedPR, error) {
 }
 
 func (m Model) currentPRItem() *GitPRItem {
-	navItems := m.allNavItems()
-	if len(navItems) == 0 || m.selected >= len(navItems) {
+	item, found := m.selectedNavItem()
+	if !found {
 		return nil
 	}
-	item := navItems[m.selected]
 	if item.Kind == KindPendingGit && item.PendingGitPR != nil {
 		return item.PendingGitPR
 	}
@@ -410,19 +410,24 @@ func (m *Model) setPRPreviewContent(item *GitPRItem, width, height int) {
 type relatedHistoryMsg struct {
 	url     string
 	history string
+	err     error
 }
 
-var gitLogForFiles = func(dir string, files []string) string {
+var gitLogForFiles = func(dir string, files []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	args := append([]string{"-C", dir, "log", "-n", "5", "--format=%h %s", "origin/HEAD", "--"}, files...)
 	gitLog := exec.CommandContext(ctx, "git", args...)
 	gitLog.WaitDelay = time.Second
 	out, err := gitLog.Output()
-	if err != nil {
-		return ""
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(bytes.TrimSpace(exitErr.Stderr)) > 0 {
+		return "", errors.New(string(bytes.TrimSpace(exitErr.Stderr)))
 	}
-	return strings.TrimSpace(string(out))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (m *Model) relatedHistoryCmd(item *GitPRItem) tea.Cmd {
@@ -447,7 +452,8 @@ func (m *Model) relatedHistoryCmd(item *GitPRItem) tea.Cmd {
 	m.historyRequested[pr.Ref.URL] = true
 	url := pr.Ref.URL
 	return func() tea.Msg {
-		return relatedHistoryMsg{url: url, history: gitLogForFiles(dir, files)}
+		history, err := gitLogForFiles(dir, files)
+		return relatedHistoryMsg{url: url, history: history, err: err}
 	}
 }
 
@@ -463,6 +469,9 @@ func (m Model) handleRelatedHistory(msg relatedHistoryMsg) (tea.Model, tea.Cmd) 
 		}
 	}
 	m.contextCache[msg.url] = msg.history
+	if msg.err != nil {
+		m.contextCache[msg.url] = historyFailurePrefix + msg.err.Error()
+	}
 	if item := m.currentPRItem(); m.mode == ViewPreview && item != nil && item.URL == msg.url {
 		m.updatePreviewViewport()
 	}
@@ -478,6 +487,8 @@ func (m Model) listedPRURLs() map[string]bool {
 	}
 	return listed
 }
+
+const historyFailurePrefix = "\x00history failed: "
 
 func (m Model) relatedHistory(pr review.QueuedPR) (string, bool) {
 	history, cached := m.contextCache[pr.Ref.URL]
@@ -534,7 +545,9 @@ func (m Model) renderDetailsMarkdown(item *GitPRItem) string {
 	}
 	b.WriteString("\n## Recent changes to these files\n\n")
 	history, loading := m.relatedHistory(*pr)
-	if history != "" {
+	if failure, failed := strings.CutPrefix(history, historyFailurePrefix); failed {
+		fmt.Fprintf(&b, "Couldn't read history: %s\n", failure)
+	} else if history != "" {
 		for _, line := range strings.Split(history, "\n") {
 			fmt.Fprintf(&b, "- %s\n", line)
 		}
@@ -698,6 +711,8 @@ func (m Model) startReview(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 	return true, m.refreshPreview(), pollCmds
 }
 
+const messageSourceReview = "review"
+
 func (m Model) openClone(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 	queued, err := queuedFor(item)
 	if err != nil {
@@ -706,6 +721,10 @@ func (m Model) openClone(item *GitPRItem) (bool, tea.Model, tea.Cmd) {
 	}
 	if os.Getenv("TMUX") == "" {
 		m.reviewNotice = "Not inside tmux; cannot open a new nvim window"
+		if m.mode == ViewDashboard {
+			m.postMessage(messageSourceReview, messageError, m.reviewNotice)
+		}
+		m.openLink(review.CloneDir(m.reviewRoot(), queued.Ref))
 		return true, m.refreshPreview(), nil
 	}
 	root, sessionCtx := m.reviewRoot(), m.sessionCtx

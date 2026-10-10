@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
 )
 
 func lastLineContaining(lines []string, text string) int {
@@ -31,7 +31,7 @@ func TestSectionsAreEquallySpaced(t *testing.T) {
 	m := syncTestModel(t)
 	m.git.loadingGit = false
 	m.notes = []*model.Note{
-		{Summary: "yesterday-done", Created: m.currentDate.AddDate(0, 0, -1), Status: model.StatusDone, Updated: m.currentDate.AddDate(0, 0, -1)},
+		{Summary: "yesterday-done", Created: m.previousNoteDay(), Status: model.StatusDone, Updated: m.previousNoteDay()},
 		{Summary: "carried-note", Created: m.currentDate.AddDate(0, 0, -3)},
 	}
 	m.git.ghPendingPRs = []GitPRItem{

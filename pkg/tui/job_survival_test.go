@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 )
 
 const launchJobsRootEnv = "DIGEST_TEST_LAUNCH_JOBS_ROOT"

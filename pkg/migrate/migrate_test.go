@@ -5,14 +5,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/appstate"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/store"
 )
 
 type fixture struct {
@@ -172,5 +174,134 @@ func TestMigrateRefusesWhileTheTUIOrAnAutomationRuns(t *testing.T) {
 	}
 	if _, err := Run(options); !errors.Is(err, ErrAutomationRunning) {
 		t.Errorf("err = %v, want ErrAutomationRunning", err)
+	}
+}
+
+func TestMigrateCarriesOnPastCorruptNotesAndReportsThem(t *testing.T) {
+	f := newFixture(t)
+	created := time.Date(2026, 10, 6, 9, 0, 0, 0, time.Local)
+	f.writeNote(t, "2026/10/no-id.md", "created: "+created.Format(time.RFC3339Nano)+"\nstatus: inbox\nsummary: without id\n", "")
+	corrupt := filepath.Join(f.notesDir, "2026", "10", "bad-yaml.md")
+	if err := os.WriteFile(corrupt, []byte("---\nsummary: [unclosed\n---\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := Run(f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want the good note migrated", changed)
+	}
+	if !strings.Contains(f.output.String(), "skipped "+filepath.Join("2026", "10", "bad-yaml.md")+": ") {
+		t.Errorf("output = %q, want the corrupt note reported", f.output.String())
+	}
+	if content, _ := os.ReadFile(corrupt); string(content) != "---\nsummary: [unclosed\n---\nbody\n" {
+		t.Errorf("the corrupt note was changed: %q", content)
+	}
+}
+
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		files[path] = string(content)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func TestMigrateDryRunChangesNothingAndReportsEverything(t *testing.T) {
+	f := newFixture(t)
+	created := time.Date(2026, 10, 6, 9, 0, 0, 0, time.Local)
+	f.writeNote(t, "2026/10/01M3P3RDCCFE87NP9MRHHGRVKS-check-pods.md", "id: 01M3P3RDCCFE87NP9MRHHGRVKS\ncreated: "+created.Format(time.RFC3339Nano)+"\nupdated: "+created.Format(time.RFC3339Nano)+"\nstatus: active\nsource: manual\nsummary: ulid one\n", "")
+	if err := notify.Save(f.root, notify.Entry{NoteID: "01M3P3RDCCFE87NP9MRHHGRVKS", Summary: "ulid one", Interval: "1h"}); err != nil {
+		t.Fatal(err)
+	}
+	options, _ := f.withConfig(t, oldJanitorConfig)
+	options.DryRun = true
+	before := snapshotTree(t, f.root)
+
+	changed, err := Run(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want the one note a real run would migrate", changed)
+	}
+	if after := snapshotTree(t, f.root); !reflect.DeepEqual(before, after) {
+		t.Errorf("a dry run changed files:\nbefore %v\nafter  %v", before, after)
+	}
+	newID := store.NoteID(created)
+	output := f.output.String()
+	for _, want := range []string{
+		"would move retention_days, janitor_patterns into the janitor job's options in " + options.ConfigPath,
+		"01M3P3RDCCFE87NP9MRHHGRVKS-check-pods.md → " + newID + ".md",
+		"reminder 01M3P3RDCCFE87NP9MRHHGRVKS → " + newID,
+		"1 notes would be migrated",
+		"would save " + appstate.Path(f.root),
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestMigrateRecomputesFirstNoteCreatedInAnExistingAppState(t *testing.T) {
+	f := newFixture(t)
+	earliest := time.Date(2026, 9, 1, 9, 0, 0, 0, time.Local)
+	later := time.Date(2026, 10, 6, 9, 0, 0, 0, time.Local)
+	for summary, note := range map[string]struct {
+		created time.Time
+		status  string
+	}{"archived first": {earliest, "archived"}, "active later": {later, "active"}} {
+		noteID := store.NoteID(note.created)
+		f.writeNote(t, note.created.Format("2006/01/")+noteID+".md", "id: "+noteID+"\ncreated: "+note.created.Format(time.RFC3339Nano)+"\nupdated: "+note.created.Format(time.RFC3339Nano)+"\nstatus: "+note.status+"\nsource: manual\nsummary: "+summary+"\n", "")
+	}
+	stored := appstate.State{FirstNoteCreated: later.AddDate(1, 0, 0), Streak: 9, LastDoneDay: "2026-10-09", ActionMenuOrder: []string{"notify", "jira"}}
+	if err := appstate.Save(f.root, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	dryRun := f.options()
+	dryRun.DryRun = true
+	if _, err := Run(dryRun); err != nil {
+		t.Fatal(err)
+	}
+	if want := "would set first_note_created to " + earliest.Format(time.RFC3339); !strings.Contains(f.output.String(), want) {
+		t.Errorf("dry run output missing %q:\n%s", want, f.output.String())
+	}
+	if unchanged, _, _ := appstate.Load(f.root); !reflect.DeepEqual(unchanged, stored) {
+		t.Errorf("a dry run should not touch the app state: %+v", unchanged)
+	}
+
+	if _, err := Run(f.options()); err != nil {
+		t.Fatal(err)
+	}
+	want := stored
+	want.FirstNoteCreated = earliest
+	if got, _, _ := appstate.Load(f.root); !got.FirstNoteCreated.Equal(earliest) || got.Streak != want.Streak || got.LastDoneDay != want.LastDoneDay || !reflect.DeepEqual(got.ActionMenuOrder, want.ActionMenuOrder) {
+		t.Errorf("app state = %+v, want %+v", got, want)
+	}
+}
+
+func TestMigrateKeepsFirstNoteCreatedWithoutNotes(t *testing.T) {
+	f := newFixture(t)
+	stored := appstate.State{FirstNoteCreated: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), Streak: 3}
+	if err := appstate.Save(f.root, stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(f.options()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := appstate.Load(f.root); !reflect.DeepEqual(got, stored) {
+		t.Errorf("with no notes the stored state should stay: %+v", got)
 	}
 }

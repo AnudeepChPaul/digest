@@ -1,24 +1,21 @@
 package notify
 
 import (
-	"bytes"
+	_ "embed"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 
-	"github.com/AnudeepChPaul/digest/pkg/brand"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/system"
 )
 
+//go:embed icon.png
+var iconPNG []byte
+
 const (
-	iconSize         = 1024
-	iconCell         = 44
 	NotifierBundleID = "com.digest.notifier"
 	notifierAppName  = "Digest Notifier.app"
 )
@@ -38,48 +35,8 @@ var runTool = func(name string, args ...string) error {
 	return nil
 }
 
-func hexColour(hex string) color.RGBA {
-	value, _ := strconv.ParseUint(hex[1:], 16, 32)
-	return color.RGBA{R: uint8(value >> 16), G: uint8(value >> 8), B: uint8(value), A: 0xFF}
-}
-
-func bannerPixels() [][]bool {
-	var pixels [][]bool
-	for _, row := range brand.BannerRows {
-		var upper, lower []bool
-		for _, glyph := range row {
-			upper = append(upper, glyph == '█' || glyph == '▀')
-			lower = append(lower, glyph == '█' || glyph == '▄')
-		}
-		pixels = append(pixels, upper, lower)
-	}
-	return pixels
-}
-
-func iconOrigin() (left, top int) {
-	pixels := bannerPixels()
-	return (iconSize - len(pixels[0])*iconCell) / 2, (iconSize - len(pixels)*iconCell) / 2
-}
-
 func IconPNG() []byte {
-	pixels := bannerPixels()
-	left, top := iconOrigin()
-	base, ink := hexColour(brand.BaseColour), hexColour(brand.TextColour)
-	canvas := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
-	for y := range iconSize {
-		for x := range iconSize {
-			column, row := (x-left)/iconCell, (y-top)/iconCell
-			inside := x >= left && y >= top && row < len(pixels) && column < len(pixels[row])
-			if inside && pixels[row][column] {
-				canvas.SetRGBA(x, y, ink)
-			} else {
-				canvas.SetRGBA(x, y, base)
-			}
-		}
-	}
-	var encoded bytes.Buffer
-	_ = png.Encode(&encoded, canvas)
-	return encoded.Bytes()
+	return iconPNG
 }
 
 func terminalNotifierApp() (string, error) {

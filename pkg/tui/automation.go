@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 
-	"github.com/AnudeepChPaul/digest/pkg/automation"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/tui/textarea"
+	"github.com/achandrapaul/digest/pkg/automation"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/tui/textarea"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -39,6 +40,10 @@ func (m Model) noteAutomation(n *model.Note) (config.AutomationSpec, bool) {
 	return automation.Match(m.cfg.AutomationList(), n)
 }
 
+func (m Model) automatedKindKnown(kind string) bool {
+	return automation.IsKnownKind(m.cfg, strings.ToLower(kind))
+}
+
 func (m Model) automationTag(n *model.Note) string {
 	if run, tracked := m.automationRuns[n.ID]; tracked && run.Status != automation.RunCreated {
 		switch run.Status {
@@ -49,7 +54,7 @@ func (m Model) automationTag(n *model.Note) string {
 		}
 		return tagStyle.Render("#draft")
 	}
-	if n.Automated != "" {
+	if m.automatedKindKnown(n.Automated) {
 		return dimBlueText.Render("#" + strings.ToLower(n.Automated))
 	}
 	return ""
@@ -85,7 +90,7 @@ func (m Model) onDraftTab() bool {
 }
 
 func (m Model) noteCanStartAutomation(n *model.Note) bool {
-	if n == nil || n.Automated != "" {
+	if n == nil || m.automatedKindKnown(n.Automated) {
 		return false
 	}
 	run, tracked := m.noteRun(n)
@@ -94,7 +99,7 @@ func (m Model) noteCanStartAutomation(n *model.Note) bool {
 
 func (m Model) canAutomate() bool {
 	note, found := m.previewNote()
-	if !found || note.Automated != "" {
+	if !found || m.automatedKindKnown(note.Automated) {
 		return false
 	}
 	if _, matched := m.noteAutomation(note); !matched {
@@ -131,15 +136,6 @@ func (m Model) anyAutomationRunning() bool {
 	return false
 }
 
-func (m Model) automateFromPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	note, found := m.previewNote()
-	if !found || !m.canAutomate() {
-		return m, nil
-	}
-	spec, _ := m.noteAutomation(note)
-	return m.askAutomationConfirm(note.ID, spec.Name, automation.PhaseDraft), nil
-}
-
 func (m Model) runAutomationDraft(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	note, found := m.previewNote()
 	if !found || !m.onDraftTab() || !m.canRunDraft() {
@@ -156,12 +152,39 @@ func (m Model) askAutomationConfirm(noteID, automationName string, phase automat
 	return m
 }
 
+const automationErrorTitle = "AUTOMATION ERROR"
+
+func (m *Model) showAutomationError(err error) {
+	m.showError(automationErrorTitle, err)
+	m.screenError = ""
+	if m.mode == ViewPreview || m.mode == ViewAutomationEdit {
+		m.previewNotice = automationErrorTitle + ": " + err.Error()
+	}
+}
+
+func (m *Model) clearAutomationError() {
+	messages := slices.Clone(m.messages)
+	for index := range messages {
+		if messages[index].source == automationErrorTitle {
+			messages[index].dismissed = true
+		}
+	}
+	m.messages = messages
+	if strings.HasPrefix(m.previewNotice, automationErrorTitle) {
+		m.previewNotice = ""
+	}
+}
+
 func (m Model) confirmAutomation(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = m.automationReturnMode
 	if err := startAutomation(m.automationRoot(), m.automationNoteID, m.automationName, m.automationPhase); err != nil {
-		m.showError("AUTOMATION ERROR", err)
+		m.showAutomationError(err)
+		if m.mode == ViewPreview {
+			m.updatePreviewViewport()
+		}
 		return m, nil
 	}
+	m.clearAutomationError()
 	runs := maps.Clone(m.automationRuns)
 	if runs == nil {
 		runs = map[string]automation.Run{}
@@ -172,7 +195,9 @@ func (m Model) confirmAutomation(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode != ViewPreview {
 		return m, m.ensureReviewPoll()
 	}
-	m.previewTab = previewTabDraft
+	if _, onNote := m.previewNote(); onNote {
+		m.previewTab = previewTabDraft
+	}
 	return m.refreshPreview(), m.ensureReviewPoll()
 }
 
@@ -238,9 +263,10 @@ func (m Model) reloadNotesByIDCmd(noteIDs []string) tea.Cmd {
 			note, err := noteStore.LoadByID(noteID)
 			if err != nil {
 				missing = append(missing, err)
-				continue
 			}
-			changed = append(changed, *note)
+			if note != nil {
+				changed = append(changed, *note)
+			}
 		}
 		return notesChangedMsg{notes: changed, err: errors.Join(missing...)}
 	}
@@ -312,14 +338,14 @@ func (m Model) draftTabMarkdown(note *model.Note) string {
 		if tail == "" {
 			tail = "No output."
 		}
-		return "# Draft failed\n\nPress **x** to draft again.\n\n```\n" + tail + "\n```"
+		return "# Draft failed\n\nOpen the actions menu to draft again.\n\n```\n" + tail + "\n```"
 	}
 	var status string
 	switch run.Status {
 	case automation.RunRunning:
 		status = fmt.Sprintf("> Running **%s**… the draft is read-only until it finishes.\n\n", run.Meta.Automation)
 	case automation.RunFailed:
-		status = "> The last run failed. Press **r** to run it again, or **x** to draft again.\n\n"
+		status = "> The last run failed. Press **r** to run it again.\n\n"
 	case automation.RunNeedsReauth:
 		status = "> The last run needs re-auth. Re-authenticate, then press **r** to run it again.\n\n"
 	}
@@ -340,12 +366,17 @@ func (m Model) deleteAutomationDraft(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !found || !m.onDraftTab() || !m.canDeleteDraft() {
 		return m, nil
 	}
-	if err := automation.Dismiss(m.automationRoot(), note.ID); err != nil {
-		m.showError("AUTOMATION ERROR", err)
+	m.draftToDelete = note.ID
+	return m.beginStopConfirm(), nil
+}
+
+func (m Model) deleteDraft(noteID string) (tea.Model, tea.Cmd) {
+	if err := automation.Dismiss(m.automationRoot(), noteID); err != nil {
+		m.showError(automationErrorTitle, err)
 		return m, nil
 	}
 	runs := maps.Clone(m.automationRuns)
-	delete(runs, note.ID)
+	delete(runs, noteID)
 	m.automationRuns = runs
 	m.previewTab = previewTabDetails
 	return m.refreshPreview(), nil
@@ -373,14 +404,19 @@ func (m Model) editAutomationDraft(tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) saveAutomationEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if err := automation.SaveDraft(m.automationRoot(), m.automationNoteID, m.editor.Value()); err != nil {
 		m.automationNotice = err.Error()
+		m.showAutomationError(err)
 		return m, nil
 	}
+	m.clearAutomationError()
 	m.editor.Blur()
 	m.mode = ViewPreview
 	return m.refreshPreview(), nil
 }
 
 func (m Model) cancelAutomationEdit(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editorChanged() {
+		return m.beginDiscardConfirm(), nil
+	}
 	m.editor.Blur()
 	m.automationNotice = ""
 	m.mode = ViewPreview
@@ -417,42 +453,45 @@ func (m Model) renderAutomationEdit() string {
 }
 
 func (m Model) noteDraftTabBindings() []keyBinding {
-	return []keyBinding{
+	var noteBindings []keyBinding
+	if item, found := m.selectedNavItem(); found {
+		noteBindings = m.itemBindings(item, false)
+	}
+	return append(append([]keyBinding{
 		newKeyBinding(actionSwitchPreviewTab, []string{"tab"}, "tab", "tabs"),
 		newKeyBinding(actionEditAutomation, []string{"enter"}, "enter", "edit").shownWhen(m.canRunDraft()),
-		newKeyBinding(actionAutomate, []string{"x"}, "x", "draft again").shownWhen(m.canAutomate()),
+	}, noteBindings...),
 		newKeyBinding(actionRunAutomationDraft, []string{"r"}, "r", "run").shownWhen(m.canRunDraft()),
 		newKeyBinding(actionDeleteAutomationDraft, []string{"d"}, "d", "delete draft").warning().shownWhen(m.canDeleteDraft()),
 		newKeyBinding(actionCopyPreviewItem, []string{"ctrl+y"}, "ctrl+y", "copy").shownWhen(m.draftText() != ""),
 		newKeyBinding(actionClosePreview, []string{"esc"}, "esc", "close"),
 		newKeyBinding(actionPreviewPrevious, []string{"p"}, "p|n", "prev/next"),
 		hiddenKeyBinding(actionPreviewNext, "n"),
-	}
+	)
 }
 
 func automationConfirmBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionConfirmAutomation, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
-		newKeyBinding(actionCancelAutomation, []string{"esc", "n", "N"}, "esc", "cancel"),
-	}
+	return yesNoBindings(actionConfirmAutomation, "confirm", actionCancelAutomation, "cancel")
 }
 
 func automationEditBindings() []keyBinding {
 	return append([]keyBinding{
 		newKeyBinding(actionSaveAutomationEdit, []string{"ctrl+o"}, "ctrl+o", "save"),
+		newKeyBinding(actionCopyAutomationEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelAutomationEdit, []string{"esc"}, "esc", "cancel"),
-	}, editorHalfPageBindings()...)
+	}, editorPagingBindings()...)
 }
 
-func (m Model) runningAutomations() []automation.Run {
-	var running []automation.Run
+func (m Model) automationJobRuns() []automation.Run {
+	var jobRuns []automation.Run
 	for _, run := range m.automationRuns {
-		if run.Status == automation.RunRunning {
-			running = append(running, run)
+		switch run.Status {
+		case automation.RunRunning, automation.RunFailed, automation.RunNeedsReauth:
+			jobRuns = append(jobRuns, run)
 		}
 	}
-	sort.Slice(running, func(i, j int) bool { return running[i].Meta.NoteID < running[j].Meta.NoteID })
-	return running
+	sort.Slice(jobRuns, func(i, j int) bool { return jobRuns[i].Meta.NoteID < jobRuns[j].Meta.NoteID })
+	return jobRuns
 }
 
 func (m Model) automationJobLabel(run automation.Run) string {
@@ -494,7 +533,31 @@ func (m Model) stopAutomationRun(run *automation.Run) (tea.Model, tea.Cmd) {
 	stopped.Status = automation.RunFailed
 	runs := maps.Clone(m.automationRuns)
 	runs[stopped.Meta.NoteID] = stopped
+	selectedKey, selectedOccurrence := m.selectedNavKey()
 	m.automationRuns = runs
+	m.restoreSelection(selectedKey, selectedOccurrence)
+	if m.mode == ViewPreview {
+		m.updatePreviewViewport()
+	}
+	m.clampScreenSelection()
+	return m, nil
+}
+
+func (m Model) copyAutomationEditor(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.copyText(strings.TrimSpace(m.editor.Value()))
+	return m, nil
+}
+
+func (m Model) dismissAutomationRun(run *automation.Run) (tea.Model, tea.Cmd) {
+	if err := automation.Dismiss(m.automationRoot(), run.Meta.NoteID); err != nil {
+		m.showError("AUTOMATION ERROR", err)
+		return m, nil
+	}
+	selectedKey, selectedOccurrence := m.selectedNavKey()
+	runs := maps.Clone(m.automationRuns)
+	delete(runs, run.Meta.NoteID)
+	m.automationRuns = runs
+	m.restoreSelection(selectedKey, selectedOccurrence)
 	if m.mode == ViewPreview {
 		m.mode = ViewDashboard
 	}

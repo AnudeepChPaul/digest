@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -20,9 +21,11 @@ const (
 )
 
 const (
-	messageSourceGit   = "git"
-	successMessageLife = 4 * time.Second
-	maxMessages        = 50
+	messageSourceGit       = "git"
+	messageSourceClipboard = "clipboard"
+	messageLogTitle        = "MESSAGES"
+	successMessageLife     = 4 * time.Second
+	maxMessages            = 50
 )
 
 var messageNow = time.Now
@@ -43,6 +46,8 @@ var (
 	messageSuccessStyle = lipgloss.NewStyle().Foreground(colourGreen)
 	messageErrorStyle   = lipgloss.NewStyle().Foreground(colourRed)
 	messageProgressText = lipgloss.NewStyle().Foreground(colourSubtext)
+
+	messageLogProgressStyle = lipgloss.NewStyle().Foreground(colourMauve)
 )
 
 func (m *Model) postMessage(source string, kind messageKind, text string) {
@@ -53,11 +58,51 @@ func (m *Model) postMessage(source string, kind messageKind, text string) {
 		}
 		messages = append(messages, message)
 	}
-	messages = append(messages, appMessage{source: source, kind: kind, text: text, at: messageNow()})
+	message := appMessage{source: source, kind: kind, text: text, at: messageNow()}
+	messages = append(messages, message)
 	if len(messages) > maxMessages {
 		messages = messages[len(messages)-maxMessages:]
 	}
 	m.messages = messages
+	switch {
+	case kind == messageError && m.showsScreenErrors():
+		m.screenError, m.screenErrorMode = message.displayText(), m.mode
+	case kind == messageSuccess:
+		m.screenError = ""
+	}
+}
+
+var screensShowingTheHeader = []ViewMode{ViewDashboard, ViewInlineEdit, ViewNotifyInput, ViewRecreateRow, ViewActionMenu, ViewLinkMenu, ViewError}
+
+func (m Model) showsScreenErrors() bool {
+	return !slices.Contains(screensShowingTheHeader, m.mode)
+}
+
+func (m *Model) clearScreenErrorOffScreen() {
+	if m.screenError != "" && m.mode != m.screenErrorMode {
+		m.screenError = ""
+	}
+}
+
+func (m Model) screenErrorNotice(width int) string {
+	if m.screenError == "" || m.mode != m.screenErrorMode {
+		return ""
+	}
+	return messageErrorStyle.Render(ansi.Truncate("✗ "+m.screenError, width, "…"))
+}
+
+func (message appMessage) displayText() string {
+	text := strings.ReplaceAll(message.text, "\n", " ")
+	switch message.source {
+	case messageSourceGit:
+		return "git " + text
+	case messageSourceClipboard:
+		if message.kind != messageSuccess {
+			return message.source + ": " + text
+		}
+		return text
+	}
+	return strings.ToLower(message.source) + ": " + text
 }
 
 func (m *Model) dismissErrorMessages() bool {
@@ -95,13 +140,7 @@ func (m Model) renderActiveMessage(room int) string {
 	if !found || room < 4 {
 		return ""
 	}
-	text := strings.ReplaceAll(message.text, "\n", " ")
-	if message.source != messageSourceGit {
-		text = strings.ToLower(message.source) + ": " + text
-	} else {
-		text = "git " + text
-	}
-	text = ansi.Truncate(text, room-2, "…")
+	text := ansi.Truncate(message.displayText(), room-2, "…")
 	switch message.kind {
 	case messageProgress:
 		return syncPulseStyles[m.syncPulseFrame%len(syncPulseStyles)].Render(progressFrames[m.syncPulseFrame%len(progressFrames)]) + " " + messageProgressText.Render(text)
@@ -127,19 +166,81 @@ func (m Model) messageExpiryCmd() tea.Cmd {
 	return tea.Tick(nextExpiry, func(time.Time) tea.Msg { return messageExpiryMsg{} })
 }
 
-func (m Model) openMessageLog(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var lines []string
+func (message appMessage) logLine() string {
+	return message.at.Format("15:04:05") + "  " + message.source + ": " + message.text
+}
+
+func (m Model) messageLogLines() []string {
+	lines := make([]string, 0, len(m.messages))
 	for index := len(m.messages) - 1; index >= 0; index-- {
-		message := m.messages[index]
-		lines = append(lines, message.at.Format("15:04:05")+"  "+message.source+": "+message.text)
+		lines = append(lines, m.messages[index].logLine())
 	}
-	if len(lines) == 0 {
-		lines = []string{"No messages yet."}
+	return lines
+}
+
+func (m Model) renderMessageLogEntry(message appMessage, width int) string {
+	text := message.logLine()
+	if m.messageLogExpanded {
+		text = strings.ReplaceAll(lipgloss.NewStyle().Width(max(width-2, 1)).Render(text), "\n", "\n  ")
+	} else {
+		text = ansi.Truncate(strings.ReplaceAll(text, "\n", " "), width-2, "…")
 	}
+	switch message.kind {
+	case messageSuccess:
+		return messageSuccessStyle.Render("✓ " + text)
+	case messageError:
+		return messageErrorStyle.Render("✗ " + text)
+	}
+	marker := messageLogProgressStyle.Render("•")
+	if !message.dismissed {
+		marker = syncPulseStyles[m.syncPulseFrame%len(syncPulseStyles)].Render(progressFrames[m.syncPulseFrame%len(progressFrames)])
+	}
+	return marker + " " + messageLogProgressStyle.Render(text)
+}
+
+func (m Model) messageLogEntries(width int) string {
+	entries := make([]string, 0, len(m.messages))
+	for index := len(m.messages) - 1; index >= 0; index-- {
+		entries = append(entries, m.renderMessageLogEntry(m.messages[index], width))
+	}
+	return strings.Join(entries, "\n")
+}
+
+func (m Model) messageLogView() viewport.Model {
+	width := modalWidthFor(m.width) - 6
+	fixedHeight := 3 + lipgloss.Height(renderModalFooter(footerItemsFrom(m.errorBindings()), width))
+	view := m.messageLogViewport
+	view.Width, view.Height = width, max(3, previewContentHeight(m.height)-fixedHeight)
+	view.SetContent(m.messageLogEntries(width))
+	return view
+}
+
+func (m Model) renderMessageLog(width int) string {
+	if m.messageLogExpanded {
+		return m.messageLogView().View()
+	}
+	return m.messageLogEntries(width)
+}
+
+func (m Model) openMessageLog(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.errorReturnMode = m.mode
-	m.errorTitle = "MESSAGES"
-	m.errorLines = lines
+	m.errorTitle = messageLogTitle
+	m.errorLines = nil
+	m.messageLogExpanded = false
 	m.mode = ViewError
+	return m, nil
+}
+
+func (m Model) expandMessageLog(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.messageLogExpanded = true
+	m.messageLogViewport = viewport.Model{}
+	return m, nil
+}
+
+func (m Model) scrollMessageLog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	view := m.messageLogView()
+	scrollViewport(&view, msg.String())
+	m.messageLogViewport = view
 	return m, nil
 }
 

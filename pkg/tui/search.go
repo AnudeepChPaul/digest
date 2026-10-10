@@ -8,9 +8,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/model"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -65,14 +66,14 @@ func calendarDaysBetween(earlier, later time.Time) int {
 	return int(laterMidnight.Sub(earlierDay).Hours()/24 + 0.5)
 }
 
-func (filter dateFilter) matches(updated, now time.Time) bool {
-	if updated.IsZero() {
+func (filter dateFilter) matches(noteTime, now time.Time) bool {
+	if noteTime.IsZero() {
 		return false
 	}
 	if !filter.onDay.IsZero() {
-		return calendarDaysBetween(updated, filter.onDay) == 0
+		return calendarDaysBetween(noteTime, filter.onDay) == 0
 	}
-	return calendarDaysBetween(updated, now) >= 0 && !updated.Local().Before(filter.cutoff(now))
+	return calendarDaysBetween(noteTime, now) >= 0 && !noteTime.Local().Before(filter.cutoff(now))
 }
 
 func (filter dateFilter) cutoff(now time.Time) time.Time {
@@ -152,7 +153,7 @@ func (entry *searchableNote) refresh(note *model.Note) {
 func (query searchQuery) matches(entry *searchableNote, now time.Time) (matched, bodyMatched bool) {
 	note := entry.note
 	for _, filter := range query.dates {
-		if !filter.matches(note.Updated, now) {
+		if !filter.matches(note.Created, now) && !filter.matches(note.Updated, now) {
 			return false, false
 		}
 	}
@@ -206,24 +207,26 @@ func (m Model) searchMatches() ([]*model.Note, []int) {
 	}
 	input, now := m.searchInput.Value(), time.Now()
 	day := now.Format(searchDayFormat)
-	if memo.matchesKey(input, day, m.notes) {
+	notes := m.notesForBrowsing()
+	if memo.matchesKey(input, day, notes) {
 		return memo.results, memo.heights
 	}
 	query := parseSearchQuery(input)
-	if len(memo.entries) != len(m.notes) {
-		memo.entries = append(memo.entries[:0], make([]searchableNote, len(m.notes))...)
+	if len(memo.entries) != len(notes) {
+		memo.entries = append(memo.entries[:0], make([]searchableNote, len(notes))...)
 	}
-	key := searchResultKey{query: input, day: day, status: make([]model.Status, len(m.notes)), update: make([]time.Time, len(m.notes))}
+	key := searchResultKey{query: input, day: day, status: make([]model.Status, len(notes)), update: make([]time.Time, len(notes))}
 	type match struct {
 		note        *model.Note
 		bodyMatched bool
 	}
 	var matches []match
-	for index, note := range m.notes {
+	blankQuery := strings.TrimSpace(input) == ""
+	for index, note := range notes {
 		entry := &memo.entries[index]
 		entry.refresh(note)
 		key.status[index], key.update[index] = note.Status, note.Updated
-		if note.Status != model.StatusActive && note.Status != model.StatusDone {
+		if blankQuery || note.Status != model.StatusActive && note.Status != model.StatusDone {
 			continue
 		}
 		if matched, bodyMatched := query.matches(entry, now); matched {
@@ -356,7 +359,7 @@ func searchWindow(heights []int, selected, scroll, available int) (first, last i
 }
 
 func (m Model) searchFooter(modalWidth int) string {
-	return renderModalFooter(footerItemsFrom(searchBindings()), modalWidth-6)
+	return renderModalFooter(footerItemsFrom(m.searchBindings()), modalWidth-6)
 }
 
 func (m Model) searchListHeight() int {
@@ -437,14 +440,16 @@ func (m Model) renderSearchModal(modalWidth int) string {
 	hintLine := ""
 	if len(query.invalidDates) > 0 {
 		hintLine = mutedStyle.Render("  " + invalidDateHint)
+	} else if notice := m.screenErrorNotice(innerWidth - 2); notice != "" {
+		hintLine = "  " + notice
 	} else if m.searchNotice != "" {
 		hintLine = mutedStyle.Render(ansi.Truncate("  "+m.searchNotice, innerWidth, "…"))
 	}
 
 	var listLines []string
-	if len(results) == 0 {
+	if len(results) == 0 && strings.TrimSpace(m.searchInput.Value()) != "" {
 		listLines = append(listLines, "  "+mutedStyle.Render("(no matching notes)"))
-	} else {
+	} else if len(results) > 0 {
 		dateWidth, now := 0, time.Now()
 		for _, note := range results {
 			dateWidth = max(dateWidth, ansi.StringWidth(searchDateLabel(note.Updated, now)))
@@ -490,6 +495,22 @@ func (m Model) searchPreviewNote() *model.Note {
 	return results[m.searchPreviewIndex(results)]
 }
 
+func (m Model) previewingSearch() bool {
+	return m.searchPreviewing && m.mode != ViewDashboard && m.mode != ViewSearch
+}
+
+func (m Model) searchPreviewItem() (NavItem, bool) {
+	note := m.searchPreviewNote()
+	if note == nil {
+		return NavItem{}, false
+	}
+	kind := KindTodayNote
+	if note.Status == model.StatusDone {
+		kind = KindTodayDone
+	}
+	return NavItem{Kind: kind, Note: note}, true
+}
+
 func (m *Model) showSearchPreviewAt(index int) {
 	results := m.searchResults()
 	if len(results) == 0 {
@@ -498,46 +519,40 @@ func (m *Model) showSearchPreviewAt(index int) {
 	m.searchSelected = min(max(index, 0), len(results)-1)
 	m.searchPreviewID = results[m.searchSelected].ID
 	m.keepSearchSelectionVisible()
-	m.updateSearchPreviewViewport()
+	m.searchInput.Blur()
+	m.searchPreviewing, m.mode = true, ViewPreview
+	m.resetReviewView()
+	m.updatePreviewViewport()
 }
 
-func (m *Model) updateSearchPreviewViewport() {
-	note := m.searchPreviewNote()
-	if note == nil {
+func (m *Model) afterSearchPreviewArchive() {
+	if m.searchSelected < len(m.searchResults()) {
+		m.showSearchPreviewAt(m.searchSelected)
 		return
 	}
-	_, innerWidth, innerHeight := previewModalSize(m.width, m.height)
-	fullText := "# " + note.Summary
-	if strings.TrimSpace(note.Body) != "" {
-		fullText += "\n\n" + note.Body
-	}
-	m.previewViewport = viewport.New(innerWidth, innerHeight)
-	m.previewViewport.SetContent(renderMarkdown(fullText, innerWidth))
+	m.leaveSearchPreview()
 }
 
-func (m Model) renderSearchPreview(modalWidth int) string {
-	innerWidth := modalWidth - 6
-	note := m.searchPreviewNote()
-	if note == nil {
-		return m.renderSearchModal(modalWidth)
-	}
+func (m *Model) leaveSearchPreview() {
+	m.searchPreviewing, m.mode = false, ViewSearch
+	m.keepSearchSelectionVisible()
+	m.searchInput.Focus()
+}
 
-	statusBadge := badgeActive.Render("ACTIVE")
-	if note.Status == model.StatusDone {
-		statusBadge = badgeDone.Render("DONE")
-	}
-	var tags []string
-	for _, tag := range noteTags(note) {
-		tags = append(tags, tagStyle.Render("#"+tag))
-	}
-	headerLeft := modalTitleStyle.Render(" SEARCH PREVIEW ")
-	rightColumn := lipgloss.JoinVertical(lipgloss.Right, statusBadge, strings.Join(tags, " "))
-	topLine := lipgloss.JoinHorizontal(lipgloss.Top, headerLeft, safeRepeat(" ", innerWidth-lipgloss.Width(headerLeft)-lipgloss.Width(rightColumn)), rightColumn)
+func (m Model) openSearchPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.showSearchPreviewAt(m.searchSelected)
+	return m, nil
+}
 
-	footerText := renderModalFooter(footerItemsFrom(searchPreviewBindings()), innerWidth)
-	fixedHeight := lipgloss.Height(topLine) + 2 + lipgloss.Height(footerText)
-	m.previewViewport.Height = max(3, previewContentHeight(m.height)-fixedHeight)
+func (m Model) openSearchResult(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.showSearchPreviewAt(m.searchSelected)
+	if !m.previewingSearch() {
+		return m, nil
+	}
+	return m.previewEnter(msg)
+}
 
-	popupContent := lipgloss.JoinVertical(lipgloss.Left, topLine, "", m.previewViewport.View(), "", footerText)
-	return m.framedPopup(popupContent, modalWidth)
+func (m Model) closeSearchPreview(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.leaveSearchPreview()
+	return m, textinput.Blink
 }

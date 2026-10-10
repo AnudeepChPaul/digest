@@ -22,6 +22,8 @@ const (
 	actionStopSelectedItem
 	actionHalfPageDown
 	actionHalfPageUp
+	actionPageDown
+	actionPageUp
 	actionToday
 	actionOpenArchive
 	actionOpenPreview
@@ -38,12 +40,10 @@ const (
 	actionRefreshCommits
 	actionOpenBrag
 	actionOpenHelp
-	actionSwitchGitColumn
 	actionReloadNotes
 
 	actionCloseHelp
 
-	actionAutomate
 	actionRunAutomationDraft
 	actionConfirmAutomation
 	actionCancelAutomation
@@ -51,6 +51,7 @@ const (
 	actionDeleteAutomationDraft
 	actionSaveAutomationEdit
 	actionCancelAutomationEdit
+	actionCopyAutomationEditor
 
 	actionOpenActions
 	actionChooseAction
@@ -62,7 +63,6 @@ const (
 	actionSetupYes
 	actionSetupNo
 	actionSetupConfirm
-	actionSetupSkip
 	actionSetupSwitchTime
 	actionSetupDayLeft
 	actionSetupDayRight
@@ -81,6 +81,8 @@ const (
 	actionOpenMessages
 	actionEditorHalfPageUp
 	actionEditorHalfPageDown
+	actionEditorPageUp
+	actionEditorPageDown
 
 	actionCloseBrag
 	actionBragCursorDown
@@ -113,6 +115,7 @@ const (
 
 	actionSubmitRejectComment
 	actionCancelRejectComment
+	actionCopyRejectComment
 
 	actionClosePreview
 	actionPreviewPrevious
@@ -136,11 +139,14 @@ const (
 	actionOpenClone
 	actionFindingDown
 	actionFindingUp
-	actionIgnoreKey
 
 	actionCloseArchive
 	actionArchiveCursorDown
 	actionArchiveCursorUp
+	actionArchiveHalfPageDown
+	actionArchiveHalfPageUp
+	actionArchivePageDown
+	actionArchivePageUp
 	actionToggleArchiveSelection
 	actionRestoreArchived
 	actionDeleteArchived
@@ -160,16 +166,12 @@ const (
 	actionSearchHalfPageUp
 	actionSearchHalfPageDown
 	actionOpenSearchPreview
+	actionOpenSearchResult
 	actionExportSearch
 
-	actionCloseSearchPreview
-	actionSearchPreviewNext
-	actionSearchPreviewPrevious
-	actionEditSearchResult
-	actionCopySearchResult
-	actionDeleteSearchResult
-
 	actionDismissError
+	actionExpandMessageLog
+	actionScrollMessageLog
 
 	actionRecreateNote
 	actionDiscardMissingNote
@@ -235,17 +237,15 @@ func (m Model) activeBindings() []keyBinding {
 	case ViewLinkMenu:
 		return linkMenuBindings()
 	case ViewArchived:
-		return archivedBindings()
+		return m.archivedBindings()
 	case ViewInlineEdit:
 		return inlineEditBindings()
 	case ViewEdit:
 		return editBindings()
 	case ViewSearch:
-		return searchBindings()
-	case ViewSearchPreview:
-		return append(searchPreviewBindings(), hiddenKeyBinding(actionOpenHelp, "?"))
+		return m.searchBindings()
 	case ViewError:
-		return errorBindings()
+		return m.errorBindings()
 	case ViewHelp:
 		return helpBindings()
 	case ViewBragList:
@@ -283,29 +283,33 @@ func (m Model) dashboardBindings() []keyBinding {
 	if m.ctrlCCount > 0 {
 		quit = quit.warning()
 	}
-	bindings := append(hiddenCopies(m.selectedItemBindings(true)),
-		newKeyBinding(actionOpenItem, []string{"enter"}, "↵", "open"),
-		newKeyBinding(actionToggleDone, []string{" ", "space"}, "space", "done"),
+	var rowBindings []keyBinding
+	if len(m.allNavItems()) > 0 {
+		rowBindings = append(hiddenCopies(m.selectedItemBindings(true)),
+			newKeyBinding(actionOpenItem, []string{"enter"}, "↵", "open"),
+			newKeyBinding(actionToggleDone, []string{" ", "space"}, "space", "done"),
+			newKeyBinding(actionInlineEdit, []string{"i"}, "i", "inline"),
+			hiddenKeyBinding(actionOpenActions, "@", "."),
+			newKeyBinding(actionOpenPreview, []string{"tab"}, "tab", "preview"),
+			newKeyBinding(actionDeleteItem, []string{"d"}, "d", "delete"),
+		)
+	}
+	bindings := append(rowBindings,
 		newKeyBinding(actionNewNote, []string{"a"}, "a", "new"),
-		newKeyBinding(actionInlineEdit, []string{"i"}, "i", "inline"),
-		hiddenKeyBinding(actionOpenActions, "@", "."),
 		hiddenKeyBinding(actionOpenSetup, ","),
 		hiddenKeyBinding(actionOpenMessages, "!"),
-		newKeyBinding(actionOpenPreview, []string{"tab"}, "tab", "preview"),
 		newKeyBinding(actionToday, []string{"t"}, "t", "today"),
 		newKeyBinding(actionPreviousDay, []string{"p"}, "p|n", "date"),
 		hiddenKeyBinding(actionNextDay, "n"),
 		newKeyBinding(actionOpenArchive, []string{"ctrl+e"}, "ctrl+e", "open archive"),
 		hiddenKeyBinding(actionReloadNotes, "ctrl+r"),
 		newKeyBinding(actionSync, []string{"g"}, "g", "run git"),
-		newKeyBinding(actionRefreshCommits, []string{"c"}, "c", "refresh commits").shownWhen(m.cfg.DailyCommitsEnabled()),
-		newKeyBinding(actionRunSelectedJob, []string{"r"}, "r", "run job"),
-		newKeyBinding(actionDeleteItem, []string{"d"}, "d", "delete"),
 		newKeyBinding(actionCursorDown, []string{"j", "down"}, "j|k", "nav"),
 		hiddenKeyBinding(actionCursorUp, "k", "up"),
-		newKeyBinding(actionSwitchGitColumn, []string{"h", "l", "left", "right"}, "h|l|←|→", "git column"),
-		newKeyBinding(actionHalfPageDown, []string{"ctrl+d", "pgdown"}, "ctrl+d|u", "half page"),
-		hiddenKeyBinding(actionHalfPageUp, "ctrl+u", "pgup"),
+		newKeyBinding(actionHalfPageDown, []string{"ctrl+d"}, "ctrl+d|u", "half page"),
+		hiddenKeyBinding(actionHalfPageUp, "ctrl+u"),
+		newKeyBinding(actionPageDown, []string{"pgdown"}, "pgdn|pgup", "page"),
+		hiddenKeyBinding(actionPageUp, "pgup"),
 		newKeyBinding(actionOpenSearch, []string{"/"}, "/", "search"),
 		newKeyBinding(actionOpenBrag, []string{"b"}, "b", "brag"),
 		newKeyBinding(actionOpenHelp, []string{"?"}, "?", "shortcuts"),
@@ -315,13 +319,16 @@ func (m Model) dashboardBindings() []keyBinding {
 		hiddenKeyBinding(actionTogglePendingScope, "m"),
 		hiddenKeyBinding(actionDismissErrors, "esc"),
 	)
+	if m.cfg.DailyCommitsEnabled() {
+		bindings = append(bindings, newKeyBinding(actionRefreshCommits, []string{"c"}, "c", "refresh commits"))
+	}
 	if m.cfg.GitEnabled() {
 		return bindings
 	}
 	return slices.DeleteFunc(bindings, func(binding keyBinding) bool { return slices.Contains(gitActions, binding.action) })
 }
 
-var gitActions = []keyAction{actionSync, actionRefreshCommits, actionSwitchGitColumn, actionToggleSortField, actionToggleSortOrder, actionTogglePendingScope}
+var gitActions = []keyAction{actionSync, actionRefreshCommits, actionToggleSortField, actionToggleSortOrder, actionTogglePendingScope}
 
 func gitDetailsBindings() []keyBinding {
 	return []keyBinding{
@@ -330,35 +337,36 @@ func gitDetailsBindings() []keyBinding {
 		newKeyBinding(actionCloseGitDetails, []string{"esc"}, "esc", "close"),
 		hiddenKeyBinding(actionGitCursorDown, "j", "down"),
 		hiddenKeyBinding(actionGitCursorUp, "k", "up"),
+		newKeyBinding(actionPreviewPrevious, []string{"p"}, "p|n", "prev/next"),
+		hiddenKeyBinding(actionPreviewNext, "n"),
+	}
+}
+
+func yesNoBindings(confirm keyAction, confirmLabel string, cancel keyAction, cancelLabel string) []keyBinding {
+	return []keyBinding{
+		newKeyBinding(confirm, []string{"y", "Y", "enter"}, "y|enter", confirmLabel),
+		newKeyBinding(cancel, []string{"n", "N", "esc"}, "n|esc", cancelLabel),
 	}
 }
 
 func deleteConfirmBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionConfirmDelete, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
-		newKeyBinding(actionCancelDelete, []string{"esc"}, "esc", "cancel"),
-	}
+	return yesNoBindings(actionConfirmDelete, "confirm", actionCancelDelete, "cancel")
 }
 
 func reviewConfirmBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionConfirmReview, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
-		newKeyBinding(actionCancelReview, []string{"esc", "n", "N"}, "esc", "cancel"),
-	}
+	return yesNoBindings(actionConfirmReview, "confirm", actionCancelReview, "cancel")
 }
 
 func reviewRunConfirmBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionConfirmReviewRun, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
-		newKeyBinding(actionCancelReviewRun, []string{"esc", "n", "N"}, "esc", "cancel"),
-	}
+	return yesNoBindings(actionConfirmReviewRun, "confirm", actionCancelReviewRun, "cancel")
 }
 
 func rejectCommentBindings() []keyBinding {
-	return append([]keyBinding{
-		newKeyBinding(actionSubmitRejectComment, []string{"ctrl+s"}, "ctrl+s", "continue"),
+	return []keyBinding{
+		newKeyBinding(actionSubmitRejectComment, []string{"ctrl+s"}, "ctrl+s", "submit"),
+		newKeyBinding(actionCopyRejectComment, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelRejectComment, []string{"esc"}, "esc", "cancel"),
-	}, editorHalfPageBindings()...)
+	}
 }
 
 func (m Model) previewBindings() []keyBinding {
@@ -376,7 +384,11 @@ func (m Model) previewBindings() []keyBinding {
 			newKeyBinding(actionPreviewEnter, []string{"enter"}, "enter", "open PR"),
 		}, previewTailBindings()...)
 	case item.Kind == KindJobDraft && item.Draft != nil:
-		return append(append(m.itemBindings(item, false), hiddenKeyBinding(actionPreviewEnter, "enter")), previewTailBindings()...)
+		bindings := m.itemBindings(item, false)
+		if !m.jobRunning(item.Draft.Name) {
+			bindings = append(bindings, hiddenKeyBinding(actionPreviewEnter, "enter"))
+		}
+		return append(bindings, previewTailBindings()...)
 	}
 	if m.onDraftTab() {
 		return m.noteDraftTabBindings()
@@ -405,7 +417,7 @@ func previewTailBindings() []keyBinding {
 }
 
 func (m Model) runPreviewBindings(item NavItem) []keyBinding {
-	return append(append(m.itemBindings(item, false), hiddenKeyBinding(actionPreviewEnter, "enter")), previewTailBindings()...)
+	return append(m.itemBindings(item, false), previewTailBindings()...)
 }
 
 func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
@@ -431,7 +443,6 @@ func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
 		hiddenKeyBinding(actionPreviewNext, "n"),
 		newKeyBinding(actionCopyPreviewItem, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionClosePreview, []string{"esc"}, "esc", "close"),
-		hiddenKeyBinding(actionIgnoreKey, "h", "l", "left", "right"),
 	)
 	if hasFindings {
 		bindings = append(bindings,
@@ -442,15 +453,24 @@ func (m Model) prPreviewBindings(item *GitPRItem) []keyBinding {
 	return bindings
 }
 
-func archivedBindings() []keyBinding {
-	return []keyBinding{
+func (m Model) archivedBindings() []keyBinding {
+	bindings := []keyBinding{
 		newKeyBinding(actionCloseArchive, []string{"esc", "ctrl+e"}, "esc|ctrl+e", "close"),
 		newKeyBinding(actionArchiveCursorDown, []string{"j", "down"}, "j|k", "nav"),
 		hiddenKeyBinding(actionArchiveCursorUp, "k", "up"),
+		hiddenKeyBinding(actionArchiveHalfPageDown, "ctrl+d"),
+		hiddenKeyBinding(actionArchiveHalfPageUp, "ctrl+u"),
+		hiddenKeyBinding(actionArchivePageDown, "pgdown"),
+		hiddenKeyBinding(actionArchivePageUp, "pgup"),
+	}
+	if len(m.getArchivedNotes()) == 0 {
+		return bindings
+	}
+	return append(bindings,
 		newKeyBinding(actionToggleArchiveSelection, []string{" ", "space"}, "space", "select"),
 		newKeyBinding(actionRestoreArchived, []string{"u", "enter"}, "u|enter", "unarchive"),
 		newKeyBinding(actionDeleteArchived, []string{"d"}, "d", "delete"),
-	}
+	)
 }
 
 func inlineEditBindings() []keyBinding {
@@ -465,37 +485,33 @@ func editBindings() []keyBinding {
 		newKeyBinding(actionSaveNote, []string{"ctrl+o"}, "ctrl+o", "save"),
 		newKeyBinding(actionCopyEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelEdit, []string{"esc"}, "esc", "cancel"),
-	}, editorHalfPageBindings()...)
+	}, editorPagingBindings()...)
 }
 
-func searchBindings() []keyBinding {
-	return []keyBinding{
+func (m Model) searchBindings() []keyBinding {
+	bindings := []keyBinding{
 		newKeyBinding(actionSearchCursorUp, []string{"up"}, "↑|↓", "nav"),
 		hiddenKeyBinding(actionSearchCursorDown, "down"),
 		newKeyBinding(actionSearchPageUp, []string{"pgup"}, "pgup|pgdn", "page"),
 		hiddenKeyBinding(actionSearchPageDown, "pgdown"),
 		newKeyBinding(actionSearchHalfPageDown, []string{"ctrl+d"}, "ctrl+d|u", "half page"),
 		hiddenKeyBinding(actionSearchHalfPageUp, "ctrl+u"),
-		newKeyBinding(actionOpenSearchPreview, []string{"tab"}, "tab", "preview"),
+	}
+	if len(m.searchResults()) > 0 {
+		bindings = append(bindings,
+			newKeyBinding(actionOpenSearchResult, []string{"enter"}, "↵", "open"),
+			newKeyBinding(actionOpenSearchPreview, []string{"tab"}, "tab", "preview"),
+		)
+	}
+	return append(bindings,
 		newKeyBinding(actionExportSearch, []string{"ctrl+e"}, "ctrl+e", "export"),
 		newKeyBinding(actionCloseSearch, []string{"esc"}, "esc", "close"),
-	}
-}
-
-func searchPreviewBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionSearchPreviewNext, []string{"n"}, "n|p", "next/prev"),
-		hiddenKeyBinding(actionSearchPreviewPrevious, "p"),
-		newKeyBinding(actionEditSearchResult, []string{"enter"}, "enter", "edit"),
-		newKeyBinding(actionCopySearchResult, []string{"ctrl+y"}, "ctrl+y", "copy"),
-		newKeyBinding(actionDeleteSearchResult, []string{"d"}, "d", "delete").warning(),
-		newKeyBinding(actionCloseSearchPreview, []string{"esc", "tab"}, "esc|tab", "back"),
-	}
+	)
 }
 
 func helpBindings() []keyBinding {
 	return []keyBinding{
-		newKeyBinding(actionCloseHelp, []string{"esc", "?", "q"}, "esc|?", "close"),
+		newKeyBinding(actionCloseHelp, []string{"esc", "?"}, "esc|?", "close"),
 	}
 }
 
@@ -518,10 +534,7 @@ func bragViewBindings() []keyBinding {
 }
 
 func bragConfirmBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionConfirmBrag, []string{"y", "Y", "enter"}, "y|enter", "confirm"),
-		newKeyBinding(actionCancelBrag, []string{"esc", "n", "N"}, "esc", "cancel"),
-	}
+	return yesNoBindings(actionConfirmBrag, "confirm", actionCancelBrag, "cancel")
 }
 
 func bragEditBindings() []keyBinding {
@@ -529,18 +542,28 @@ func bragEditBindings() []keyBinding {
 		newKeyBinding(actionSaveBragEdit, []string{"ctrl+o"}, "ctrl+o", "save"),
 		newKeyBinding(actionCopyBragEditor, []string{"ctrl+y"}, "ctrl+y", "copy"),
 		newKeyBinding(actionCancelBragEdit, []string{"esc"}, "esc", "cancel"),
-	}, editorHalfPageBindings()...)
+	}, editorPagingBindings()...)
 }
 
-func errorBindings() []keyBinding {
-	return []keyBinding{
-		newKeyBinding(actionDismissError, []string{"esc"}, "esc", "dismiss"),
+func (m Model) errorBindings() []keyBinding {
+	bindings := []keyBinding{newKeyBinding(actionDismissError, []string{"esc"}, "esc", "dismiss")}
+	switch {
+	case m.errorTitle != messageLogTitle:
+		return bindings
+	case !m.messageLogExpanded:
+		return append(bindings, newKeyBinding(actionExpandMessageLog, []string{"!"}, "!", "full log"))
 	}
+	return append(bindings,
+		newKeyBinding(actionScrollMessageLog, []string{"j", "down"}, "j|k", "scroll"),
+		hiddenKeyBinding(actionScrollMessageLog, "k", "up", "pgdown", "pgup", "ctrl+d", "ctrl+u"),
+	)
 }
 
-func editorHalfPageBindings() []keyBinding {
+func editorPagingBindings() []keyBinding {
 	return []keyBinding{
 		newKeyBinding(actionEditorHalfPageDown, []string{"ctrl+d"}, "ctrl+d|u", "half page"),
 		hiddenKeyBinding(actionEditorHalfPageUp, "ctrl+u"),
+		hiddenKeyBinding(actionEditorPageDown, "pgdown"),
+		hiddenKeyBinding(actionEditorPageUp, "pgup"),
 	}
 }

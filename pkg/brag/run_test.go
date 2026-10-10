@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
 )
 
 func writeState(t *testing.T, root, id string, files map[string]string) {
@@ -290,5 +290,28 @@ func TestChildOutputAndCrashesLandInTheRunLog(t *testing.T) {
 	logText, _ := os.ReadFile(filepath.Join(StateDir(root, week.ID()), RunLogFile))
 	if !strings.Contains(string(logText), "out\n") || !strings.Contains(string(logText), "panic: boom") {
 		t.Errorf("stdout and stderr of the child should land in the run log: %q", logText)
+	}
+}
+
+func TestExecuteReplacesAnUnreadableBrag(t *testing.T) {
+	cfg := &config.Config{DigestRoot: t.TempDir()}
+	week := WeekOf(localDate(2026, 9, 30))
+	if err := (&Brag{Period: week, Facts: "- shipped", Summary: "- Shipped"}).Save(cfg.BragDir()); err != nil {
+		t.Fatal(err)
+	}
+	stubCommand(t, "## Summary\n- Great month")
+	october := MonthOf(localDate(2026, 10, 1))
+	if err := os.MkdirAll(filepath.Dir(october.Path(cfg.BragDir())), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(october.Path(cfg.BragDir()), []byte("not a brag"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noNotes := func() ([]*model.Note, error) { return nil, nil }
+	if err := Execute(context.Background(), cfg, october, false, noNotes, localDate(2026, 11, 2)); err != nil {
+		t.Fatalf("an unreadable brag should be replaced, err = %v", err)
+	}
+	if saved, err := Load(cfg.BragDir(), october); err != nil || saved.Summary != "- Great month" {
+		t.Errorf("saved = %+v err = %v", saved, err)
 	}
 }

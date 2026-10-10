@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/aitool"
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/model"
-	"github.com/AnudeepChPaul/digest/pkg/store"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/aitool"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/model"
+	"github.com/achandrapaul/digest/pkg/store"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,10 +33,22 @@ const (
 	PhaseCreate Phase = "create"
 )
 
-const (
-	KindTicket = "ticket"
-	KindDoc    = "doc"
-)
+const KindTicket = model.AutomationTicket
+
+var builtInKinds = []model.Source{model.SourceManual, model.SourceMyPR, model.SourcePRReview}
+
+func IsKnownKind(cfg *config.Config, kind string) bool {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return false
+	}
+	if slices.ContainsFunc(builtInKinds, func(source model.Source) bool { return strings.EqualFold(string(source), kind) }) {
+		return true
+	}
+	return slices.ContainsFunc(cfg.AutomationList(), func(spec config.AutomationSpec) bool {
+		return strings.EqualFold(spec.Type, kind)
+	})
+}
 
 type Result struct {
 	Kind string `json:"kind"`
@@ -240,8 +252,8 @@ func resultFromOutput(spec config.AutomationSpec, output string) (Result, error)
 	key, _ := fields["key"].(string)
 	url, _ := fields["url"].(string)
 	result := Result{Kind: strings.ToLower(strings.TrimSpace(kind)), Key: strings.TrimSpace(key), URL: strings.TrimSpace(url)}
-	if result.Kind != KindTicket && result.Kind != KindDoc {
-		return Result{}, fmt.Errorf("%s create: kind must be %q or %q, got %q", spec.Name, KindTicket, KindDoc, kind)
+	if result.Kind == "" || !strings.EqualFold(result.Kind, spec.Type) {
+		return Result{}, fmt.Errorf("%s create: kind must be %q, got %q", spec.Name, spec.Type, kind)
 	}
 	if result.Key == "" && result.URL == "" {
 		return Result{}, fmt.Errorf("%s create: Claude returned neither a key nor a url", spec.Name)
@@ -309,10 +321,7 @@ func resultSection(result Result, draftFields map[string]any) string {
 	if result.URL != "" {
 		link = fmt.Sprintf("[%s](%s)", label, result.URL)
 	}
-	heading := "Ticket"
-	if result.Kind == KindDoc {
-		heading = "Doc"
-	}
+	heading := strings.ToUpper(result.Kind[:1]) + result.Kind[1:]
 	section := fmt.Sprintf("## %s\n\n%s", heading, link)
 	if summary != "" && label != summary {
 		section += "\n\n### " + summary

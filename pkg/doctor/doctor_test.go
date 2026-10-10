@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 )
 
 func fakeLookPath(installed ...string) func(string) (string, error) {

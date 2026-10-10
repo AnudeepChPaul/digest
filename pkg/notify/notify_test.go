@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/paths"
 )
 
 func TestParseInterval(t *testing.T) {

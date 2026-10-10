@@ -9,10 +9,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
-	"github.com/AnudeepChPaul/digest/pkg/doctor"
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/doctor"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -45,9 +45,13 @@ type setupState struct {
 	field               setupField
 	notificationsOn     bool
 	notificationsWereOn bool
+	backedUp            bool
 	editing             bool
 	saving              bool
 	initialAnswers      config.SetupAnswers
+	furthestStep        setupStep
+	editStartValue      string
+	undoingEdit         bool
 	spinner             spinner.Model
 }
 
@@ -104,6 +108,7 @@ func (m Model) startSetup(configPath string) Model {
 		ShowGit: m.cfg.GitEnabled(), RepositoryRoots: roots, WorkDays: slices.Clone(workDays),
 		Morning: morning, Evening: evening, ShowKeyHints: m.cfg.ShowKeyHints, TerminalApp: os.Getenv("__CFBundleIdentifier"),
 	}}
+	m.setup.initialAnswers = cloneSetupAnswers(m.setup.answers)
 	if m.setupInput == nil {
 		m.setupInput = newSetupInput()
 	}
@@ -128,15 +133,39 @@ func (m Model) setupYesNo(yes bool) (tea.Model, tea.Cmd) {
 		return m.enterSetupStep(setupStepDoctor), nil
 	case setupStepDoctor:
 		if yes {
-			return m.finishSetup(true)
+			return m.finishSetup()
 		}
-		return m.finishSetup(false)
 	}
 	return m, nil
 }
 
+func isSetupTextStep(step setupStep) bool {
+	return step == setupStepRoots || step == setupStepTimes
+}
+
+func (m Model) moveSetupStep(forward bool) (tea.Model, tea.Cmd) {
+	if isSetupTextStep(m.setup.step) || m.setup.step == setupStepWorkDays {
+		return m, nil
+	}
+	target := m.setup.step
+	for {
+		if forward {
+			target++
+		} else {
+			target--
+		}
+		if target < setupStepGit || target > m.setup.furthestStep {
+			return m, nil
+		}
+		if target != setupStepRoots || m.setup.answers.ShowGit {
+			return m.enterSetupStep(target), nil
+		}
+	}
+}
+
 func (m Model) enterSetupStep(step setupStep) Model {
 	m.setup.step, m.setup.notice = step, ""
+	m.setup.furthestStep = max(m.setup.furthestStep, step)
 	m.setupInput.Blur()
 	switch step {
 	case setupStepRoots:
@@ -203,14 +232,7 @@ func (m Model) setupConfirm(tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.enterSetupStep(setupStepHints), nil
 	case setupStepDoctor:
-		return m.finishSetup(true)
-	}
-	return m, nil
-}
-
-func (m Model) setupSkip(tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.setup.step == setupStepDoctor {
-		return m.finishSetup(false)
+		return m.finishSetup()
 	}
 	return m, nil
 }
@@ -238,32 +260,36 @@ func (m Model) setupToggleDay(tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func writeSetupConfig(configPath string, answers config.SetupAnswers) (*config.Config, error) {
+func writeSetupConfig(configPath string, answers config.SetupAnswers, alreadyBackedUp bool) (*config.Config, bool, error) {
 	existing, readErr := system.Read(configPath)
 	text := config.DefaultConfigYAML
+	backedUp := alreadyBackedUp
 	if readErr == nil && string(existing) != config.DefaultConfigYAML {
 		text = string(existing)
-		if err := system.Write(configPath+".bak", existing); err != nil {
-			return nil, err
+		if !backedUp {
+			if err := system.Write(configPath+".bak", existing); err != nil {
+				return nil, false, err
+			}
+			backedUp = true
 		}
 	}
 	if err := system.Write(configPath, []byte(config.RenderConfig(text, answers))); err != nil {
-		return nil, err
+		return nil, backedUp, err
 	}
-	return config.Load(configPath)
+	cfg, err := config.Load(configPath)
+	return cfg, backedUp, err
 }
 
-func (m Model) finishSetup(install bool) (tea.Model, tea.Cmd) {
-	cfg, err := writeSetupConfig(m.setup.configPath, m.setup.answers)
+func (m Model) finishSetup() (tea.Model, tea.Cmd) {
+	cfg, backedUp, err := writeSetupConfig(m.setup.configPath, m.setup.answers, m.setup.backedUp)
+	m.setup.backedUp = backedUp
 	if err != nil {
-		m.showError("SETUP ERROR", err)
+		m.setup.notice = "Couldn't save the config: " + err.Error()
 		return m, nil
 	}
-	if install {
-		if err := installNotifications(cfg); err != nil {
-			m.showError("NOTIFICATIONS", err)
-			return m, nil
-		}
+	if err := installNotifications(cfg); err != nil {
+		m.setup.notice = "Couldn't install notifications: " + err.Error()
+		return m, nil
 	}
 	fresh := NewModel(cfg, nil)
 	fresh.width, fresh.height = m.width, m.height
@@ -327,12 +353,16 @@ func (m Model) renderSetup(modalWidth int) string {
 			}
 			body = append(body, fmt.Sprintf("%s %s", mark, result.Name))
 		}
-		body = append(body, "", "🔔 Turn on notifications? "+setupAccent.Render("y|enter")+mutedStyle.Render(" · n to skip"))
+		body = append(body, "", "🔔 Finish and turn on notifications "+setupAccent.Render("y|enter"))
 	}
 	if state.notice != "" {
 		body = append(body, "", yellowBadgeStyle.Render(state.notice))
 	}
-	body = append(body, "", mutedStyle.Render("esc close"))
+	closeHint := "esc close"
+	if state.step == setupStepGit || state.step == setupStepHints || state.step == setupStepDoctor {
+		closeHint = "←/→ step · " + closeHint
+	}
+	body = append(body, "", mutedStyle.Render(closeHint))
 	top := []string{modalTitleStyle.Render(" DIGEST SETUP ") + "  " + progress, ""}
 	if answered := setupAnswersSoFar(state); len(answered) > 0 {
 		top = append(top, append(answered, "")...)
@@ -341,13 +371,20 @@ func (m Model) renderSetup(modalWidth int) string {
 	return m.framedPopup(content, modalWidth)
 }
 
+func setupStepArrowBindings() []keyBinding {
+	return []keyBinding{
+		newKeyBinding(actionSetupFieldPrevious, []string{"left"}, "←/→", "step"),
+		hiddenKeyBinding(actionSetupFieldNext, "right"),
+	}
+}
+
 func (m Model) setupBindings() []keyBinding {
 	switch m.setup.step {
 	case setupStepGit, setupStepHints:
-		return []keyBinding{
+		return append([]keyBinding{
 			newKeyBinding(actionSetupYes, []string{"y", "Y", "enter"}, "y", "yes"),
 			newKeyBinding(actionSetupNo, []string{"n", "N"}, "n", "no"),
-		}
+		}, setupStepArrowBindings()...)
 	case setupStepWorkDays:
 		return []keyBinding{
 			newKeyBinding(actionSetupDayLeft, []string{"left", "h"}, "←", "left"),
@@ -356,10 +393,9 @@ func (m Model) setupBindings() []keyBinding {
 			newKeyBinding(actionSetupConfirm, []string{"enter"}, "enter", "next"),
 		}
 	case setupStepDoctor:
-		return []keyBinding{
-			newKeyBinding(actionSetupConfirm, []string{"y", "Y", "enter"}, "y|enter", "install"),
-			newKeyBinding(actionSetupSkip, []string{"n", "N"}, "n", "skip"),
-		}
+		return append([]keyBinding{
+			newKeyBinding(actionSetupConfirm, []string{"y", "Y", "enter"}, "y|enter", "finish"),
+		}, setupStepArrowBindings()...)
 	}
 	return []keyBinding{
 		newKeyBinding(actionSetupSwitchTime, []string{"tab"}, "tab", "switch"),
@@ -371,10 +407,14 @@ func (m Model) setupKeyBindings() []keyBinding {
 	if m.setup.form {
 		return m.setupFormBindings()
 	}
-	return append(m.setupBindings(), hiddenKeyBinding(actionCloseSetup, "esc"))
+	return append(m.setupBindings(), hiddenKeyBinding(actionSetupFormEscape, "esc"))
 }
 
 func (m Model) closeSetup(tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.setup != nil && m.setup.undoingEdit {
+		m.setup.undoingEdit, m.mode = false, ViewSetup
+		return m.focusSetupField(m.setup.field), nil
+	}
 	m.setup = nil
 	m.mode = ViewDashboard
 	return m, nil

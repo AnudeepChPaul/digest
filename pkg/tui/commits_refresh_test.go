@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/config"
+	"github.com/achandrapaul/digest/pkg/config"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -30,6 +30,7 @@ func stubDayCommits(t *testing.T) *[]string {
 func TestCommitsLoadWithoutGitSync(t *testing.T) {
 	days := stubDayCommits(t)
 	m := syncTestModel(t)
+	m.cfg.WorkDays = everyDay
 	cmd := m.loadCommitsCmd()
 	if cmd == nil {
 		t.Fatal("commits command missing")
@@ -137,6 +138,7 @@ func TestGitStripIgnoresGlobalGitSync(t *testing.T) {
 func TestDateChangeDropsOldCommitsAndFetchesNewDates(t *testing.T) {
 	days := stubDayCommits(t)
 	m := settledCommitsModel(t)
+	m.cfg.WorkDays = everyDay
 	if len(m.git.localCommitsToday) == 0 {
 		t.Fatal("setup: commits missing")
 	}

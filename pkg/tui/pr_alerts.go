@@ -1,17 +1,19 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/notify"
-	"github.com/AnudeepChPaul/digest/pkg/review"
-	"github.com/AnudeepChPaul/digest/pkg/sourcecontrol"
-	"github.com/AnudeepChPaul/digest/pkg/system"
+	"github.com/achandrapaul/digest/pkg/notify"
+	"github.com/achandrapaul/digest/pkg/review"
+	"github.com/achandrapaul/digest/pkg/sourcecontrol"
+	"github.com/achandrapaul/digest/pkg/system"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,6 +22,7 @@ const (
 	prKindMine    = "mine"
 	prKindRequest = "request"
 
+	prStateOpen             = "open"
 	prStateApproved         = "approved"
 	prStateChangesRequested = "changes requested"
 	prStateMerged           = "merged"
@@ -60,7 +63,7 @@ func myPRState(pr review.QueuedPR) string {
 	if !latestComment.IsZero() {
 		return prStateCommentedPrefix + latestComment.UTC().Format(time.RFC3339)
 	}
-	return "open"
+	return prStateOpen
 }
 
 func prSnapshot(myPRs []review.QueuedPR, closed map[string]string, pending []GitPRItem) map[string]prStatus {
@@ -90,6 +93,7 @@ func prSnapshot(myPRs []review.QueuedPR, closed map[string]string, pending []Git
 }
 
 var prAlertLines = map[string][]string{
+	prStateOpen:             {"🆕 %s is open.", "📬 %s is up for review.", "🌱 %s just opened."},
 	prStateApproved:         {"🎉 %s got the green light!", "✅ Approved! %s is ready to ship.", "🥳 Someone loves %s. Approved!"},
 	prStateChangesRequested: {"🛠️ Changes requested on %s. Back to the workbench!", "🔧 %s needs a few tweaks.", "📝 Reviewers left homework on %s."},
 	prStateMerged:           {"🚀 %s merged. Ship it!", "🎊 %s is in! Merged.", "🏁 %s crossed the finish line."},
@@ -100,6 +104,7 @@ var prAlertLines = map[string][]string{
 }
 
 var prAlertTitles = map[string]string{
+	prStateOpen:             "PR opened",
 	prStateApproved:         "PR approved",
 	prStateChangesRequested: "Changes requested",
 	prStateMerged:           "PR merged",
@@ -144,9 +149,6 @@ func changedPRAlerts(previous, current map[string]prStatus) []notify.Notificatio
 		if existed && before.State == status.State {
 			continue
 		}
-		if !existed && status.Kind == prKindMine {
-			continue
-		}
 		if status.Title == "" {
 			status.Title = before.Title
 		}
@@ -159,16 +161,19 @@ func changedPRAlerts(previous, current map[string]prStatus) []notify.Notificatio
 
 func sendPRAlerts(path string, current map[string]prStatus) error {
 	previous := map[string]prStatus{}
-	found, err := system.ReadJSON(path, &previous)
-	if err != nil {
+	encoded, err := system.Read(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	firstSync := !found
 	var sendErrs []error
-	if !firstSync {
-		for _, alert := range changedPRAlerts(previous, current) {
-			sendErrs = append(sendErrs, notify.Send(alert))
+	if err == nil {
+		if decodeErr := json.Unmarshal(encoded, &previous); decodeErr != nil {
+			previous = map[string]prStatus{}
+			sendErrs = append(sendErrs, fmt.Errorf("%s was unreadable and has been reset: %w", filepath.Base(path), decodeErr))
 		}
+	}
+	for _, alert := range changedPRAlerts(previous, current) {
+		sendErrs = append(sendErrs, notify.Send(alert))
 	}
 	return errors.Join(append(sendErrs, system.WriteJSON(path, current))...)
 }

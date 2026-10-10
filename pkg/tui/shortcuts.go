@@ -20,45 +20,40 @@ const (
 )
 
 var actionDescriptions = map[keyAction]string{
-	actionCursorDown:            "move down",
-	actionCursorUp:              "move up",
-	actionPreviousDay:           "previous day",
-	actionNextDay:               "next day",
-	actionToday:                 "today",
-	actionNewNote:               "new note",
-	actionOpenPreview:           "preview the selected row",
-	actionOpenArchive:           "open archive",
-	actionReloadNotes:           "reload notes",
-	actionSync:                  "run git",
-	actionRefreshCommits:        "refresh commits",
-	actionSwitchGitColumn:       "switch git column",
-	actionHalfPageDown:          "half page down",
-	actionHalfPageUp:            "half page up",
-	actionOpenSearch:            "search",
-	actionOpenBrag:              "brag",
-	actionQuit:                  "quit",
-	actionToggleSortField:       "sort field (pending PRs)",
-	actionToggleSortOrder:       "sort order (pending PRs)",
-	actionTogglePendingScope:    "me only (pending PRs)",
-	actionDismissErrors:         "dismiss errors",
-	actionOpenMessages:          "all messages",
-	actionOpenSetup:             "setup",
-	actionClosePreview:          "close",
-	actionPreviewPrevious:       "previous item",
-	actionPreviewNext:           "next item",
-	actionCopyPreviewItem:       "copy",
-	actionSwitchPreviewTab:      "switch tab",
-	actionToggleFinding:         "select finding",
-	actionSelectAllFindings:     "select all findings",
-	actionPostReview:            "post review",
-	actionFindingDown:           "next finding",
-	actionFindingUp:             "previous finding",
-	actionCloseSearchPreview:    "close",
-	actionSearchPreviewNext:     "next result",
-	actionSearchPreviewPrevious: "previous result",
-	actionEditSearchResult:      "edit",
-	actionCopySearchResult:      "copy",
-	actionDeleteSearchResult:    "archive",
+	actionCursorDown:         "move down",
+	actionCursorUp:           "move up",
+	actionPreviousDay:        "previous day",
+	actionNextDay:            "next day",
+	actionToday:              "today",
+	actionNewNote:            "new note",
+	actionOpenPreview:        "preview the selected row",
+	actionOpenArchive:        "open archive",
+	actionReloadNotes:        "reload notes",
+	actionSync:               "run git",
+	actionRefreshCommits:     "refresh commits",
+	actionHalfPageDown:       "half page down",
+	actionHalfPageUp:         "half page up",
+	actionPageDown:           "page down",
+	actionPageUp:             "page up",
+	actionOpenSearch:         "search",
+	actionOpenBrag:           "brag",
+	actionQuit:               "quit",
+	actionToggleSortField:    "sort field (pending PRs)",
+	actionToggleSortOrder:    "sort order (pending PRs)",
+	actionTogglePendingScope: "me only (pending PRs)",
+	actionDismissErrors:      "dismiss errors",
+	actionOpenMessages:       "all messages",
+	actionOpenSetup:          "setup",
+	actionClosePreview:       "close",
+	actionPreviewPrevious:    "previous item",
+	actionPreviewNext:        "next item",
+	actionCopyPreviewItem:    "copy",
+	actionSwitchPreviewTab:   "switch tab",
+	actionToggleFinding:      "select finding",
+	actionSelectAllFindings:  "select all findings",
+	actionPostReview:         "post review",
+	actionFindingDown:        "next finding",
+	actionFindingUp:          "previous finding",
 }
 
 type rowMeaning struct {
@@ -77,14 +72,22 @@ func (m Model) rowMeanings() []rowMeaning {
 		{"o", []string{"note: open its links", "PR: open the review clone in nvim"}},
 		{"@|.", []string{"note: actions on the note"}},
 	}
-	if m.cfg.GitEnabled() {
+	gitEnabled := m.cfg.GitEnabled()
+	if gitEnabled && m.cfg.ShowKeyHints {
 		return rows
 	}
-	for index := range rows {
-		rows[index].meanings = slices.DeleteFunc(slices.Clone(rows[index].meanings), func(meaning string) bool { return strings.Contains(meaning, "PR") })
+	for index, row := range rows {
+		rows[index].meanings = slices.DeleteFunc(slices.Clone(row.meanings), func(meaning string) bool {
+			if gitEnabled {
+				return strings.HasPrefix(meaning, "PR:") && slices.Contains(prRowKeys, row.key)
+			}
+			return strings.Contains(meaning, "PR")
+		})
 	}
 	return slices.DeleteFunc(rows, func(row rowMeaning) bool { return len(row.meanings) == 0 })
 }
+
+var prRowKeys = []string{"y", "d", "r", "o"}
 
 var rowActions = []keyAction{
 	actionOpenItem, actionToggleDone, actionInlineEdit, actionDeleteItem, actionRunSelectedJob, actionOpenActions,
@@ -131,8 +134,6 @@ func (m Model) helpEntries() []helpEntry {
 	switch m.helpReturnMode {
 	case ViewPreview:
 		return actionEntries("PREVIEW", m.previewBindings(), func(action keyAction) bool { return action == actionOpenHelp })
-	case ViewSearchPreview:
-		return actionEntries("SEARCH PREVIEW", searchPreviewBindings(), func(action keyAction) bool { return action == actionOpenHelp })
 	}
 	entries := actionEntries(generalSection, m.dashboardBindings(), func(action keyAction) bool {
 		return action == actionOpenHelp || slices.Contains(rowActions, action)

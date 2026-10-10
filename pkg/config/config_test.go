@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnudeepChPaul/digest/pkg/paths"
+	"github.com/achandrapaul/digest/pkg/paths"
 
 	"gopkg.in/yaml.v3"
 )
@@ -166,9 +166,9 @@ func TestBragDefaultsAreIsolatedClaude(t *testing.T) {
 
 func TestRetentionDays(t *testing.T) {
 	cases := map[string]int{
-		"jira_base_url: x\n":  DefaultRetentionDays,
-		"retention_days: 3\n": 3,
-		"retention_days: 0\n": DefaultRetentionDays,
+		"jira_base_url: x\n": DefaultJanitorGraceDays,
+		"jobs:\n  - name: janitor\n    options:\n      grace_days: 3\n": 3,
+		"jobs:\n  - name: janitor\n    options:\n      grace_days: 0\n": 0,
 	}
 	for raw, want := range cases {
 		var cfg Config
@@ -180,7 +180,7 @@ func TestRetentionDays(t *testing.T) {
 		}
 	}
 	var nilConfig *Config
-	if nilConfig.Retention() != DefaultRetentionDays {
+	if nilConfig.Retention() != DefaultJanitorGraceDays {
 		t.Errorf("nil config should use default")
 	}
 }
@@ -199,7 +199,7 @@ func TestBuiltInAutomationsByDefault(t *testing.T) {
 				t.Errorf("%s should have default prompts and match phrases: %+v", spec.Name, spec)
 			}
 		}
-		if strings.Join(names, ",") != "jira,confluence,google doc,pr review" {
+		if strings.Join(names, ",") != "jira,confluence,google doc,google calendar,pr review" {
 			t.Errorf("automations = %v", names)
 		}
 	}
@@ -243,10 +243,10 @@ func TestAIToolTypeOnlyAcceptsClaude(t *testing.T) {
 
 func TestDefaultTemplateMatchesDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.AIToolType != "claude" || cfg.SelectionDefault != SelectionNotesToday || !cfg.GitEnabled() || cfg.Root() == "" || cfg.PRsPerRepo() != DefaultPRQuantityPerRepo || cfg.GitAutoSyncInterval != 600 || len(cfg.Jobs) != 2 {
+	if cfg.AIToolType != "claude" || cfg.SelectionDefault != SelectionNotesToday || !cfg.GitEnabled() || cfg.Root() == "" || cfg.PRsPerRepo() != DefaultPRQuantityPerRepo || cfg.GitAutoSyncInterval != 600 || len(cfg.Jobs) != 3 {
 		t.Errorf("default config = %+v", cfg)
 	}
-	if cfg.BragPrompt(PromptWeek) != DefaultWeekBragPrompt || !strings.Contains(cfg.ReviewCommandTemplate(), DefaultReviewPrompt) {
+	if cfg.BragPrompt(PromptWeek) != DefaultWeekBragPrompt || !strings.Contains(cfg.ReviewCommandTemplate(), "/review-toolkit:review {url} --emit findings-json") {
 		t.Errorf("empty prompts should fall back to the built-in defaults")
 	}
 	for _, removed := range []string{"git_commits_cmd", "git_lookback_days", "review_command", "brag_command", "command: claude", "check_command"} {
@@ -270,24 +270,30 @@ func TestOldCommandKeysAreIgnored(t *testing.T) {
 	}
 }
 
-func TestExportWritesTheTemplateAndBacksUpTheExistingConfig(t *testing.T) {
+func TestInitWritesTheTemplateAndOnlyOverwritesWithForce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "digest", "config.yaml")
-	written, backup, err := Export(path)
+	written, backup, err := Init(path, false)
 	if err != nil || written != path || backup != "" {
-		t.Fatalf("first export = %q %q %v", written, backup, err)
+		t.Fatalf("first init = %q %q %v", written, backup, err)
 	}
 	if err := os.WriteFile(path, []byte("digest_root: /mine\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	written, backup, err = Export(path)
+	if _, _, err := Init(path, false); err == nil || !strings.Contains(err.Error(), "already exists; pass --force") {
+		t.Fatalf("init over an existing config = %v", err)
+	}
+	if kept, _ := os.ReadFile(path); string(kept) != "digest_root: /mine\n" {
+		t.Errorf("a refused init changed the config: %q", kept)
+	}
+	written, backup, err = Init(path, true)
 	if err != nil || backup != path+".bak" {
-		t.Fatalf("second export = %q %q %v", written, backup, err)
+		t.Fatalf("forced init = %q %q %v", written, backup, err)
 	}
 	if saved, _ := os.ReadFile(backup); string(saved) != "digest_root: /mine\n" {
 		t.Errorf("backup = %q", saved)
 	}
-	if exported, _ := os.ReadFile(path); string(exported) != DefaultConfigYAML {
-		t.Errorf("exported file should be the template")
+	if rewritten, _ := os.ReadFile(path); string(rewritten) != DefaultConfigYAML {
+		t.Errorf("init should write the template")
 	}
 }
 
@@ -317,26 +323,24 @@ func TestShowGitDefaultsOnAndOverridesDailyCommits(t *testing.T) {
 
 func TestJobListHidesGitJobsWhenGitIsOff(t *testing.T) {
 	raw := `jobs:
-  - name: branch reaper
-    command: digest branch-reaper --root ~/Projects/
-  - name: janitor
-    command: digest janitor --root ~
-  - name: repo sync
-    dry-run-command: digest repo-sync --dry-run --root ~/Projects/
+  - name: nightly
+    command: ./backup.sh
+  - name: pull
+    command: digest repo-sync --root ~/src
 `
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(cfg.JobList()); got != 3 {
-		t.Errorf("git on: %d jobs, want 3", got)
+	if got := len(cfg.JobList()); got != 5 {
+		t.Errorf("git on: %d jobs, want 5", got)
 	}
 	if err := yaml.Unmarshal([]byte("show_git: false\n"+raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	jobs := cfg.JobList()
-	if len(jobs) != 1 || jobs[0].Name != "janitor" {
-		t.Errorf("git off: jobs = %+v, want only janitor", jobs)
+	if len(jobs) != 2 || jobs[0].Name != "janitor" || jobs[1].Name != "nightly" {
+		t.Errorf("git off: jobs = %+v, want janitor and nightly", jobs)
 	}
 }
 
@@ -395,7 +399,7 @@ func TestSetupAnswersRenderIntoTheTemplate(t *testing.T) {
 		cfg.DigestNotifications.Morning != "08:00" || cfg.DigestNotifications.Evening != "" || !cfg.ShowKeyHints || cfg.TerminalApp != "com.mitchellh.ghostty" {
 		t.Errorf("rendered = %+v", cfg)
 	}
-	if !strings.Contains(text, "# claude is the only supported tool") || len(cfg.AutomationList()) != 4 {
+	if !strings.Contains(text, "# claude is the only supported tool") || len(cfg.AutomationList()) != 5 {
 		t.Errorf("render should keep the rest of the template")
 	}
 	custom := "digest_root: /mine\nshow_git: true\ngit_repository_roots:\n  - ~/old\njobs: []\n"
@@ -438,7 +442,7 @@ func TestMissingKeysUseBuiltInDefaults(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("digest_root: ~/digest\n"), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Jobs) != 2 || cfg.Jobs[0].Name != "branch-reaper" || cfg.Jobs[1].Name != "janitor" || cfg.Jobs[1].Command != "digest janitor --root ~" {
+	if len(cfg.Jobs) != 3 || cfg.Jobs[0].Name != "branch-reaper" || cfg.Jobs[1].Name != "janitor" || cfg.Jobs[1].Command != "digest janitor" {
 		t.Errorf("jobs = %+v", cfg.Jobs)
 	}
 	if cfg.GitAutoSyncInterval != 600 {
@@ -452,7 +456,7 @@ func TestMissingKeysUseBuiltInDefaults(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(raw), &explicit); err != nil {
 		t.Fatal(err)
 	}
-	if len(explicit.Jobs) != 0 || explicit.GitAutoSyncInterval != 120 || explicit.DigestNotifications.Morning != "" || explicit.DigestNotifications.Evening != "19:00" {
+	if len(explicit.Jobs) != 3 || explicit.GitAutoSyncInterval != 120 || explicit.DigestNotifications.Morning != "" || explicit.DigestNotifications.Evening != "19:00" {
 		t.Errorf("explicit values should be kept: %+v", explicit)
 	}
 	if defaults := DefaultConfig(); len(defaults.GitRepositoryRoots) != 0 {
